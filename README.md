@@ -79,3 +79,19 @@ its keep:
 - Entrepreneurial "opportunity nodes"
 - Any AI chat / MCP interface
 - Any cloud sync
+
+### Note for future devs: time-evolution view (deferred)
+
+`job_roles.posting_date` and `.captured_at` are already tracked and shown
+everywhere, and historic postings (paste-from-file, no URL) are a first-class
+extraction path — see `prompts/extract_job_posting.md`. What's *not* built yet
+is doing anything with that time dimension on the **Space** view.
+
+The intended design, discussed but deliberately deferred: a date-range filter
+(slider) under the scatter in `frontend/src/pages/Space.tsx`, defaulting to
+all-time, that re-requests `GET /api/space` scoped to that window so the PCA
+projection recomputes over only the roles active in it — letting you scrub
+from oldest to newest captures and watch the shape of the space shift. Backend
+side, `backend/app/routes/space.py` would need optional `from`/`to` query
+params filtering the `job_roles` selected before the PCA fit. Held off until
+there's enough historic data loaded in to actually make the view meaningful.
