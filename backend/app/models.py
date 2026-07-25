@@ -61,3 +61,36 @@ class JobPostingImport(BaseModel):
 
 class ProfileUpdate(BaseModel):
     narrative_text: str
+
+
+class SkillDecompositionItem(BaseModel):
+    skill: str
+    examples: list[str] = []
+
+
+class TechnicalSubjectItem(BaseModel):
+    subject: str
+    why: Optional[str] = None
+    resources: list[str] = []
+
+
+class TargetRole(BaseModel):
+    title: str
+    organisation: Optional[str] = None
+    is_imagined: bool = False
+    career_track: Optional[str] = None
+    seniority_level: Optional[str] = None
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    typical_tasks: list[str] = []
+    skill_decomposition: list[SkillDecompositionItem] = []
+    technical_subjects: list[TechnicalSubjectItem] = []
+    grounding_note: Optional[str] = None
+    feasibility_note: Optional[str] = None
+    is_plausible: Optional[bool] = None
+
+
+class TargetImport(BaseModel):
+    metadata: Metadata
+    target: TargetRole
+    skills: list[Skill] = []

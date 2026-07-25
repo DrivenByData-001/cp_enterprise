@@ -49,35 +49,62 @@ model (~130MB, one-time, needs internet access to huggingface.co).
 1. **Profile** — write a short narrative of where you are right now. Save it;
    it gets embedded and re-embedded every time you update it (each save keeps
    a timestamped snapshot).
-2. **Import** — paste `prompts/extract_job_posting.md` + a job URL into
-   Claude/ChatGPT, paste the resulting JSON into the Import page (or drop
-   multiple `.json` files at once to bulk-import a folder you've already
-   captured).
+2. **Import** — paste `prompts/extract_job_posting.md` + a job URL (or the
+   pasted page text, for sites that block fetching) into Claude/ChatGPT,
+   paste the resulting JSON into the Import page (or drop multiple `.json`
+   files at once to bulk-import a folder you've already captured).
 3. **Dashboard** — roles ranked by similarity to your current profile,
    filterable by career track.
-4. **Space** — a 2D PCA projection of the same embeddings: roles as dots,
-   you as a diamond marker. Click a dot to open its detail page.
+4. **Space** — a 3D PCA starfield of every captured role, target, and your
+   profile, positioned by embedding similarity. Roles are colored by career
+   track; your profile is a warm pulsing "sun"; targets are larger stars
+   (white = real, violet = imagined, red = flagged as unreachable). Drag to
+   rotate, scroll to zoom, click a star to open it.
+5. **Targets** — a role you're navigating towards, real or imagined. Give
+   `prompts/decompose_target_role.md` (plus any supporting material you've
+   gathered — postings, profiles, articles) to Claude/ChatGPT, paste the
+   resulting JSON into the Add Target page. Each target gets: typical tasks,
+   a skill breakdown with concrete examples (what "people management" means
+   *in this specific role*), technical subjects worth studying, an honest
+   feasibility note, and — for imagined roles — which real roles it was
+   grounded in. The target's detail page also shows a path: your current
+   alignment percentage plus the closest captured postings, ranked as
+   stepping stones toward it.
+6. **Editing** — any posting or target can be edited from its detail page.
+   This reuses the same paste-JSON flow as import/add: go back to the AI
+   with more material, get a fresher/fuller JSON, and paste it in. It's a
+   full overwrite of that entry's fields (and re-embeds it), not a merge.
 
 ## Schema (3 tables)
 
-- `job_roles` — decomposed posting fields + AI analysis scores + full raw
-  JSON payload + embedding.
+- `job_roles` — postings *and* targets share this table, distinguished by
+  `node_type` (`posting` / `target_real` / `target_imagined`). Postings use
+  the original decomposed fields + AI analysis scores; targets additionally
+  use `typical_tasks`, `skill_decomposition`, `technical_subjects`,
+  `grounding_note`, `feasibility_note`, `is_plausible`. Both carry the full
+  raw JSON payload + embedding.
 - `job_role_skills` — one row per skill mention (name, category, importance,
-  requirement_type), FK to `job_roles`.
+  requirement_type), FK to `job_roles`. Applies to postings and targets alike.
 - `profile_snapshots` — your narrative text + embedding, timestamped and
   versioned (`is_current` flag marks the active one).
 
-## Deliberately out of scope for v1
+## Deliberately out of scope for now
 
-These are real parts of the bigger idea, deferred until the thin slice earns
+These are real parts of the bigger idea, deferred until what's built earns
 its keep:
 
-- `career_history` as discrete past roles + trajectory vector math
-- A real skill graph (relationships between skills) + gap analysis
+- `career_history` as discrete past roles + trajectory vector math (the
+  Space view shows where you are, not the path you walked to get there)
+- A real skill graph (explicit relationships between skills, e.g. "Python"
+  relates to "data science") + gap analysis against your own stated skill
+  set — today, alignment is profile-narrative-to-role embedding similarity,
+  not a skill-by-skill diff
 - `salary_benchmarks` market survey data
 - Actuarial exam tracking
-- Entrepreneurial "opportunity nodes"
-- Any AI chat / MCP interface
+- Entrepreneurial "opportunity nodes" (though `node_type` is designed to
+  extend to a third kind later without a schema break)
+- Any AI chat / MCP interface — decomposition and extraction both stay a
+  manual copy-paste loop with Claude/ChatGPT, on purpose
 - Any cloud sync
 
 ### Note for future devs: time-evolution view (deferred)

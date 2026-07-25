@@ -3,14 +3,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile
 
-from ..db import db_cursor
+from ..db import upsert_job_role
 from ..embeddings import dumps_vec, embed_text, embedding_model_name
 from ..models import JobPostingImport
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
 
-def _compose_role_text(job, analysis) -> str:
+def compose_role_text(job, analysis) -> str:
     parts = [
         job.title,
         job.description,
@@ -21,65 +21,56 @@ def _compose_role_text(job, analysis) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _insert_posting(payload: JobPostingImport) -> int:
+def posting_columns(payload: JobPostingImport) -> dict:
     job, meta, analysis = payload.job, payload.metadata, payload.analysis
-    text = _compose_role_text(job, analysis)
+    text = compose_role_text(job, analysis)
     vector = embed_text(text) if text else []
 
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO job_roles (
-                title, organisation, location, country, remote_type, employment_type,
-                seniority_level, posting_date, captured_at, source, url,
-                salary_min, salary_max, salary_estimate_min, salary_estimate_max, currency,
-                description, requirements, responsibilities, summary, key_skills_summary, notes,
-                career_track, seniority_score, complexity_score, specialisation_score,
-                transferability_score, market_demand_score, rarity_score, automation_risk_score,
-                top_adjacent_roles, extraction_status, extraction_notes, raw_json,
-                embedding, embedding_model, embedded_at
-            ) VALUES (
-                ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?, ?
-            )
-            """,
-            (
-                job.title, job.organisation, job.location, job.country, job.remote_type,
-                job.employment_type, job.seniority_level, job.posting_date,
-                meta.captured_at or datetime.now(timezone.utc).isoformat(), meta.source, meta.url,
-                job.salary_min, job.salary_max, analysis.salary_estimate_min,
-                analysis.salary_estimate_max, job.currency,
-                job.description, job.requirements, job.responsibilities, analysis.summary,
-                analysis.key_skills_summary, analysis.notes,
-                analysis.career_track, analysis.seniority_score, analysis.complexity_score,
-                analysis.specialisation_score, analysis.transferability_score,
-                analysis.market_demand_score, analysis.rarity_score,
-                analysis.automation_risk_score,
-                json.dumps(analysis.top_adjacent_roles) if analysis.top_adjacent_roles else None,
-                meta.extraction_status, meta.notes_for_user, payload.model_dump_json(),
-                dumps_vec(vector) if vector else None,
-                embedding_model_name() if vector else None,
-                datetime.now(timezone.utc).isoformat() if vector else None,
-            ),
-        )
-        role_id = cur.lastrowid
+    return {
+        "node_type": "posting",
+        "title": job.title,
+        "organisation": job.organisation,
+        "location": job.location,
+        "country": job.country,
+        "remote_type": job.remote_type,
+        "employment_type": job.employment_type,
+        "seniority_level": job.seniority_level,
+        "posting_date": job.posting_date,
+        "captured_at": meta.captured_at or datetime.now(timezone.utc).isoformat(),
+        "source": meta.source,
+        "url": meta.url,
+        "salary_min": job.salary_min,
+        "salary_max": job.salary_max,
+        "salary_estimate_min": analysis.salary_estimate_min,
+        "salary_estimate_max": analysis.salary_estimate_max,
+        "currency": job.currency,
+        "description": job.description,
+        "requirements": job.requirements,
+        "responsibilities": job.responsibilities,
+        "summary": analysis.summary,
+        "key_skills_summary": analysis.key_skills_summary,
+        "notes": analysis.notes,
+        "career_track": analysis.career_track,
+        "seniority_score": analysis.seniority_score,
+        "complexity_score": analysis.complexity_score,
+        "specialisation_score": analysis.specialisation_score,
+        "transferability_score": analysis.transferability_score,
+        "market_demand_score": analysis.market_demand_score,
+        "rarity_score": analysis.rarity_score,
+        "automation_risk_score": analysis.automation_risk_score,
+        "top_adjacent_roles": json.dumps(analysis.top_adjacent_roles) if analysis.top_adjacent_roles else None,
+        "extraction_status": meta.extraction_status,
+        "extraction_notes": meta.notes_for_user,
+        "raw_json": payload.model_dump_json(),
+        "embedding": dumps_vec(vector) if vector else None,
+        "embedding_model": embedding_model_name() if vector else None,
+        "embedded_at": datetime.now(timezone.utc).isoformat() if vector else None,
+    }
 
-        for skill in payload.skills:
-            cur.execute(
-                """
-                INSERT INTO job_role_skills (job_role_id, name, category, importance, requirement_type)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (role_id, skill.name, skill.category, skill.importance, skill.requirement_type),
-            )
 
-    return role_id
+def _insert_posting(payload: JobPostingImport) -> int:
+    skills = [s.model_dump() for s in payload.skills]
+    return upsert_job_role(None, posting_columns(payload), skills)
 
 
 @router.post("")
