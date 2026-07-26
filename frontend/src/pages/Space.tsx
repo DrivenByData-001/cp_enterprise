@@ -1,42 +1,198 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type SpacePoint, type SpaceResponse } from '../lib/api'
-import { LEGEND_TRACKS, trackColor, trackLabel } from '../lib/trackColor'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { Html, OrbitControls, Stars } from '@react-three/drei'
+import * as THREE from 'three'
+import { api, type NodeType, type SpacePoint, type SpaceResponse } from '../lib/api'
+import { LEGEND_TRACKS, trackLabel } from '../lib/trackColor'
+import { nodeAccentColor, PROFILE_COLOR, trackStarColor } from '../lib/spaceColors'
 
-const WIDTH = 900
-const HEIGHT = 560
-const PAD = 40
+// Scales the (small, roughly [-1, 1]) PCA coordinates out into a roomier 3D scene.
+const SCALE = 4.5
+
+function useStarTexture(): THREE.Texture {
+  return useMemo(() => {
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+    gradient.addColorStop(0, 'rgba(255,255,255,1)')
+    gradient.addColorStop(0.2, 'rgba(255,255,255,0.95)')
+    gradient.addColorStop(0.5, 'rgba(255,255,255,0.25)')
+    gradient.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = gradient
+    ctx.fillRect(0, 0, size, size)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.needsUpdate = true
+    return texture
+  }, [])
+}
+
+type HoverInfo = { point: SpacePoint; kind: 'role' } | { point: null; kind: 'profile' }
+
+function RoleStar({
+  point,
+  texture,
+  onHover,
+  onLeave,
+  onClick,
+}: {
+  point: SpacePoint
+  texture: THREE.Texture
+  onHover: (h: HoverInfo) => void
+  onLeave: () => void
+  onClick: (id: number) => void
+}) {
+  const ref = useRef<THREE.Sprite>(null)
+  const isTarget = point.node_type !== 'posting'
+  const color = isTarget ? nodeAccentColor(point.node_type, point.is_plausible) : trackStarColor(point.career_track)
+  const baseScale = isTarget ? 1.5 : 0.9
+
+  useFrame(({ clock }) => {
+    if (!ref.current) return
+    if (isTarget) {
+      const pulse = 1 + Math.sin(clock.elapsedTime * 2 + point.id) * 0.15
+      ref.current.scale.setScalar(baseScale * pulse)
+    }
+  })
+
+  return (
+    <sprite
+      ref={ref}
+      position={[point.x * SCALE, point.y * SCALE, point.z * SCALE]}
+      scale={baseScale}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        onHover({ point, kind: 'role' })
+        document.body.style.cursor = 'pointer'
+      }}
+      onPointerOut={() => {
+        onLeave()
+        document.body.style.cursor = 'auto'
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick(point.id)
+      }}
+    >
+      <spriteMaterial map={texture} color={color} transparent depthWrite={false} blending={THREE.AdditiveBlending} />
+    </sprite>
+  )
+}
+
+function ProfileStar({
+  x,
+  y,
+  z,
+  texture,
+  onHover,
+  onLeave,
+}: {
+  x: number
+  y: number
+  z: number
+  texture: THREE.Texture
+  onHover: (h: HoverInfo) => void
+  onLeave: () => void
+}) {
+  const ref = useRef<THREE.Sprite>(null)
+  useFrame(({ clock }) => {
+    if (!ref.current) return
+    const pulse = 1 + Math.sin(clock.elapsedTime * 1.6) * 0.1
+    ref.current.scale.setScalar(2.2 * pulse)
+  })
+  return (
+    <sprite
+      ref={ref}
+      position={[x * SCALE, y * SCALE, z * SCALE]}
+      scale={2.2}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        onHover({ point: null, kind: 'profile' })
+        document.body.style.cursor = 'pointer'
+      }}
+      onPointerOut={() => {
+        onLeave()
+        document.body.style.cursor = 'auto'
+      }}
+    >
+      <spriteMaterial
+        map={texture}
+        color={PROFILE_COLOR}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+      />
+    </sprite>
+  )
+}
+
+function Scene({
+  data,
+  autoRotate,
+  onHover,
+  onLeave,
+  onClick,
+}: {
+  data: SpaceResponse
+  autoRotate: boolean
+  onHover: (h: HoverInfo) => void
+  onLeave: () => void
+  onClick: (id: number) => void
+}) {
+  const texture = useStarTexture()
+
+  return (
+    <>
+      <color attach="background" args={['#04050a']} />
+      <ambientLight intensity={0.6} />
+      <Stars radius={120} depth={60} count={3000} factor={2.5} saturation={0} fade speed={0.4} />
+
+      {data.points.map((p) => (
+        <RoleStar key={p.id} point={p} texture={texture} onHover={onHover} onLeave={onLeave} onClick={onClick} />
+      ))}
+
+      {data.profile && (
+        <ProfileStar
+          x={data.profile.x}
+          y={data.profile.y}
+          z={data.profile.z}
+          texture={texture}
+          onHover={onHover}
+          onLeave={onLeave}
+        />
+      )}
+
+      <OrbitControls
+        enableDamping
+        dampingFactor={0.08}
+        autoRotate={autoRotate}
+        autoRotateSpeed={0.5}
+        minDistance={3}
+        maxDistance={60}
+      />
+    </>
+  )
+}
+
+function nodeTypeLabel(nodeType: NodeType): string {
+  if (nodeType === 'target_real') return 'Target (real)'
+  if (nodeType === 'target_imagined') return 'Target (imagined)'
+  return 'Posting'
+}
 
 export default function Space() {
   const [data, setData] = useState<SpaceResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [hover, setHover] = useState<{ point: SpacePoint; x: number; y: number } | null>(null)
+  const [hover, setHover] = useState<HoverInfo | null>(null)
+  const [autoRotate, setAutoRotate] = useState(true)
   const navigate = useNavigate()
-  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     api.getSpace().then(setData).catch((e) => setError(String(e)))
   }, [])
-
-  const scaled = useMemo(() => {
-    if (!data || data.points.length === 0) return null
-    const xs = data.points.map((p) => p.x).concat(data.profile ? [data.profile.x] : [])
-    const ys = data.points.map((p) => p.y).concat(data.profile ? [data.profile.y] : [])
-    const xMin = Math.min(...xs)
-    const xMax = Math.max(...xs)
-    const yMin = Math.min(...ys)
-    const yMax = Math.max(...ys)
-    const xRange = xMax - xMin || 1
-    const yRange = yMax - yMin || 1
-
-    const sx = (x: number) => PAD + ((x - xMin) / xRange) * (WIDTH - 2 * PAD)
-    const sy = (y: number) => HEIGHT - PAD - ((y - yMin) / yRange) * (HEIGHT - 2 * PAD)
-
-    return {
-      points: data.points.map((p) => ({ ...p, sx: sx(p.x), sy: sy(p.y) })),
-      profile: data.profile ? { sx: sx(data.profile.x), sy: sy(data.profile.y) } : null,
-    }
-  }, [data])
 
   if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
   if (!data) return <p className="muted">Loading…</p>
@@ -44,66 +200,73 @@ export default function Space() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22 }}>Career space</h1>
-      <p className="secondary">
-        A 2D projection (PCA) of captured roles by embedding similarity. Closer roles are more semantically similar
-        — the axes themselves carry no direct meaning.
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: 22, margin: 0 }}>Career space</h1>
+          <p className="secondary" style={{ maxWidth: 640 }}>
+            A 3D PCA projection of every captured role, target, and your profile by embedding similarity. Closer
+            stars are more semantically similar — the axes themselves carry no direct meaning. Drag to rotate,
+            scroll to zoom, click a star to open it.
+          </p>
+        </div>
+        <label className="secondary" style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={autoRotate} onChange={(e) => setAutoRotate(e.target.checked)} />
+          Drift
+        </label>
+      </div>
 
-      <div className="card" style={{ marginTop: 16, position: 'relative' }} ref={containerRef}>
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" style={{ display: 'block' }}>
-          <line x1={PAD} y1={HEIGHT / 2} x2={WIDTH - PAD} y2={HEIGHT / 2} stroke="var(--gridline)" strokeWidth={1} />
-          <line x1={WIDTH / 2} y1={PAD} x2={WIDTH / 2} y2={HEIGHT - PAD} stroke="var(--gridline)" strokeWidth={1} />
-
-          {scaled?.points.map((p) => (
-            <circle
-              key={p.id}
-              cx={p.sx}
-              cy={p.sy}
-              r={6}
-              fill={trackColor(p.career_track)}
-              stroke="var(--surface-1)"
-              strokeWidth={2}
-              style={{ cursor: 'pointer' }}
-              onMouseEnter={() => setHover({ point: p, x: p.sx, y: p.sy })}
-              onMouseLeave={() => setHover(null)}
-              onClick={() => navigate(`/roles/${p.id}`)}
+      <div className="card" style={{ marginTop: 16, padding: 0, overflow: 'hidden', position: 'relative' }}>
+        <div style={{ width: '100%', height: 560 }}>
+          <Canvas camera={{ position: [0, 0, 14], fov: 50 }}>
+            <Scene
+              data={data}
+              autoRotate={autoRotate}
+              onHover={setHover}
+              onLeave={() => setHover(null)}
+              onClick={(id) => navigate(`/roles/${id}`)}
             />
-          ))}
-
-          {scaled?.profile && (
-            <path
-              d={diamondPath(scaled.profile.sx, scaled.profile.sy, 9)}
-              fill="var(--text-primary)"
-              stroke="var(--surface-1)"
-              strokeWidth={2}
-            />
-          )}
-        </svg>
-
-        {hover && (
-          <div
-            style={{
-              position: 'absolute',
-              left: `${(hover.x / WIDTH) * 100}%`,
-              top: `${(hover.y / HEIGHT) * 100}%`,
-              transform: 'translate(-50%, -130%)',
-              background: 'var(--surface-1)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '6px 10px',
-              fontSize: 12,
-              pointerEvents: 'none',
-              whiteSpace: 'nowrap',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-            }}
-          >
-            <strong>{hover.point.title}</strong>
-            <div className="secondary">
-              {hover.point.organisation ?? 'Unknown org'} · {trackLabel(hover.point.career_track)}
-            </div>
-          </div>
-        )}
+            {hover && (
+              <Html
+                position={
+                  hover.kind === 'profile' && data.profile
+                    ? [data.profile.x * SCALE, data.profile.y * SCALE, data.profile.z * SCALE]
+                    : hover.point
+                      ? [hover.point.x * SCALE, hover.point.y * SCALE, hover.point.z * SCALE]
+                      : [0, 0, 0]
+                }
+                style={{ pointerEvents: 'none' }}
+                distanceFactor={12}
+              >
+                <div
+                  style={{
+                    background: 'rgba(10,10,14,0.9)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: 8,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    color: '#fff',
+                    whiteSpace: 'nowrap',
+                    transform: 'translate(12px, -12px)',
+                  }}
+                >
+                  {hover.kind === 'profile' ? (
+                    <strong>You</strong>
+                  ) : (
+                    <>
+                      <strong>{hover.point!.title}</strong>
+                      <div style={{ opacity: 0.75 }}>
+                        {hover.point!.organisation ?? 'Unknown org'} ·{' '}
+                        {hover.point!.node_type === 'posting'
+                          ? trackLabel(hover.point!.career_track)
+                          : nodeTypeLabel(hover.point!.node_type)}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </Html>
+            )}
+          </Canvas>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -113,15 +276,20 @@ export default function Space() {
             <span className="secondary">{t.label}</span>
           </div>
         ))}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-          <span aria-hidden style={{ width: 10, height: 10, background: 'var(--text-primary)', transform: 'rotate(45deg)' }} />
-          <span className="secondary">You</span>
-        </div>
+        <LegendDot color="#ffe066" label="You" />
+        <LegendDot color="#ffffff" label="Target (real)" />
+        <LegendDot color="#c792ff" label="Target (imagined)" />
+        <LegendDot color="#ff5c5c" label="Flagged implausible" />
       </div>
     </div>
   )
 }
 
-function diamondPath(cx: number, cy: number, r: number) {
-  return `M ${cx} ${cy - r} L ${cx + r} ${cy} L ${cx} ${cy + r} L ${cx - r} ${cy} Z`
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+      <span aria-hidden style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
+      <span className="secondary">{label}</span>
+    </div>
+  )
 }

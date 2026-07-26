@@ -5,8 +5,35 @@ export type RoleSkill = {
   requirement_type: string | null
 }
 
+export type NodeType = 'posting' | 'target_real' | 'target_imagined'
+
+export type SkillDecompositionItem = {
+  skill: string
+  examples: string[]
+}
+
+export type TechnicalSubjectItem = {
+  subject: string
+  why: string | null
+  resources: string[]
+}
+
+export type SteppingStone = {
+  id: number
+  title: string
+  organisation: string | null
+  career_track: string | null
+  similarity_to_target: number
+}
+
+export type TargetPath = {
+  profile_to_target_similarity: number | null
+  stepping_stones: SteppingStone[]
+}
+
 export type Role = {
   id: number
+  node_type: NodeType
   title: string
   organisation: string | null
   location: string | null
@@ -29,6 +56,15 @@ export type Role = {
   similarity: number | null
   skills?: RoleSkill[]
   url: string | null
+  raw_json?: unknown
+  // target-only fields
+  typical_tasks?: string[] | null
+  skill_decomposition?: SkillDecompositionItem[] | null
+  technical_subjects?: TechnicalSubjectItem[] | null
+  grounding_note?: string | null
+  feasibility_note?: string | null
+  is_plausible?: boolean | null
+  path?: TargetPath
 }
 
 export type Profile = {
@@ -43,13 +79,16 @@ export type SpacePoint = {
   title: string
   organisation: string | null
   career_track: string | null
+  node_type: NodeType
+  is_plausible: boolean | null
   x: number
   y: number
+  z: number
 }
 
 export type SpaceResponse = {
   points: SpacePoint[]
-  profile: { x: number; y: number } | null
+  profile: { x: number; y: number; z: number } | null
   note?: string
 }
 
@@ -75,6 +114,8 @@ export const api = {
     return req<Role[]>(`/roles${suffix}`)
   },
   getRole: (id: number) => req<Role>(`/roles/${id}`),
+  updateRole: (id: number, payload: unknown) =>
+    req<{ id: number; status: string }>(`/roles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteRole: (id: number) => req<{ status: string }>(`/roles/${id}`, { method: 'DELETE' }),
   importPosting: (payload: unknown) =>
     req<{ id: number; status: string }>('/import', { method: 'POST', body: JSON.stringify(payload) }),
@@ -87,4 +128,9 @@ export const api = {
   updateProfile: (narrative_text: string) =>
     req<{ id: number; status: string }>('/profile', { method: 'POST', body: JSON.stringify({ narrative_text }) }),
   getSpace: () => req<SpaceResponse>('/space'),
+  listTargets: () => req<Role[]>('/targets'),
+  importTarget: (payload: unknown) =>
+    req<{ id: number; status: string }>('/targets', { method: 'POST', body: JSON.stringify(payload) }),
+  updateTarget: (id: number, payload: unknown) =>
+    req<{ id: number; status: string }>(`/targets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 }
