@@ -74,8 +74,15 @@ model (~130MB, one-time, needs internet access to huggingface.co).
    This reuses the same paste-JSON flow as import/add: go back to the AI
    with more material, get a fresher/fuller JSON, and paste it in. It's a
    full overwrite of that entry's fields (and re-embeds it), not a merge.
+7. **History** — your own career as discrete episodes (jobs, projects, study,
+   qualifications), each with real dates, entered by hand. Shows a timeline
+   with nested episodes (e.g. a project inside a job) as sub-bars, and a
+   derived total career span. This is the start of the evidence-backed
+   capability model in `docs/11-capability-model-design.md` — see that doc
+   for where it's headed; today it's just structured history with nothing
+   downstream wired to it yet.
 
-## Schema (3 tables)
+## Schema
 
 - `job_roles` — postings *and* targets share this table, distinguished by
   `node_type` (`posting` / `target_real` / `target_imagined`). Postings use
@@ -88,13 +95,31 @@ model (~130MB, one-time, needs internet access to huggingface.co).
 - `profile_snapshots` — your narrative text + embedding, timestamped and
   versioned (`is_current` flag marks the active one).
 
+These three are the original v1 tables and are untouched by everything below —
+nothing has been migrated off them yet.
+
+**Phase 0 of the capability-model redesign** (`docs/11-capability-model-design.md`)
+adds, additively, alongside the three above:
+
+- `person` — you. A single seeded row for now.
+- `episode` — your career history as discrete jobs/projects/study/qualifications,
+  with real dates and optional nesting (a project inside a job) via
+  `parent_episode_id`. Entered by hand on the History page — see `docs/11` §10.3
+  for why this isn't automated yet.
+- `document` — immutable source text. Every existing posting, target, and profile
+  snapshot has a corresponding `document` row, backfilled by
+  `backend/scripts/migrate_phase0.py` (safe to re-run; see the script's docstring
+  and `docs/11` §11 Phase 0 build notes for exactly what it does and doesn't do).
+  Nothing reads from `document` yet — it exists for provenance ahead of the
+  evidence-claim work in later phases.
+- `vocabulary_version`, `episode_document`, `extraction_run` — schema only, unused
+  until Phase 1.
+
 ## Deliberately out of scope for now
 
 These are real parts of the bigger idea, deferred until what's built earns
 its keep:
 
-- `career_history` as discrete past roles + trajectory vector math (the
-  Space view shows where you are, not the path you walked to get there)
 - A real skill graph (explicit relationships between skills, e.g. "Python"
   relates to "data science") + gap analysis against your own stated skill
   set — today, alignment is profile-narrative-to-role embedding similarity,

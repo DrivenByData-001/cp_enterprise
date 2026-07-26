@@ -7,6 +7,7 @@ import Profile from './pages/Profile'
 import Space from './pages/Space'
 import Targets from './pages/Targets'
 import AddTarget from './pages/AddTarget'
+import Episodes from './pages/Episodes'
 
 function App() {
   return (
@@ -21,6 +22,9 @@ function App() {
         <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
           Targets
         </NavLink>
+        <NavLink to="/episodes" className={({ isActive }) => (isActive ? 'active' : '')}>
+          History
+        </NavLink>
         <NavLink to="/import" className={({ isActive }) => (isActive ? 'active' : '')}>
           Import
         </NavLink>
@@ -33,6 +37,7 @@ function App() {
         <Route path="/space" element={<Space />} />
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
+        <Route path="/episodes" element={<Episodes />} />
         <Route path="/import" element={<Import />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/roles/:id" element={<RoleDetail />} />

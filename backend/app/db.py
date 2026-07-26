@@ -85,6 +85,74 @@ CREATE TABLE IF NOT EXISTS profile_snapshots (
     is_current INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Phase 0 (docs/11-capability-model-design.md §11) — episodes and documents.
+-- Additive only: nothing above this line is altered or dropped by Phase 0.
+
+CREATE TABLE IF NOT EXISTS document (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    title TEXT,
+    body TEXT NOT NULL,
+    body_sha256 TEXT NOT NULL UNIQUE,
+    source TEXT,
+    url TEXT,
+    document_date TEXT,
+    ingested_at TEXT NOT NULL,
+    superseded_by INTEGER REFERENCES document(id),
+    notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_document_kind ON document(kind);
+
+CREATE TABLE IF NOT EXISTS person (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS episode (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL REFERENCES person(id),
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    organisation TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    date_precision TEXT NOT NULL DEFAULT 'month',
+    parent_episode_id INTEGER REFERENCES episode(id),
+    domain_hint TEXT,
+    context_note TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_episode_person ON episode(person_id, start_date);
+
+CREATE TABLE IF NOT EXISTS episode_document (
+    episode_id INTEGER NOT NULL REFERENCES episode(id) ON DELETE CASCADE,
+    document_id INTEGER NOT NULL REFERENCES document(id),
+    PRIMARY KEY (episode_id, document_id)
+);
+
+-- Not used by any Phase 0 logic; created now (dormant) so Phase 1's extraction
+-- pipeline needs no further schema migration. See docs/11 §11 Phase 0 build list.
+CREATE TABLE IF NOT EXISTS vocabulary_version (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    concept_count INTEGER NOT NULL,
+    note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS extraction_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES document(id),
+    task TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    vocabulary_version_id INTEGER NOT NULL REFERENCES vocabulary_version(id),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    notes TEXT
+);
 """
 
 
@@ -202,3 +270,21 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     if "embedding" in d:
         d.pop("embedding", None)  # never ship raw vectors to the client
     return d
+
+
+# Phase 0 is single-person: docs/11 §4.3 models `person` for a future multi-subject
+# extension, but nothing today creates more than one row. This is the one seam
+# both the migration script and the episodes routes use to find/seed it.
+DEFAULT_PERSON_DISPLAY_NAME = "Ranga"
+
+
+def get_or_create_person(cur: sqlite3.Cursor, display_name: str = DEFAULT_PERSON_DISPLAY_NAME) -> int:
+    cur.execute("SELECT id FROM person ORDER BY id LIMIT 1")
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute(
+        "INSERT INTO person (display_name, created_at) VALUES (?, datetime('now'))",
+        (display_name,),
+    )
+    return cur.lastrowid
