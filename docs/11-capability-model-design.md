@@ -542,10 +542,32 @@ Separating `stated` from `estimated` here is essential. The current schema store
 when a model-guessed range and a posting-stated range are aggregated into a median.
 Any aggregate must report what fraction of its inputs were `stated` (§4.6).
 
-The user's own compensation history attaches to episodes via a
-`role_instance`-free row is not modelled in Phase 4 — it is a single extra table
-(`episode_compensation`) added when needed. Deferred deliberately: the objective is
-about *reachable* roles, and the current salary is one number the user already knows.
+**Decision (was open question §13.4, now resolved):** the user's own compensation
+history is deferred past Phases 0–3 but is a planned Phase 4 deliverable, not a
+contingent one. It is not needed for the evidence/capability foundation, but it is
+needed in Phase 4 to measure the user's actual salary trajectory rather than only
+comparing destination-role compensation — without it, "trajectory" stays notional.
+Modelled as a single additional table:
+
+```sql
+CREATE TABLE episode_compensation (
+    id           INTEGER PRIMARY KEY,
+    episode_id   INTEGER NOT NULL REFERENCES episode(id) ON DELETE CASCADE,
+    component    TEXT NOT NULL,   -- base | bonus_pct | total_package
+    amount       REAL NOT NULL,
+    currency     TEXT NOT NULL,
+    basis        TEXT NOT NULL,   -- stated | user_asserted
+    effective_at TEXT NOT NULL,   -- may differ from episode.start_date (a rise mid-role)
+    document_id  INTEGER REFERENCES document(id),
+    source_note  TEXT
+);
+CREATE INDEX idx_episode_compensation_episode ON episode_compensation(episode_id);
+```
+
+No `market` column: unlike `compensation_observation`, this table is about one
+person's own history, not a market aggregate — market context for comparison is
+joined in from the role/archetype side at query time, not duplicated here. Build
+alongside `compensation_observation` in Phase 4 (§11).
 
 ### 4.6 Layer 5 — Derived (recomputable, disposable)
 
@@ -958,18 +980,31 @@ explicit measurement, from Phase 1.
 
 ### 9.2 Gold set design
 
-**24 documents**, stratified:
+**Decision (was open question §13.5, now resolved): start at 16 documents, expand
+toward 24 once extraction has stabilised.** Evaluation is not optional — a smaller
+gold set is preferable to skipping measurement — but 16 is a floor to build from, not
+a target to stop at.
+
+**Starting set — 16 documents**, stratified:
 
 | Stratum | Count | Why |
 |---|---|---|
-| Job postings, actuarial core | 8 | The bulk of the corpus |
-| Job postings, adjacent (quant/risk/data) | 4 | Where transfer questions live |
-| CV / LinkedIn profile | 6 | Person-side extraction, different register |
-| Project write-ups | 4 | Where capability-level evidence is richest |
-| Deliberately hard (vague, jargon-heavy, non-UK) | 2 | Failure-mode probes |
+| Job postings, actuarial core | 5 | The bulk of the corpus |
+| Job postings, adjacent (quant/risk/data) | 3 | Where transfer questions live |
+| CV / LinkedIn profile | 4 | Person-side extraction, different register |
+| Project write-ups | 3 | Where capability-level evidence is richest |
+| Deliberately hard (vague, jargon-heavy, non-UK) | 1 | Failure-mode probe |
 
-Split **12 dev / 12 test**. The test half is frozen and looked at only when
-promoting a prompt version — otherwise it is fitted to and stops measuring anything.
+Split **10 dev / 6 test**. The test half is frozen and looked at only when promoting
+a prompt version — otherwise it is fitted to and stops measuring anything.
+
+**Expansion set — toward 24**, once proposals-per-document (§9.3) is trending down
+and the vocabulary is no longer shifting week to week: add 4 more actuarial-core
+postings, 1 more adjacent posting, 2 more CV/LinkedIn, 1 more project write-up, 1 more
+hard case — split so the dev/test ratio is preserved (12 dev / 12 test). Expanding
+against a still-moving vocabulary wastes labelling effort on documents that will need
+relabelling once concepts merge or split, so the trigger is vocabulary stability, not
+a calendar date.
 
 Labelling is done by the user (as domain expert), one pass, then a second pass a week
 later on the same documents to measure self-agreement. If self-agreement is below
@@ -1163,11 +1198,14 @@ hand-labelled subset.
 ### Phase 4 — Economics *(~2 weeks)*
 
 **Build:** `role_archetype` concepts + assignment UI, `demands` edges derived from
-posting requirement claims, `compensation_observation`, Pass D, `d_archetype_comp`,
-`d_gap_value`. Gap ranking UI with sample sizes shown throughout.
+posting requirement claims, `compensation_observation`, `episode_compensation`
+(§4.5, per §13.4), Pass D, `d_archetype_comp`, `d_gap_value`. Gap ranking UI with
+sample sizes shown throughout.
 
 **Ships:** the stated objective — *which gaps are most valuable to close, ranked by
-their effect on access to higher-paid roles.* Q7–Q8 answered.
+their effect on access to higher-paid roles.* Q7–Q8 answered, plus the user's own
+salary trajectory rendered as a measured timeline rather than a single current
+number.
 
 **Exit criteria:** ≥ 5 stated compensation observations for each archetype that is
 ranked; archetypes below that show unlocked roles but no monetary figure.
@@ -1266,21 +1304,47 @@ before Phase 4 depends on it.
 
 ---
 
-## 13. Open questions for review
+## 13. Resolved policy decisions
 
-1. **Capability granularity.** Is "lead a reserving process" one capability, or does
-   it split by domain (life vs general)? Recommendation: keep it single and let
-   `domain` be a contextual component — but this is a curation policy that should be
-   decided once, up front, and written into `capability_detail.notes`.
-2. **Depth scale wording.** `exposed | applied | owned | set_standard` — does this
-   survive contact with real actuarial episodes, or is a fifth level needed between
-   `applied` and `owned`?
-3. **Whether targets belong in `role_instance`.** They share requirement structure
-   with postings, which is why they are together here, but they have no market
-   compensation and never should. If target-specific fields accumulate, split them.
-4. **Whether to model the user's own compensation history** in Phase 4 rather than
-   deferring it. It would make "trajectory" measurable rather than notional, at the
-   cost of one table.
-5. **Gold-set labelling cost.** 24 documents is a real time commitment. If it proves
-   too much, cut to 16 (10 dev / 6 test) rather than skipping evaluation — some
-   measurement radically beats none.
+The five questions raised in the original review of this document have been decided.
+Recorded here as current policy — each is provisional against the review trigger
+listed beside it, not a permanent commitment.
+
+1. **Capability granularity — domain-neutral by default.** "Lead a reserving process"
+   is one capability; life vs general insurance is represented as a contextual
+   component (`domain`, `necessity='contextual'` on the `component_of` edge), not as
+   two separate capabilities. A capability is split by domain only where the
+   `demonstration_standard`, the underlying activity, or observed employer demand is
+   materially different between domains — not merely because the domain differs.
+   Write the single-vs-split decision into `capability_detail.notes` at curation time
+   so the reasoning is not lost.
+   **Review trigger:** revisit if the same capability repeatedly needs different
+   demonstration standards depending on domain — that is the signal the domains have
+   actually diverged, not just the industry vocabulary.
+
+2. **Depth scale — proceed with four levels, unchanged.**
+   `exposed | applied | owned | set_standard`. No fifth level added speculatively.
+   **Review trigger:** revisit only if repeated real episodes cannot be represented
+   cleanly, or if gold-set self-agreement or modifier accuracy (§9.3) comes in poor —
+   both are evidence the scale is too coarse, rather than a guess that it might be.
+
+3. **Targets stay in `role_instance`.** Postings, real targets and imagined targets
+   remain one table distinguished by `kind`, per §4.3.
+   **Review trigger:** split into a separate structure only once concrete
+   target-only fields or behaviour actually accumulate — not in anticipation of it.
+
+4. **Personal compensation history — deferred to Phase 4, not cut.** Not needed for
+   the evidence/capability foundation (Phases 0–3), but planned for Phase 4 alongside
+   `compensation_observation`, because measuring the user's actual salary trajectory
+   needs it — comparing only to destination-role compensation leaves trajectory
+   notional rather than measured. See the updated §4.5 and §11 Phase 4 scope.
+   **Review trigger:** none — this is now a scheduled Phase 4 deliverable, not a
+   contingent one.
+
+5. **Gold set — start at 16, expand toward 24.** 10 dev / 6 test initially (§9.2
+   updated accordingly). Evaluation is not optional; a smaller gold set is preferable
+   to skipping measurement, but 16 is a floor, not a target.
+   **Review trigger:** expand toward the full 24 once the extraction vocabulary and
+   prompts have stabilised (proposals-per-document trending down, per §9.3) —
+   labelling against a still-shifting vocabulary wastes labelling effort on documents
+   that will need relabelling anyway.
