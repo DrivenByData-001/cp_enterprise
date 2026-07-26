@@ -1,25 +1,52 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Role } from '../lib/api'
+import { api, type Facet, type Role } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 
 const TRACKS = ['actuarial', 'data_science', 'quant', 'risk', 'finance', 'mixed', 'other']
+
+// The Phase 1 "Ships" facets (docs/11 §11): filter/group postings by domain,
+// regulation, tool, function, product — the atomic types most postings are
+// actually differentiated by. capability/role_archetype aren't populated yet
+// (Phase 3/4) and knowledge/method/credential are less useful as list filters.
+const FACET_TYPES = [
+  { code: 'domain', label: 'Domain' },
+  { code: 'regulation', label: 'Regulation' },
+  { code: 'tool', label: 'Tool' },
+  { code: 'function', label: 'Function' },
+  { code: 'product', label: 'Product' },
+]
 
 export default function Dashboard() {
   const [roles, setRoles] = useState<Role[]>([])
   const [track, setTrack] = useState('')
   const [sort, setSort] = useState('similarity')
+  const [facetType, setFacetType] = useState('')
+  const [facets, setFacets] = useState<Facet[]>([])
+  const [conceptId, setConceptId] = useState<number | ''>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!facetType) {
+      setFacets([])
+      setConceptId('')
+      return
+    }
+    api
+      .getFacets(facetType)
+      .then(setFacets)
+      .catch((e) => setError(String(e)))
+  }, [facetType])
+
+  useEffect(() => {
     setLoading(true)
     api
-      .listRoles({ career_track: track || undefined, sort })
+      .listRoles({ career_track: track || undefined, concept_id: conceptId === '' ? undefined : conceptId, sort })
       .then(setRoles)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [track, sort])
+  }, [track, conceptId, sort])
 
   return (
     <div>
@@ -40,6 +67,27 @@ export default function Dashboard() {
             <option value="captured_at">Sort: captured</option>
             <option value="title">Sort: title</option>
           </select>
+          <select value={facetType} onChange={(e) => setFacetType(e.target.value)}>
+            <option value="">Facet: none</option>
+            {FACET_TYPES.map((t) => (
+              <option key={t.code} value={t.code}>
+                Facet: {t.label}
+              </option>
+            ))}
+          </select>
+          {facetType && (
+            <select
+              value={conceptId}
+              onChange={(e) => setConceptId(e.target.value ? Number(e.target.value) : '')}
+            >
+              <option value="">All {facetType}s</option>
+              {facets.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.canonical_name} ({f.role_count})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 

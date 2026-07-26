@@ -51,24 +51,32 @@ def _path_to_target(cur, target_id: int, target_vec: list[float], profile_vec: l
 @router.get("")
 def list_roles(
     career_track: str | None = None,
+    concept_id: int | None = None,
     min_similarity: float | None = None,
     sort: str = Query("similarity", pattern="^(similarity|posting_date|captured_at|title)$"),
 ):
     with db_cursor() as cur:
         profile_vec = _current_profile_vector(cur)
 
-        query = "SELECT * FROM job_roles WHERE node_type = 'posting'"
+        # concept_id facets the corpus by resolved job_role_skills (Phase 1 §11
+        # "Ships": filter/group postings by domain, regulation, tool, function,
+        # product). filters/params are shared between the two queries below so
+        # the embedding lookup stays aligned with the row set.
+        filters = ""
         params = []
         if career_track:
-            query += " AND career_track = ?"
+            filters += " AND career_track = ?"
             params.append(career_track)
-        cur.execute(query, params)
+        if concept_id is not None:
+            filters += " AND id IN (SELECT job_role_id FROM job_role_skills WHERE resolved_concept_id = ?)"
+            params.append(concept_id)
+
+        cur.execute("SELECT * FROM job_roles WHERE node_type = 'posting'" + filters, params)
         rows = [row_to_dict(r) for r in cur.fetchall()]
 
         # embedding column was stripped by row_to_dict; re-fetch raw vectors separately
         cur.execute(
-            "SELECT id, embedding FROM job_roles WHERE node_type = 'posting'"
-            + (" AND career_track = ?" if career_track else ""),
+            "SELECT id, embedding FROM job_roles WHERE node_type = 'posting'" + filters,
             params,
         )
         vec_by_id = {r["id"]: loads_vec(r["embedding"]) for r in cur.fetchall()}
@@ -99,7 +107,8 @@ def get_role(role_id: int):
         role = row_to_dict(row)
 
         cur.execute(
-            "SELECT name, category, importance, requirement_type FROM job_role_skills WHERE job_role_id = ?",
+            "SELECT name, category, importance, requirement_type, resolved_concept_id "
+            "FROM job_role_skills WHERE job_role_id = ?",
             (role_id,),
         )
         role["skills"] = [dict(s) for s in cur.fetchall()]

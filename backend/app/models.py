@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class Skill(BaseModel):
@@ -110,3 +110,29 @@ class EpisodeCreate(BaseModel):
 
 class EpisodeUpdate(EpisodeCreate):
     pass
+
+
+class ConceptCreate(BaseModel):
+    type_code: str
+    canonical_name: str
+    definition: Optional[str] = None
+    status: str = "active"  # curator-created concepts are usable immediately
+
+
+class ProposalResolve(BaseModel):
+    surface_form: str
+    action: str  # accept_new | accept_alias | reject | defer
+    type_code: Optional[str] = None       # required if action == accept_new
+    canonical_name: Optional[str] = None  # required if action == accept_new
+    definition: Optional[str] = None
+    concept_id: Optional[int] = None      # required if action == accept_alias
+
+    @model_validator(mode="after")
+    def _check_action_fields(self):
+        if self.action == "accept_new" and not (self.type_code and self.canonical_name):
+            raise ValueError("accept_new requires type_code and canonical_name")
+        if self.action == "accept_alias" and not self.concept_id:
+            raise ValueError("accept_alias requires concept_id")
+        if self.action not in ("accept_new", "accept_alias", "reject", "defer"):
+            raise ValueError("action must be one of accept_new, accept_alias, reject, defer")
+        return self

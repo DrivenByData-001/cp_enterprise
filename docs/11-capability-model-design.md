@@ -1,6 +1,6 @@
 # 11 — Capability Model: Design Document
 
-**Status:** Phase 0 implemented (§11); Phases 1–5 still proposed, for review
+**Status:** Phases 0–1 implemented (§11); Phases 2–5 still proposed, for review
 **Supersedes (conceptually):** the narrative-plus-embedding model shipped in v1
 **Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10)
 **Deferred concepts:** `docs/12-architectural-notes-future.md` (potential; market-dependent capability value)
@@ -1217,7 +1217,7 @@ Nothing downstream is possible without them.
    here, and check its printed created/skipped counts look sane before trusting it
    against the live file.
 
-### Phase 1 — Vocabulary *(~1.5 weeks)*
+### Phase 1 — Vocabulary *(~1.5 weeks)* — **implemented**
 
 **Build:** `concept_type` (10 seeded types), `concept`, `concept_alias`,
 `concept_xref`, `concept_edge`, `concept_edge_rule`, `concept_proposal`,
@@ -1230,6 +1230,93 @@ and it builds the vocabulary as a by-product of being useful.
 
 **Exit criteria:** ~300–500 active atomic concepts; proposals-per-document trending
 down; span validation harness in place.
+
+**Build notes — decisions made during implementation, not resolved by the plan
+above:**
+
+1. **Two internal inconsistencies in this document had to be resolved before
+   building anything.** First: §7.1 and §10.1 describe Pass B as producing
+   `evidence_claim`/`requirement_claim` rows (with document spans, `basis`,
+   offsets) — but those two tables are listed under **Phase 2** in this §11, not
+   Phase 1's build list. Second: §8.1's prose requires four proposal actions
+   including "defer", but `concept_proposal`'s own DDL comment only listed
+   `pending|accepted_new|accepted_alias|rejected` — no `deferred` state.
+   Resolution for both, in the implementation: `deferred` was added to the status
+   enum (comment-only fix, no behavioural impact elsewhere), and Pass B was scoped
+   to what Phase 1's own build list actually supports — see note 2.
+2. **"Pass B over the existing posting corpus" does not call an LLM.** There is
+   no in-process LLM client anywhere in this codebase (`backend/requirements.txt`
+   has none; `prompts/*.md` are pasted into an external chat UI and the result
+   comes back through `POST /api/import`) — so a literal Pass B (re-reading
+   document text, quoting verbatim spans) has no plumbing to run on, independent
+   of the phase boundary above. What Phase 1 actually implements
+   (`backend/app/concept_linking.py::run_pass_b`) is §7.3's canonicalisation
+   cascade steps 1–2 only — exact match, then embedding kNN suggestion — applied
+   to the already-extracted `job_role_skills.name` strings, not fresh
+   document-text extraction. Step 3 (model adjudication over the top candidates)
+   is not implemented; ambiguous surface forms fall straight through to a
+   human-reviewed `concept_proposal` with a `nearest_concept_id` suggestion
+   attached. This is also why "faceted posting corpus" (the Ships line) is
+   implemented via a plain `job_role_skills.resolved_concept_id` column rather
+   than `requirement_claim` — no span-bearing claim table was needed. Full
+   claim-based extraction, with spans and `basis`, stays Phase 2, exactly as this
+   §11's build list already said.
+3. **`role_instance` is still not built — flagged for a second consecutive
+   phase.** Phase 0's build notes (above) already flagged this as unscoped;
+   Phase 1 doesn't need it either, since concept linking operates on
+   `job_role_skills` + `document`, both of which already exist. It genuinely
+   cannot be deferred a third time: Phase 2's `requirement_claim` has
+   `role_instance_id NOT NULL`. Whoever scopes Phase 2 must build it.
+4. **"Span validation harness in place" ships as a function + pytest tests, not
+   a UI.** `backend/app/span_validation.py::validate_span` implements §8.3
+   exactly, with `backend/tests/test_span_validation.py` covering literal match,
+   exact-offset match, offset drift, a fabricated span, and a whitespace/unicode
+   edge case. There is no span-bearing claim data in Phase 1 to validate against
+   yet (evidence_claim/requirement_claim are Phase 2) — this exists so Phase 2's
+   claim review queue can import it unchanged, per §8.3's "built in Phase 2, day
+   one" mandate.
+5. **`concept_edge` stays empty, and `capability_detail`/`role_archetype_detail`
+   are not created.** `concept_edge_rule` (the grammar) is fully seeded — 21 rows
+   covering the Phase 1–3 subset in §4.2.4 — but no edges are written and no
+   curation UI exists for them until Phase 3's "capability catalogue curation
+   UI". Same for the two composite-type extension tables: they're Phase 3/4
+   deliverables, not an oversight here.
+6. **`concept_proposal.occurrence_count` is recomputed live on read, not trusted
+   from the stored column.** `GET /api/concepts/proposals` recomputes counts
+   from currently-unresolved `job_role_skills` rows at request time
+   (`routes/concepts.py::_group_proposals`), so the queue never looks stale
+   between `run_pass_b` runs — e.g. after a proposal group is partially resolved
+   by editing a posting mid-review.
+7. **`migrate_phase1.py` is designed to be re-run repeatedly, unlike Phase 0's
+   one-time backfill.** Every run is safe: already-resolved skills are skipped,
+   and an existing pending proposal for a surface form is updated in place
+   (occurrence count refreshed) rather than duplicated. This is deliberate — it's
+   what keeps "proposals per document trending down" a meaningful, live metric
+   as new postings get imported, rather than a one-shot number.
+8. **A real regression in `upsert_job_role` needed fixing along the way.** It
+   deletes and re-inserts all `job_role_skills` on every posting edit
+   (`backend/app/db.py`); without a fix, re-editing a posting after its skills
+   were resolved would silently revert them to unresolved. Fixed by calling
+   `concept_linking.exact_match_concept_id` inline on every skill insert (lazy
+   import, so `db.py` still carries no module-load-time dependency on
+   `embeddings.py`/`fastembed` — only `concept_linking.py` does). Verified: a
+   posting with a resolved "Python" skill keeps it resolved after a full
+   re-edit, and a newly-added skill on the same edit stays unresolved and
+   collectible by the next Pass B run.
+9. **Verified against a synthetic legacy-schema database**, same situation as
+   Phase 0 (no real database file exists in this build environment). Covered:
+   near-duplicate skill names differing only in case and whitespace (correctly
+   grouped to one proposal via `normalize_name`), resolving a proposal via each
+   of the four actions, faceting `GET /api/roles?concept_id=` after resolution,
+   and the `upsert_job_role` re-edit regression above. The embedding-dependent
+   paths (`ensure_concept_embeddings`, `nearest_concept`) were exercised with
+   `embeddings.embed_text` stubbed to a deterministic pseudo-embedding, because
+   this build environment's network policy blocks `huggingface.co` outright (the
+   `fastembed` model can't download here) — a pre-existing constraint shared by
+   every other embedding call in the app (posting import, target import), not
+   something introduced by Phase 1. Before pointing any of this at a real
+   captured database, re-run `migrate_phase1.py` against a **copy** of it first,
+   same caution as Phase 0.
 
 ### Phase 2 — Evidence *(~2 weeks)*
 
