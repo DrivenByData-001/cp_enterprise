@@ -92,6 +92,43 @@ export type SpaceResponse = {
   note?: string
 }
 
+export type EpisodeKind = 'employment' | 'project' | 'study' | 'qualification' | 'other'
+
+export type Episode = {
+  id: number
+  person_id: number
+  kind: EpisodeKind
+  title: string
+  organisation: string | null
+  start_date: string | null
+  end_date: string | null
+  date_precision: 'day' | 'month' | 'year'
+  parent_episode_id: number | null
+  domain_hint: string | null
+  context_note: string | null
+  created_at: string
+  duration_years: number | null
+}
+
+export type EpisodeInput = {
+  kind: EpisodeKind
+  title: string
+  organisation?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  date_precision?: 'day' | 'month' | 'year'
+  parent_episode_id?: number | null
+  domain_hint?: string | null
+  context_note?: string | null
+}
+
+export type Timeline = {
+  episodes: Episode[]
+  total_span_years: number
+  earliest_start: string | null
+  latest_end: string | null
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -133,4 +170,11 @@ export const api = {
     req<{ id: number; status: string }>('/targets', { method: 'POST', body: JSON.stringify(payload) }),
   updateTarget: (id: number, payload: unknown) =>
     req<{ id: number; status: string }>(`/targets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  listEpisodes: () => req<Episode[]>('/episodes'),
+  getTimeline: () => req<Timeline>('/episodes/timeline'),
+  createEpisode: (payload: EpisodeInput) =>
+    req<{ id: number; status: string }>('/episodes', { method: 'POST', body: JSON.stringify(payload) }),
+  updateEpisode: (id: number, payload: EpisodeInput) =>
+    req<{ id: number; status: string }>(`/episodes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteEpisode: (id: number) => req<{ status: string }>(`/episodes/${id}`, { method: 'DELETE' }),
 }

@@ -94,3 +94,19 @@ class TargetImport(BaseModel):
     metadata: Metadata
     target: TargetRole
     skills: list[Skill] = []
+
+
+class EpisodeCreate(BaseModel):
+    kind: str  # employment | project | study | qualification | other
+    title: str
+    organisation: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    date_precision: str = "month"  # day | month | year
+    parent_episode_id: Optional[int] = None
+    domain_hint: Optional[str] = None
+    context_note: Optional[str] = None
+
+
+class EpisodeUpdate(EpisodeCreate):
+    pass

@@ -1,6 +1,6 @@
 # 11 — Capability Model: Design Document
 
-**Status:** proposed, for review
+**Status:** Phase 0 implemented (§11); Phases 1–5 still proposed, for review
 **Supersedes (conceptually):** the narrative-plus-embedding model shipped in v1
 **Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10)
 **Deferred concepts:** `docs/12-architectural-notes-future.md` (potential; market-dependent capability value)
@@ -1145,7 +1145,7 @@ There is no automated path worth waiting for.
 
 Each phase ships something usable. No phase is only scaffolding.
 
-### Phase 0 — Episodes and documents *(~1 week)*
+### Phase 0 — Episodes and documents *(~1 week)* — **implemented**
 
 **Build:** `document`, `person`, `episode`, `episode_document`, `vocabulary_version`,
 `extraction_run`. Migrate existing postings and profile snapshots into `document`.
@@ -1156,6 +1156,66 @@ first time. The timeline is immediately useful on its own.
 
 **Why first:** every temporal derivation and every evidence claim hangs off episodes.
 Nothing downstream is possible without them.
+
+**Build notes — decisions made during implementation, not resolved by the plan above:**
+
+1. **`role_instance` was not built in Phase 0**, despite §10's migration table showing
+   `job_roles` → `role_instance` + `document`. `role_instance` is not actually in
+   either Phase 0's or Phase 1's "Build" list anywhere in this document — building it
+   now would mean cutting the Roles/Targets pages over to it, which is unscoped work.
+   Resolution: Phase 0 creates `document` rows only, for provenance. `job_roles`,
+   `job_role_skills`, `profile_snapshots` and every route/page reading them are
+   completely untouched — verified by running the pre-existing API and UI against a
+   migrated database copy (all pass, screenshots on file). **Flag for whoever scopes
+   Phase 1 in detail: decide explicitly which phase builds `role_instance` and cuts
+   the Roles/Targets UI over to it — it is currently unscoped by this document.**
+2. **Derived duration in Phase 0 is computed at the episode level, not the concept
+   level.** §5.4 defines years-of-experience/recency per-concept, via claims — which
+   don't exist until Phase 2. Implemented instead: the same union-of-date-spans
+   algorithm applied across all of a person's episodes with no concept filter
+   (`backend/app/routes/episodes.py::_union_span_years`), giving total career span and
+   per-episode duration. Never stored — computed on every read, per the invariant in
+   §5.2. The per-concept version is still Phase 2+ work, unchanged.
+3. **`person.display_name` is seeded as `"Ranga"`** (`backend/app/db.py::get_or_create_person`,
+   `DEFAULT_PERSON_DISPLAY_NAME`), taken from `docs/10`. No settings UI was built to
+   change it — treat this as a placeholder, not a settled decision, until multi-person
+   use is ever in scope.
+4. **`document.body` composition for migrated `job_roles` rows** (`backend/scripts/migrate_phase0.py::_compose_role_body`):
+   postings concatenate `description` + `requirements` + `responsibilities`; targets
+   (which have no posting-style text) concatenate `summary` + `description` +
+   `typical_tasks` + `skill_decomposition`. Either falls back to `title` alone if all
+   of those are empty, so `body` (`NOT NULL`) is never blank — exercised in testing
+   against a deliberately thin seeded posting.
+5. **Idempotency is by content hash, not a migration-run log.** `document.body_sha256`
+   is `UNIQUE`; re-running the migration script hits that constraint on
+   already-migrated rows and skips them rather than erroring. This means the script is
+   a safe-to-repeat one-time backfill, not a continuous sync: editing a `job_roles` row
+   after migration and re-running will add a *new* document for the changed content,
+   not update the old one (documents are immutable by design, §4.1) — it will not
+   retroactively fix an already-migrated document. Verified: running the script twice
+   against the same database produced 0 new rows on the second run.
+6. **The migration is a standalone script (`backend/scripts/migrate_phase0.py`), not
+   something `init_db()` runs automatically on every app startup.** `init_db()` stays
+   additive-schema-only (new `CREATE TABLE IF NOT EXISTS` statements), consistent with
+   its existing behaviour. Point 5 is the reason: an automatic on-every-startup backfill
+   would be indistinguishable from a sync and would misbehave exactly as described
+   there the first time a legacy row is edited post-migration.
+7. **`vocabulary_version` and `extraction_run` are created but write-empty in Phase 0** —
+   nothing in Phase 0 uses them, since no extraction pipeline exists yet (episodes are
+   entered by hand per §10.3). They exist now only so Phase 1's extraction pipeline
+   needs no further schema migration, exactly as the original plan intended.
+8. **New surface added:** `GET/POST/PUT/DELETE /api/episodes`, `GET /api/episodes/timeline`
+   (`backend/app/routes/episodes.py`), and a "History" page (`frontend/src/pages/Episodes.tsx`)
+   with inline CRUD and a timeline chart (root episodes as bars, nested episodes —
+   e.g. a project inside a job — as indented sub-bars). Wired into `App.tsx` nav.
+9. **Migration tested against a synthetic legacy-schema database**, not a real captured
+   one — no real database file exists in this build environment (gitignored, and this
+   was a fresh clone). The synthetic copy covered: multiple postings, both target kinds,
+   a deliberately thin/empty posting (title-only fallback), and multiple profile
+   snapshots. Before running this against a real database, re-run
+   `backend/scripts/migrate_phase0.py` against a **copy** of it first, exactly as done
+   here, and check its printed created/skipped counts look sane before trusting it
+   against the live file.
 
 ### Phase 1 — Vocabulary *(~1.5 weeks)*
 
