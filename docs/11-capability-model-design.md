@@ -3,6 +3,7 @@
 **Status:** proposed, for review
 **Supersedes (conceptually):** the narrative-plus-embedding model shipped in v1
 **Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10)
+**Deferred concepts:** `docs/12-architectural-notes-future.md` (potential; market-dependent capability value)
 
 ---
 
