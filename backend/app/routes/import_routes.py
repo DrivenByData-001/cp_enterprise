@@ -1,10 +1,17 @@
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ..ai import AIConfigError, load_prompt, run_json_task
+from ..ai import (
+    AIConfigError,
+    AIProviderError,
+    AIResponseFormatError,
+    AISchemaValidationError,
+    run_json_task,
+)
 from ..db import upsert_job_role
 from ..embeddings import dumps_vec, embed_text, embedding_model_name
 from ..models import JobPostingImport
@@ -89,6 +96,13 @@ def import_posting(payload: JobPostingImport):
 
 @router.post("/native")
 def import_posting_native(payload: NativePostingImport):
+    """Raw posting text -> native AI extraction -> typed validation -> existing import path.
+
+    The AI task layer (`app.ai`) never touches storage directly: it returns a
+    validated `JobPostingImport`, which is then handed to the same
+    `_insert_posting` used by the legacy JSON/bulk paths below. See
+    docs/13-ai-task-layer.md for why `result.run` isn't persisted yet.
+    """
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Posting text is required")
     context = [f"Posting text:\n{payload.text.strip()}"]
@@ -96,18 +110,28 @@ def import_posting_native(payload: NativePostingImport):
         context.append(f"Source URL: {payload.source_url}")
     if payload.known_posting_date:
         context.append(f"Known posting date: {payload.known_posting_date}")
+
     try:
-        extracted = run_json_task(
-            prompt=load_prompt("extract_job_posting.md"),
+        result = run_json_task(
+            task="job_posting_extract",
+            prompt_name="extract_job_posting.md",
             user_input="\n\n".join(context),
             output_model=JobPostingImport,
         )
     except AIConfigError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"AI extraction failed: {e}") from e
-    role_id = _insert_posting(extracted)
-    return {"id": role_id, "status": "imported", "extraction": extracted}
+    except AIProviderError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except (AIResponseFormatError, AISchemaValidationError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    role_id = _insert_posting(result.output)
+    return {
+        "id": role_id,
+        "status": "imported",
+        "extraction": result.output,
+        "run": asdict(result.run),
+    }
 
 
 @router.post("/bulk")

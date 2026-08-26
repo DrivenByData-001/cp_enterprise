@@ -220,7 +220,12 @@ export const api = {
   importPosting: (payload: unknown) =>
     req<{ id: number; status: string }>('/import', { method: 'POST', body: JSON.stringify(payload) }),
   importPostingNative: (payload: { text: string; source_url?: string | null; known_posting_date?: string | null }) =>
-    req<{ id: number; status: string; extraction: unknown }>('/import/native', {
+    req<{
+      id: number
+      status: string
+      extraction: unknown
+      run: { task: string; model: string; prompt_name: string; prompt_version: string; status: string }
+    }>('/import/native', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

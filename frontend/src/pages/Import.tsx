@@ -22,7 +22,7 @@ export default function Import() {
         source_url: sourceUrl.trim() || null,
         known_posting_date: postingDate || null,
       })
-      setResult({ ok: true, message: `AI extracted and imported role (id ${res.id}).` })
+      setResult({ ok: true, message: `AI extracted and imported role (id ${res.id}), via ${res.run.model}.` })
       setText('')
       setSourceUrl('')
       setPostingDate('')

@@ -6,20 +6,28 @@ same vector space, so "closest roles to me" and "gap to a target role" become
 similarity computations, not guesswork.
 
 This is v1 — a thin, working slice: **capture → decompose → embed → compare**.
-Local-only, no cloud, no API keys required.
+Local-only, no cloud. Job posting extraction now runs natively against the
+Anthropic API (needs `ANTHROPIC_API_KEY`); everything else needs no API key.
 
 ## How it fits together
 
-- **Extraction is manual, on purpose.** You paste `prompts/extract_job_posting.md`
-  plus a job posting URL into Claude or ChatGPT. It fetches the page, extracts
-  structured data, and flags anything it couldn't get cleanly
-  (`extraction_status` / `notes_for_user`) so you know when to grab it by hand
-  instead.
+- **Posting extraction is native.** Paste a job posting on the Import page and
+  click "Extract with AI & import" — the backend calls the configured
+  Anthropic model, validates the structured result, and imports it directly.
+  See `docs/13-ai-task-layer.md` for the AI task abstraction this runs on.
+  The old manual workflow (paste `prompts/extract_job_posting.md` + the
+  posting into Claude/ChatGPT, paste the resulting JSON back) still works as
+  a fallback — useful for migration, debugging, or working without an API
+  key — via the "Legacy JSON import" section of the same page.
+- **Target-role decomposition is still manual**, on purpose (not yet native —
+  see `docs/13-ai-task-layer.md` §1 for the pattern this would follow when it
+  is): paste `prompts/decompose_target_role.md` into Claude/ChatGPT, paste
+  the resulting JSON into the Add Target page.
 - **Embedding is automatic and local.** No API key needed — the backend embeds
   text with a small local model (`BAAI/bge-small-en-v1.5` via `fastembed`,
   downloaded once on first use, runs on CPU).
-- **Everything else is mechanical**: import the JSON, see it ranked by
-  similarity to your profile, see it on a 2D map.
+- **Everything else is mechanical**: rank by similarity to your profile, see
+  it on a 2D map.
 
 ## Stack
 
@@ -33,6 +41,8 @@ Local-only, no cloud, no API keys required.
 # backend
 cd backend
 pip install -r requirements.txt
+export ANTHROPIC_API_KEY=sk-...   # required for native AI posting extraction
+export CP_AI_MODEL=claude-sonnet-5 # required for native AI posting extraction
 python3 -m uvicorn app.main:app --reload --port 8000
 
 # frontend (separate terminal)
@@ -44,15 +54,24 @@ npm run dev
 Open http://localhost:5173. The first import will download the embedding
 model (~130MB, one-time, needs internet access to huggingface.co).
 
+`ANTHROPIC_API_KEY`/`CP_AI_MODEL` are only needed for native AI posting
+extraction (`POST /api/import/native`, the primary Import-page workflow);
+without them the rest of the app runs normally and the legacy JSON import
+path still works. Never commit these — set them in your shell or an
+untracked `.env` you source yourself.
+
 ## Using it
 
 1. **Profile** — write a short narrative of where you are right now. Save it;
    it gets embedded and re-embedded every time you update it (each save keeps
    a timestamped snapshot).
-2. **Import** — paste `prompts/extract_job_posting.md` + a job URL (or the
-   pasted page text, for sites that block fetching) into Claude/ChatGPT,
-   paste the resulting JSON into the Import page (or drop multiple `.json`
-   files at once to bulk-import a folder you've already captured).
+2. **Import** — paste the raw posting text into the Import page and click
+   "Extract with AI & import"; the app extracts, validates, and imports it
+   in one step (needs `ANTHROPIC_API_KEY`/`CP_AI_MODEL`, see above). The
+   legacy path — paste `prompts/extract_job_posting.md` + the posting into
+   Claude/ChatGPT, paste the resulting JSON back — remains available on the
+   same page for migration/recovery, or drop multiple `.json` files at once
+   to bulk-import a folder you've already captured.
 3. **Dashboard** — roles ranked by similarity to your current profile,
    filterable by career track.
 4. **Space** — a 3D PCA starfield of every captured role, target, and your
@@ -128,8 +147,9 @@ its keep:
 - Actuarial exam tracking
 - Entrepreneurial "opportunity nodes" (though `node_type` is designed to
   extend to a third kind later without a schema break)
-- Any AI chat / MCP interface — decomposition and extraction both stay a
-  manual copy-paste loop with Claude/ChatGPT, on purpose
+- Any AI chat / MCP interface — target-role decomposition stays a manual
+  copy-paste loop with Claude/ChatGPT for now (posting extraction is native,
+  see `docs/13-ai-task-layer.md`)
 - Any cloud sync
 
 ### Note for future devs: time-evolution view (deferred)
