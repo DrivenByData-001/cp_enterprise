@@ -58,7 +58,6 @@ export type Role = {
   skills?: RoleSkill[]
   url: string | null
   raw_json?: unknown
-  // target-only fields
   typical_tasks?: string[] | null
   skill_decomposition?: SkillDecompositionItem[] | null
   technical_subjects?: TechnicalSubjectItem[] | null
@@ -220,6 +219,16 @@ export const api = {
   deleteRole: (id: number) => req<{ status: string }>(`/roles/${id}`, { method: 'DELETE' }),
   importPosting: (payload: unknown) =>
     req<{ id: number; status: string }>('/import', { method: 'POST', body: JSON.stringify(payload) }),
+  importPostingNative: (payload: { text: string; source_url?: string | null; known_posting_date?: string | null }) =>
+    req<{
+      id: number
+      status: string
+      extraction: unknown
+      run: { task: string; model: string; prompt_name: string; prompt_version: string; status: string }
+    }>('/import/native', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   importBulk: (files: File[]) => {
     const form = new FormData()
     files.forEach((f) => form.append('files', f))
