@@ -2,12 +2,20 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile
+from pydantic import BaseModel
 
+from ..ai import AIConfigError, load_prompt, run_json_task
 from ..db import upsert_job_role
 from ..embeddings import dumps_vec, embed_text, embedding_model_name
 from ..models import JobPostingImport
 
 router = APIRouter(prefix="/api/import", tags=["import"])
+
+
+class NativePostingImport(BaseModel):
+    text: str
+    source_url: str | None = None
+    known_posting_date: str | None = None
 
 
 def compose_role_text(job, analysis) -> str:
@@ -77,6 +85,29 @@ def _insert_posting(payload: JobPostingImport) -> int:
 def import_posting(payload: JobPostingImport):
     role_id = _insert_posting(payload)
     return {"id": role_id, "status": "imported"}
+
+
+@router.post("/native")
+def import_posting_native(payload: NativePostingImport):
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Posting text is required")
+    context = [f"Posting text:\n{payload.text.strip()}"]
+    if payload.source_url:
+        context.append(f"Source URL: {payload.source_url}")
+    if payload.known_posting_date:
+        context.append(f"Known posting date: {payload.known_posting_date}")
+    try:
+        extracted = run_json_task(
+            prompt=load_prompt("extract_job_posting.md"),
+            user_input="\n\n".join(context),
+            output_model=JobPostingImport,
+        )
+    except AIConfigError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"AI extraction failed: {e}") from e
+    role_id = _insert_posting(extracted)
+    return {"id": role_id, "status": "imported", "extraction": extracted}
 
 
 @router.post("/bulk")
