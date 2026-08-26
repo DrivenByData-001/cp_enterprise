@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .routes import episodes, import_routes, profile, roles, space, targets
+from .routes import concepts, episodes, import_routes, profile, roles, space, targets
 
 app = FastAPI(title="Career Navigator")
 
@@ -25,6 +25,7 @@ app.include_router(profile.router)
 app.include_router(space.router)
 app.include_router(targets.router)
 app.include_router(episodes.router)
+app.include_router(concepts.router)
 
 
 @app.get("/api/health")

@@ -242,7 +242,11 @@ export default function RoleDetail() {
               <span
                 key={i}
                 className="secondary"
+                title={s.resolved_concept_id ? 'Linked to the vocabulary' : 'Not yet resolved — see Vocabulary'}
                 style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
                   border: '1px solid var(--border)',
                   borderRadius: 999,
                   padding: '4px 10px',
@@ -250,6 +254,12 @@ export default function RoleDetail() {
                   opacity: s.requirement_type === 'preferred' ? 0.7 : 1,
                 }}
               >
+                {s.resolved_concept_id && (
+                  <span
+                    aria-hidden
+                    style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--series-1)', flexShrink: 0 }}
+                  />
+                )}
                 {s.name}
                 {s.requirement_type ? ` · ${s.requirement_type}` : ''}
               </span>

@@ -3,6 +3,7 @@ export type RoleSkill = {
   category: string | null
   importance: number | null
   requirement_type: string | null
+  resolved_concept_id: number | null
 }
 
 export type NodeType = 'posting' | 'target_real' | 'target_imagined'
@@ -129,6 +130,66 @@ export type Timeline = {
   latest_end: string | null
 }
 
+export type ConceptType = {
+  code: string
+  label: string
+  definition: string
+  is_atom: number
+  sort_order: number
+}
+
+export type Concept = {
+  id: number
+  type_code: string
+  canonical_name: string
+  definition: string | null
+  status: string
+  merged_into: number | null
+  origin: string
+  created_at: string
+  reviewed_at: string | null
+  aliases?: { id: number; alias: string; origin: string }[]
+}
+
+export type ConceptInput = {
+  type_code: string
+  canonical_name: string
+  definition?: string | null
+  status?: string
+}
+
+export type Facet = {
+  id: number
+  canonical_name: string
+  role_count: number
+}
+
+export type ProposalGroup = {
+  surface_form: string
+  proposal_ids: number[]
+  suggested_type: string | null
+  nearest_concept_id: number | null
+  nearest_similarity: number | null
+  occurrence_count: number
+}
+
+export type ProposalAction = 'accept_new' | 'accept_alias' | 'reject' | 'defer'
+
+export type ProposalResolveInput = {
+  surface_form: string
+  action: ProposalAction
+  type_code?: string
+  canonical_name?: string
+  definition?: string
+  concept_id?: number
+}
+
+export type ProposalStats = {
+  pending_groups: number
+  total_documents: number
+  proposals_per_document: number | null
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -142,9 +203,12 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listRoles: (params: { career_track?: string; min_similarity?: number; sort?: string } = {}) => {
+  listRoles: (
+    params: { career_track?: string; concept_id?: number; min_similarity?: number; sort?: string } = {},
+  ) => {
     const qs = new URLSearchParams()
     if (params.career_track) qs.set('career_track', params.career_track)
+    if (params.concept_id !== undefined) qs.set('concept_id', String(params.concept_id))
     if (params.min_similarity !== undefined) qs.set('min_similarity', String(params.min_similarity))
     if (params.sort) qs.set('sort', params.sort)
     const suffix = qs.toString() ? `?${qs}` : ''
@@ -177,4 +241,24 @@ export const api = {
   updateEpisode: (id: number, payload: EpisodeInput) =>
     req<{ id: number; status: string }>(`/episodes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteEpisode: (id: number) => req<{ status: string }>(`/episodes/${id}`, { method: 'DELETE' }),
+  listConceptTypes: () => req<ConceptType[]>('/concepts/types'),
+  listConcepts: (params: { type_code?: string; status?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.type_code) qs.set('type_code', params.type_code)
+    if (params.status) qs.set('status', params.status)
+    if (params.q) qs.set('q', params.q)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<Concept[]>(`/concepts${suffix}`)
+  },
+  createConcept: (payload: ConceptInput) =>
+    req<{ id: number; status: string }>('/concepts', { method: 'POST', body: JSON.stringify(payload) }),
+  getFacets: (type_code: string) => req<Facet[]>(`/concepts/facets?type_code=${encodeURIComponent(type_code)}`),
+  listProposals: (status = 'pending') =>
+    req<ProposalGroup[]>(`/concepts/proposals?status=${encodeURIComponent(status)}`),
+  getProposalStats: () => req<ProposalStats>('/concepts/proposals/stats'),
+  resolveProposal: (payload: ProposalResolveInput) =>
+    req<{ surface_form: string; status: string; resolved_concept_id: number | null }>(
+      '/concepts/proposals/resolve',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
 }
