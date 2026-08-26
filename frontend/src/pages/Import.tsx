@@ -6,20 +6,27 @@ type Result = { ok: boolean; message: string }
 
 export default function Import() {
   const [text, setText] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [postingDate, setPostingDate] = useState('')
   const [result, setResult] = useState<Result | null>(null)
   const [busy, setBusy] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
-  const submitPaste = async () => {
+  const submitNative = async () => {
     setBusy(true)
     setResult(null)
     try {
-      const parsed = JSON.parse(text)
-      const res = await api.importPosting(parsed)
-      setResult({ ok: true, message: `Imported "${parsed.job?.title ?? 'role'}" (id ${res.id}).` })
+      const res = await api.importPostingNative({
+        text,
+        source_url: sourceUrl.trim() || null,
+        known_posting_date: postingDate || null,
+      })
+      setResult({ ok: true, message: `AI extracted and imported role (id ${res.id}).` })
       setText('')
-      setTimeout(() => navigate(`/roles/${res.id}`), 700)
+      setSourceUrl('')
+      setPostingDate('')
+      setTimeout(() => navigate(`/roles/${res.id}`), 500)
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -51,28 +58,34 @@ export default function Import() {
     <div>
       <h1 style={{ fontSize: 22 }}>Import a role</h1>
       <p className="secondary">
-        Give the extraction prompt (<code>prompts/extract_job_posting.md</code>) and a posting URL to Claude or
-        ChatGPT. Paste the JSON it returns below, or drop one/many JSON files.
+        Paste the posting text and let the app extract and analyse it. The structured result is validated and stored directly.
       </p>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Paste JSON</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI extraction</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8, marginBottom: 8 }}>
+          <input
+            value={sourceUrl}
+            onChange={(e) => setSourceUrl(e.target.value)}
+            placeholder="Source URL (optional)"
+          />
+          <input type="date" value={postingDate} onChange={(e) => setPostingDate(e.target.value)} />
+        </div>
         <textarea
-          rows={12}
+          rows={16}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Paste the extracted JSON object here…"
-          style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+          placeholder="Paste the raw job posting here…"
         />
         <div style={{ marginTop: 8 }}>
-          <button className="primary" onClick={submitPaste} disabled={busy || !text.trim()}>
-            {busy ? 'Importing…' : 'Import'}
+          <button className="primary" onClick={submitNative} disabled={busy || !text.trim()}>
+            {busy ? 'Extracting…' : 'Extract with AI & import'}
           </button>
         </div>
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Or upload file(s)</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Legacy JSON import</h3>
         <input
           ref={fileInput}
           type="file"
@@ -81,7 +94,7 @@ export default function Import() {
           onChange={(e) => submitFiles(e.target.files)}
         />
         <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
-          Select multiple .json files to bulk-import a folder of already-captured postings.
+          Existing extracted JSON files remain supported for migration and recovery.
         </p>
       </div>
 
