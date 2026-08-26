@@ -6,3 +6,4 @@ scikit-learn
 python-multipart
 pydantic
 pytest
+anthropic
