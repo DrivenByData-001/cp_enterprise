@@ -40,14 +40,10 @@ Anthropic API (needs `ANTHROPIC_API_KEY`); everything else needs no API key.
 ```bash
 # backend
 cd backend
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-...   # required for native AI posting extraction
-export CP_AI_MODEL=claude-sonnet-5 # required for native AI posting extraction
-python3 -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
 
 # frontend (separate terminal)
 cd frontend
-npm install
 npm run dev
 ```
 
@@ -57,8 +53,7 @@ model (~130MB, one-time, needs internet access to huggingface.co).
 `ANTHROPIC_API_KEY`/`CP_AI_MODEL` are only needed for native AI posting
 extraction (`POST /api/import/native`, the primary Import-page workflow);
 without them the rest of the app runs normally and the legacy JSON import
-path still works. Never commit these — set them in your shell or an
-untracked `.env` you source yourself.
+path still works.
 
 ## Using it
 
@@ -167,3 +162,24 @@ from oldest to newest captures and watch the shape of the space shift. Backend
 side, `backend/app/routes/space.py` would need optional `from`/`to` query
 params filtering the `job_roles` selected before the PCA fit. Held off until
 there's enough historic data loaded in to actually make the view meaningful.
+
+## First-time setup
+
+Install the backend and frontend dependencies once:
+
+```bash
+cd backend
+pip install -r requirements.txt
+
+cd ../frontend
+npm install
+```
+
+Native AI posting extraction also needs an Anthropic API key and model name.
+Set them in the shell where you start the backend; never commit them. In
+PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "your-api-key"
+$env:CP_AI_MODEL = "claude-sonnet-5"
+```
