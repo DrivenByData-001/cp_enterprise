@@ -1,7 +1,10 @@
 # 13 — Native AI Task Layer
 
-**Status:** implemented (posting extraction only)
-**Related:** `docs/11-capability-model-design.md` (capability model; `extraction_run`, §4.1)
+**Status:** implemented — posting extraction (Phase 1) plus four Phase 2
+closed-vocabulary tasks: role requirement extraction, concept-candidate
+adjudication, profile360 claim mapping, profile360 capability mapping
+**Related:** `docs/11-capability-model-design.md` (capability model; `extraction_run`, §4.1),
+`docs/14-phase2-postgres-architecture.md` (Postgres schema these tasks write to)
 
 ---
 
@@ -93,46 +96,36 @@ See the README for local setup.
 - **No `document`/`extraction_run` rows written yet** for native posting
   extraction. See §4.
 
-## 4. Relationship to `extraction_run` (Phase 2 integration)
+## 4. Relationship to `extraction_run` — done in Phase 2
 
-`vocabulary_version` and `extraction_run` already exist in the schema
-(built, empty, in Phase 0 — `docs/11-capability-model-design.md` §11 Phase 0
-build notes) but nothing in the app writes to them yet, including this
-layer. That's a deliberate choice, not an oversight:
+Everything this section originally deferred is now built. `role_instance` and
+per-posting `document` rows exist (`backend/app/db.py::get_or_create_document`,
+called from `import_routes.py`/`role_instances.py` before the role is
+created), and `extraction_run` is written for real —
+`backend/app/extraction.py::_record_extraction_run` — for every AI task,
+success or failure.
 
-- `extraction_run.document_id` is `NOT NULL REFERENCES document(id)`, and
-  postings don't have a `document` row today — `role_instance` (the table
-  that would let a posting own one) is explicitly unscoped, flagged in both
-  the Phase 0 and Phase 1 build notes as "whoever scopes the next phase must
-  build it." Writing an `extraction_run` row here would mean inventing a
-  document row for it to point at, ahead of that decision — exactly the
-  "prematurely force legacy import into the claim/extraction model" the
-  task brief warned against.
-- `extraction_run.vocabulary_version_id` is likewise `NOT NULL`, and no code
-  path has ever inserted a `vocabulary_version` row — posting extraction
-  doesn't touch the concept vocabulary at all, so forcing a reference here
-  would be a fiction, not a fact.
-- `extraction_run.task` is documented as one of
-  `episode_extract | concept_link | capability_attribute | requirement_extract`
-  (§4.1) — none of which is "extract a whole posting." Native posting
-  extraction is closer to the *legacy* Pass D/whole-document shape than to
-  any of the four canonical passes.
+Two changes from what this section originally sketched, both recorded in full
+in `docs/11-capability-model-design.md`'s Phase 2 build notes (§11):
 
-**What was built instead:** `AITaskRun` carries exactly the fields
-`extraction_run` needs — `task`, `model`, `prompt_version`, `started_at`,
-`finished_at`, `status` — as a plain dataclass returned to the caller (and
-included in the `/api/import/native` response as `run`), so nothing is lost.
+- **`extraction_run.document_id` became nullable**, alongside three sibling
+  subject columns discriminated by a new `subject_type` — a profile360 claim/
+  capability mapping task has no jobber document to point at, and the
+  original `NOT NULL` had no way to express that honestly.
+- **`import_posting_native` itself still does not write an `extraction_run`
+  row** — it predates the capability model's `JobPostingImport` shape (§5
+  below) and stays a `legacy_role_analysis`-only path, matching §14 of the
+  Phase 2 brief ("old flat fields... are not authoritative Phase 2
+  outputs"). The four tasks that *do* write `extraction_run` are the new
+  closed-vocabulary ones — see §7 below — reached via the separate
+  "source-aware ingest" path (`POST /api/role-instances/ingest`) plus
+  `POST /api/role-instances/{id}/extract-requirements`, not via
+  `/api/import/native`.
 
-**Phase 2 integration plan**, once `role_instance`/`document` exist for
-postings: have `import_posting_native` create a `document` row (`kind =
-'job_posting'`, `body` = the pasted text, `source = 'user_paste'` or the
-given `source_url`) before calling `run_json_task`, then insert one
-`extraction_run` row from the returned `AITaskRun` plus that `document_id`
-(and a real `vocabulary_version_id` once one exists). At that point
-`task='job_posting_extract'` should be added to the documented enum in
-`docs/11-capability-model-design.md` §4.1 alongside the other four passes,
-or the whole-posting extraction should be reframed as a bulk Pass B/D run —
-worth a short design decision at that time, not decided here.
+`AITaskRun` (§4.1 originally) is unchanged and still the thing every task
+returns on success; `extraction_run` is now what persists it (or, on
+failure, an `error_type`/`error_message` in its place — `run_json_task`
+itself still never touches storage, `extraction.py` does that on top of it).
 
 ## 5. Prompt vs. architecture conflicts found
 
@@ -153,12 +146,49 @@ correct place for it to be resolved, not here.
 ```bash
 cd backend
 pip install -r requirements.txt
+export DATABASE_URL=postgresql://...       # see README / docs/14
 export OPENAI_API_KEY=sk-...
 export CP_AI_MODEL=gpt-4o-mini
 python3 -m uvicorn app.main:app --reload --port 8000
 ```
 
-Without `OPENAI_API_KEY`/`CP_AI_MODEL` set, `POST /api/import/native`
-returns `503` with a message naming the missing variable — the rest of the
-app (embeddings, legacy JSON import, everything else) is unaffected, since
-no other code path imports `app.ai`.
+Without `OPENAI_API_KEY`/`CP_AI_MODEL` set, every AI task (native posting
+import, requirement extraction, profile360 mapping) fails with a clear
+`AIConfigError` — mapped to `503` for the request that triggered it, and (for
+the four Phase 2 tasks, §7 below) persisted as a `failed` `extraction_run`
+row — while the rest of the app (embeddings, legacy JSON import, everything
+else) is unaffected.
+
+## 7. Phase 2 closed-vocabulary tasks
+
+Four new tasks, all in `backend/app/extraction.py`, all reached through
+`run_json_task` like the Phase 1 posting extraction above — no direct
+provider calls, no new failure-handling pattern:
+
+| Task | Prompt | Output schema | Written by |
+|---|---|---|---|
+| `requirement_extract` | `prompts/extract_role_requirements.md` | `RequirementExtractionResult` | `extraction.extract_role_requirements` |
+| `concept_link_adjudicate` | `prompts/adjudicate_concept_candidates.md` | `ConceptAdjudicationResult` | same function, Phase B of the same call |
+| `profile360_claim_map` | `prompts/map_profile360_claim.md` | `ClaimMappingResult` | `extraction.map_profile360_claim` |
+| `profile360_capability_map` | `prompts/map_profile360_capability.md` | `ClaimMappingResult` | `extraction.map_profile360_capability` |
+
+`requirement_extract` is deliberately **open**-vocabulary at the prompt level
+(it asks for verbatim requirement spans, not a match against a supplied
+concept list) — the closed-vocabulary guarantee comes from what happens
+*after* the model responds: `docs/11-capability-model-design.md` §7.3's
+cascade (exact match → embedding retrieval → `concept_link_adjudicate`
+adjudication → `concept_proposal`) runs in Python, and the model is never
+shown the full vocabulary at once. An earlier draft of this prompt tried to
+hand the model the whole candidate list in one call instead — abandoned
+because it scales badly past a few hundred concepts and doesn't use the
+embedding-retrieval infrastructure §7.3 already specifies.
+
+Every one of the four validates its own hard rule before persisting
+anything: `requirement_extract`'s spans are checked with
+`span_validation.validate_span` (never trusted on the model's say-so, and
+downgraded to `basis='inferred'` with no span at all when the source
+document's provenance isn't `original_capture`); the two `profile360_*_map`
+tasks may only choose from the candidate list they were shown, verified by
+looking the chosen name up in that same list before writing a mapping row —
+a hallucinated name that doesn't match any candidate is treated as a
+decline, not an error.
