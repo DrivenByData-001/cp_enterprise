@@ -14,7 +14,7 @@ from ..db import db_cursor
 
 
 def _with_display(row: dict) -> dict:
-    return {**row, "id": str(row["id"]), "_display": p360.display_text(row)}
+    return {**row, "id": str(row["id"]), "_display": p360.snapshot_display(row)}
 
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])

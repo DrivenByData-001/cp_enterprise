@@ -18,18 +18,17 @@
 -- rows — there is no way to fabricate the real captured corpus locally, and
 -- pretending to would be worse than an empty starting point.
 --
--- Also stubs a minimal `profile360` schema: since the Phase 2 production-
--- schema reconciliation pass, backend/migrations/0004_profile360_mapping.sql
--- and 0005_preferences.sql declare real (non-defensive) foreign keys to
+-- Also stubs a `profile360` schema: since the Phase 2 production-schema
+-- reconciliation pass, backend/migrations/0004_profile360_mapping.sql and
+-- 0005_preferences.sql declare real (non-defensive) foreign keys to
 -- profile360.claims/capabilities/episodes, so migrations now genuinely
 -- require *something* at those tables to apply at all — even for a
 -- jobber-only local setup that will never touch the profile360-mapping
--- features. `claims`/`capabilities`/`manual_import_queue` match the columns
--- confirmed by live inspection (docs/14 §5/§6); `episodes`/`snapshots` do not
--- have a confirmed shape beyond `id` being uuid, so they get the minimum
--- needed to be a valid FK target plus one guessed text field so
--- profile360_reader.display_text has something to show — never trust these
--- two as a shape reference for anything beyond that.
+-- features. Every table below (`claims`/`capabilities`/`episodes`/
+-- `snapshots`/`manual_import_queue`) matches the columns confirmed by live
+-- inspection of the real `open-brain.profile360` project (docs/14 §5/§6) —
+-- this stub is a realistic production stand-in, not an `id`-only
+-- approximation.
 --
 -- Usage: applied by backend/tests/conftest.py before run_migrations(), and by
 -- hand for local dev against a from-scratch Postgres:
@@ -65,17 +64,37 @@ CREATE TABLE IF NOT EXISTS profile360.capabilities (
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Unconfirmed shape beyond `id` — see header note above.
 CREATE TABLE IF NOT EXISTS profile360.episodes (
-    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    title      TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    episode_key       TEXT UNIQUE,
+    parent_episode_id UUID REFERENCES profile360.episodes(id),
+    episode_type      TEXT NOT NULL DEFAULT 'employment',
+    organisation      TEXT,
+    title             TEXT,
+    start_date        DATE,
+    end_date          DATE,
+    date_precision    TEXT,
+    context           TEXT,
+    responsibilities  TEXT,
+    autonomy          TEXT,
+    accountability    TEXT,
+    stakeholder_scope TEXT,
+    team_size         TEXT,
+    outcomes          TEXT,
+    status            TEXT NOT NULL DEFAULT 'active',
+    uncertainty       TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS profile360.snapshots (
-    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    narrative_text TEXT,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    snapshot_key     TEXT UNIQUE,
+    snapshot_type    TEXT,
+    created_for      TEXT,
+    summary          TEXT,
+    structured_state JSONB NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Confirmed shape (docs/14 §6) — identity is source_key, not `id`; there is

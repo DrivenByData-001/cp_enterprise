@@ -4,11 +4,9 @@ writes here. Authoring episodes is profile360's own tool's job now; this
 page only browses its episodes.
 
 The derived timeline/duration math doc 11 §5.4 specified (union-of-spans
-years of experience, per-episode duration) is deliberately not rebuilt here:
-it needs confirmed start/end-date field names on profile360.episodes, which
-this build has not inspected beyond `id` being uuid (docs/14 §5/§9). Once
-those are known, this is the place to add it back, over profile360 data
-instead of a local table.
+years of experience, per-episode duration) is deliberately not rebuilt here —
+`start_date`/`end_date` are confirmed columns (docs/14 §5), but that
+derivation is new functionality, out of scope for this read path.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -18,7 +16,7 @@ from ..db import db_cursor
 
 
 def _with_display(row: dict) -> dict:
-    return {**row, "id": str(row["id"]), "_display": p360.display_text(row)}
+    return {**row, "id": str(row["id"]), "_display": p360.episode_display(row)}
 
 
 router = APIRouter(prefix="/api/episodes", tags=["episodes"])

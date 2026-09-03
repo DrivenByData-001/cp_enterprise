@@ -41,14 +41,15 @@ LEGACY_TARGET = {
 }
 
 
-def _seed_profile_snapshot(narrative_text: str) -> None:
+def _seed_profile_snapshot(summary: str) -> None:
     """profile360 is authoritative for the current profile narrative now
     (docs/14 §9) — there is no more POST /api/profile to seed one through the
     app's own API, so tests that need a non-empty "current profile" for
     similarity computations write directly to the profile360 stub
-    local_baseline.sql provides."""
+    local_baseline.sql provides. `summary` is the confirmed primary
+    human-readable field on profile360.snapshots (docs/14 §5)."""
     with db.db_cursor() as cur:
-        cur.execute("INSERT INTO profile360.snapshots (narrative_text) VALUES (%s)", (narrative_text,))
+        cur.execute("INSERT INTO profile360.snapshots (summary) VALUES (%s)", (summary,))
 
 
 def test_legacy_json_import_and_role_listing(client):
@@ -121,11 +122,17 @@ def test_update_target_rejects_editing_a_posting_via_target_route(client):
 def test_episodes_are_read_only_from_profile360(client):
     """jobber.episode does not exist — episodes are profile360's own data,
     browsed read-only (docs/14 §9). Seed profile360's stub table directly
-    since there is no ingestion path for it in this app."""
+    (production-shaped, per the confirmed schema — docs/14 §5) since there
+    is no ingestion path for it in this app."""
     with db.db_cursor() as cur:
         cur.execute(
-            "INSERT INTO profile360.episodes (title) VALUES (%s) RETURNING id",
-            ("Actuarial Analyst at Aviva",),
+            """
+            INSERT INTO profile360.episodes
+                (title, organisation, episode_type, start_date, end_date, responsibilities, outcomes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            ("Actuarial Analyst", "Aviva", "employment", "2019-03-01", "2022-08-01",
+             "Owned quarterly reserving.", "Cut close time by a third."),
         )
         episode_id = str(cur.fetchone()["id"])
 
@@ -133,7 +140,14 @@ def test_episodes_are_read_only_from_profile360(client):
     assert any(e["id"] == episode_id for e in episodes)
 
     episode = client.get(f"/api/episodes/{episode_id}").json()
-    assert episode["_display"] == "Actuarial Analyst at Aviva"
+    assert episode["_display"] == "Actuarial Analyst — Aviva"  # title + organisation, not a raw field dump
+    # Every confirmed structured field still passes through untouched —
+    # _display is a label, not a replacement for the row (docs/14 §5).
+    assert episode["organisation"] == "Aviva"
+    assert episode["start_date"] == "2019-03-01"
+    assert episode["end_date"] == "2022-08-01"
+    assert episode["responsibilities"] == "Owned quarterly reserving."
+    assert episode["outcomes"] == "Cut close time by a third."
 
     assert client.get("/api/episodes/00000000-0000-0000-0000-000000000000").status_code == 404
 
@@ -173,9 +187,18 @@ def test_profile_reads_current_snapshot_and_history_from_profile360(client):
     that's the recency column get_current_snapshot sorts by."""
     _seed_profile_snapshot("Version one.")
     _seed_profile_snapshot("Version two.")
+    with db.db_cursor() as cur:
+        cur.execute(
+            "UPDATE profile360.snapshots SET snapshot_type = %s, structured_state = %s WHERE summary = %s",
+            ("full_narrative", db.to_json_param({"years_experience": 4}), "Version two."),
+        )
 
     current = client.get("/api/profile").json()
     assert current["_display"] == "Version two."
+    # Structured fields still pass through — _display is a label, not a
+    # replacement for the row (docs/14 §5).
+    assert current["snapshot_type"] == "full_narrative"
+    assert current["structured_state"] == {"years_experience": 4}
 
     history = client.get("/api/profile/history").json()
     assert len(history) == 2

@@ -142,9 +142,9 @@ invariant 1 and brief §5's "stated/implied claims require document
 provenance." Every caller of `app/db.py::create_document` must state this
 value explicitly; there is no default relied on in code.
 
-## 5. `profile360` — read-only, confirmed columns for claims/capabilities/evidence
+## 5. `profile360` — read-only, confirmed columns for claims/capabilities/evidence/episodes/snapshots
 
-Live inspection confirmed real column shapes for the tables this codebase
+Live inspection confirmed real column shapes for every table this codebase
 actually queries:
 
 - **`profile360.claims`**: `id (uuid), claim_key, episode_id, claim_text,
@@ -156,17 +156,30 @@ actually queries:
   updated_at`.
 - **`profile360.evidence`**: `id (uuid), claim_id, document_id, evidence_type,
   passage, locator, approximate_date, notes`.
-- **`profile360.episodes`** / **`profile360.snapshots`**: confirmed `id`
-  is `uuid`; no other column beyond that was confirmed by the inspection.
-  `app/profile360_reader.py` never hard-codes a column name for these two —
-  it introspects `information_schema.columns` on first use (cached) and
-  exposes rows as plain dicts with a best-effort display-field picker
-  (`claim_text`, `narrative_text`, `text`, `statement`, `description`,
-  `summary`, `title`, `name`, `label` — first match wins), falling back to a
-  raw key:value rendering rather than assuming a specific field is present.
-  Derived timeline/duration math (doc 11 §5.4 — union-of-spans years of
-  experience) is deliberately not rebuilt against these two until their real
-  date-field names are confirmed.
+- **`profile360.episodes`**: `id (uuid), episode_key (unique), parent_episode_id
+  (uuid, self-referencing FK to episodes(id) — a project/assignment nested
+  inside a job), episode_type (default 'employment'), organisation, title,
+  start_date, end_date, date_precision, context, responsibilities, autonomy,
+  accountability, stakeholder_scope, team_size, outcomes, status (default
+  'active'), uncertainty, created_at, updated_at`.
+- **`profile360.snapshots`**: `id (uuid), snapshot_key (unique), snapshot_type,
+  created_for, summary, structured_state (jsonb, default '{}'), created_at`.
+  `summary` is the primary human-readable field.
+- Everything above is genuinely confirmed by live inspection — no column here
+  is guessed. `app/profile360_reader.py`'s `episode_display`/
+  `snapshot_display` use these confirmed fields directly (title +
+  organisation; summary) for a human-readable label, rather than the generic
+  best-effort field-candidate scan (`display_text`) still used for the
+  handful of allowlisted tables with no confirmed shape (`documents`,
+  `contradictions`, `open_questions`, `claim_concepts`, `capability_claims`).
+  Every column is still passed through to the API response untouched
+  (`{**row, ...}`), so nothing above is hidden behind the `_display` label.
+  `backend/scripts/inspect_schema.py` remains useful as a deployment
+  diagnostic and schema-drift check, but is no longer needed to *discover*
+  any of the shapes above. Derived timeline/duration math (doc 11 §5.4 —
+  union-of-spans years of experience) is still not built against
+  `start_date`/`end_date` — that would be new functionality, not something
+  blocked on an unconfirmed schema.
 - Eleven tables total have RLS disabled today: `documents, episodes, concepts,
   claims, evidence, claim_concepts, capabilities, capability_claims,
   contradictions, open_questions, snapshots` — see `docs/15` §3 for the

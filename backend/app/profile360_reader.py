@@ -5,14 +5,18 @@ INSERT/UPDATE/DELETE against `profile360` (the one exception, a deliberate
 promotion path into a queue table for profile360's own review, lives in the
 separate `app/profile360_promotion.py`, never here).
 
-Column names beyond `id` (and, since the Phase 2 production-schema
-reconciliation pass, the confirmed shapes of `claims`/`capabilities`/
-`evidence` — docs/14 §5) are not hard-coded: every table access introspects
-`information_schema` first (cached per process) and degrades gracefully — a
+Every table access still introspects `information_schema` first (cached per
+process) rather than hard-coding a column list, and degrades gracefully — a
 missing schema/table raises `Profile360UnavailableError` rather than crashing
-the caller with a raw Postgres error, and a row is always returned as a plain
-dict of whatever columns actually exist, with a best-effort human-readable
-label rather than an assumed field name.
+the caller with a raw Postgres error — because a handful of allowlisted
+tables (`documents`, `contradictions`, `open_questions`, `claim_concepts`,
+`capability_claims`) still have no confirmed shape beyond existing. But since
+the Phase 2 production-schema reconciliation pass, `claims`/`capabilities`/
+`evidence`/`episodes`/`snapshots` all have confirmed live shapes (docs/14
+§5) — `episode_display`/`snapshot_display` below use those confirmed fields
+directly for a human-readable label, rather than the generic best-effort
+field-candidate scan (`display_text`) that everything else still falls back
+on.
 """
 
 import psycopg
@@ -117,6 +121,25 @@ def display_text(row: dict, max_len: int = 240) -> str:
     return ", ".join(parts) or "(no displayable fields)"
 
 
+def episode_display(row: dict) -> str:
+    """Confirmed profile360.episodes shape (docs/14 §5): `title` +
+    `organisation` reads better than either alone for a career episode.
+    Falls back to the generic scan only for a row missing both — defensive
+    against additive schema drift, not a sign the shape is still unknown."""
+    title = row.get("title")
+    organisation = row.get("organisation")
+    if title and organisation:
+        return f"{title} — {organisation}"
+    return title or organisation or display_text(row)
+
+
+def snapshot_display(row: dict) -> str:
+    """Confirmed profile360.snapshots shape (docs/14 §5): `summary` is the
+    primary human-readable field."""
+    summary = row.get("summary")
+    return summary.strip() if isinstance(summary, str) and summary.strip() else display_text(row)
+
+
 _RECENCY_COLUMN_CANDIDATES = ("updated_at", "created_at", "captured_at")
 
 
@@ -168,9 +191,10 @@ def get_claim(cur, claim_id) -> dict | None:
 def list_episodes(cur, limit: int = 100, offset: int = 0) -> list[dict]:
     """Read-only browse of profile360's episodes — the History/timeline page
     reads from here now, not a jobber-local table (docs/14 §9). Derived
-    duration/timeline math (doc 11 §5.4) is deliberately not attempted here:
-    it would need confirmed date-field names on profile360.episodes, which
-    this build has not inspected beyond `id` being uuid."""
+    duration/timeline math (doc 11 §5.4) is deliberately still not attempted
+    here: `start_date`/`end_date` are confirmed columns now (docs/14 §5), but
+    that derivation is new functionality this cleanup pass is not scoped to
+    add, not a schema gap."""
     return fetch_rows(cur, "episodes", limit=limit, offset=offset)
 
 

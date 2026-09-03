@@ -5,12 +5,15 @@ production shape (reconciled against a live inspection on 2026-09-03).
 
 This build has never run this script against the real `open-brain` Supabase
 project itself (no credentials in this environment) — the confirmed facts in
-docs/14 came from a separate reviewer who did have access. Every migration is
-still written to be additive/idempotent so it is safe to apply either way,
-and `0001_live_schema_preflight.sql` asserts the load-bearing facts before
-anything else runs — but a handful of columns (`profile360.episodes`/
-`snapshots` beyond `id`) remain unconfirmed, and any drift since 2026-09-03
-can only be found by actually looking, which is what this script is for.
+docs/14 came from a separate reviewer who did have access, including the full
+column shapes of `profile360.episodes`/`snapshots` (docs/14 §5) — nothing
+about those two remains unconfirmed. Every migration is still written to be
+additive/idempotent so it is safe to apply either way, and
+`0001_live_schema_preflight.sql` asserts the load-bearing facts before
+anything else runs. This script is no longer needed to *discover* any of
+docs/14's confirmed shapes; it remains here as a deployment diagnostic and
+schema-drift check — any divergence from docs/14 since 2026-09-03 can only be
+found by actually looking, which is what this script is for.
 
 Usage:
     cd backend && python3 scripts/inspect_schema.py

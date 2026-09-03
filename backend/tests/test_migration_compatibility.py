@@ -123,6 +123,46 @@ def test_document_provenance_quality_values(client):
             )
 
 
+def test_local_baseline_episodes_and_snapshots_match_confirmed_production_shape(client):
+    """docs/14 §5: profile360.episodes/snapshots have a fully confirmed live
+    shape now (episode fields like title/organisation/start_date/end_date/
+    responsibilities, and the self-referencing parent_episode_id FK; summary/
+    structured_state on snapshots) — local_baseline.sql must model that, not
+    an id-only approximation."""
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'profile360' AND table_name = 'episodes'"
+        )
+        episode_columns = {row["column_name"] for row in cur.fetchall()}
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'profile360' AND table_name = 'snapshots'"
+        )
+        snapshot_columns = {row["column_name"] for row in cur.fetchall()}
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+            WHERE tc.table_schema = 'profile360' AND tc.table_name = 'episodes'
+              AND tc.constraint_type = 'FOREIGN KEY' AND kcu.column_name = 'parent_episode_id'
+            """
+        )
+        has_self_referencing_fk = cur.fetchone() is not None
+
+    for expected in (
+        "episode_key", "parent_episode_id", "episode_type", "organisation", "title",
+        "start_date", "end_date", "date_precision", "context", "responsibilities",
+        "autonomy", "accountability", "stakeholder_scope", "team_size", "outcomes",
+        "status", "uncertainty",
+    ):
+        assert expected in episode_columns, f"profile360.episodes.{expected} missing from local baseline"
+    assert has_self_referencing_fk, "profile360.episodes.parent_episode_id must reference episodes(id)"
+
+    for expected in ("snapshot_key", "snapshot_type", "created_for", "summary", "structured_state"):
+        assert expected in snapshot_columns, f"profile360.snapshots.{expected} missing from local baseline"
+
+
 def test_migrations_reject_database_without_baseline(client, monkeypatch):
     """0001_live_schema_preflight.sql exists specifically so that pointing
     Phase 2 migrations at a database that never had the live jobber baseline

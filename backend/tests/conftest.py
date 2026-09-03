@@ -17,9 +17,9 @@ is simpler and no less correct against a real Postgres.
 
 Since the Phase 2 production-schema reconciliation pass, the throwaway
 database is bootstrapped with `backend/scripts/local_baseline.sql` before
-migrations run — the same stand-in for the live pre-Phase-2 `jobber` baseline
-(and a minimal `profile360` stub) that a from-scratch local dev setup uses
-(see that file's header and README). This means every test run is itself a
+migrations run — the same production-shaped stand-in for the live pre-Phase-2
+`jobber` baseline (and `profile360` stub) that a from-scratch local dev setup
+uses (see that file's header and README). This means every test run is itself a
 live proof that all Phase 2 migrations apply cleanly on top of the confirmed
 production baseline shape — `test_migration_compatibility.py` asserts this
 explicitly, plus that migrations refuse to run at all against a database
@@ -86,9 +86,9 @@ _RESETTABLE_JOBBER_TABLES = [
     "document",
 ]
 
-# The profile360 stub tables local_baseline.sql provides (claims/capabilities
-# with the confirmed live shape, episodes/snapshots with a minimal guessed
-# one) — reset between tests same as jobber's own tables.
+# The profile360 stub tables local_baseline.sql provides, all matching the
+# confirmed live shape (docs/14 §5/§6) — reset between tests same as
+# jobber's own tables.
 _RESETTABLE_PROFILE360_TABLES = ["claims", "capabilities", "episodes", "snapshots", "manual_import_queue"]
 
 
