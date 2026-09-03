@@ -23,6 +23,7 @@ EXPECTED_MIGRATIONS = {
     "0003_requirement_claims_and_runs.sql",
     "0004_profile360_mapping.sql",
     "0005_preferences.sql",
+    "0006_phase3_capability_derivations.sql",
 }
 
 
@@ -161,6 +162,75 @@ def test_local_baseline_episodes_and_snapshots_match_confirmed_production_shape(
 
     for expected in ("snapshot_key", "snapshot_type", "created_for", "summary", "structured_state"):
         assert expected in snapshot_columns, f"profile360.snapshots.{expected} missing from local baseline"
+
+
+def test_phase3_derived_tables_have_no_person_id(client):
+    """brief §41: doc 11's original d_capability_coverage/d_role_fit DDL
+    carried a person_id FK to a jobber.person table that no longer exists in
+    production and must not be reintroduced. Confirm the Phase 3 tables were
+    not built against that assumption."""
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'jobber' AND table_name IN ('d_capability_coverage', 'd_role_fit') "
+            "AND column_name = 'person_id'"
+        )
+        assert cur.fetchall() == []
+
+
+def test_phase3_derived_tables_use_uuid_identity(client):
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema = 'jobber' AND data_type = 'uuid'
+              AND (table_name, column_name) IN (
+                  ('d_capability_coverage', 'capability_concept_id'),
+                  ('d_role_fit', 'role_instance_id'),
+                  ('gold_document', 'document_id'),
+                  ('gold_claim', 'id'),
+                  ('gold_claim', 'concept_id'),
+                  ('eval_run', 'id'),
+                  ('capability_gold_judgment', 'capability_concept_id')
+              )
+            """
+        )
+        found = {(row["table_name"], row["column_name"]) for row in cur.fetchall()}
+    expected = {
+        ("d_capability_coverage", "capability_concept_id"),
+        ("d_role_fit", "role_instance_id"),
+        ("gold_document", "document_id"),
+        ("gold_claim", "id"),
+        ("gold_claim", "concept_id"),
+        ("eval_run", "id"),
+        ("capability_gold_judgment", "capability_concept_id"),
+    }
+    assert found == expected
+
+
+def test_concept_edge_necessity_and_status_constrained(client):
+    """0006 adds the CHECK constraints the app-layer edge validation
+    (routes/capabilities.py) also enforces — confirm the database itself
+    now rejects an invalid necessity/status rather than relying solely on
+    the API layer (brief §6: 'Do not rely only on frontend validation')."""
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+            "VALUES ('tool', 'test-edge-tool', 'active', 'curator', now()) RETURNING id"
+        )
+        tool_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+            "VALUES ('capability', 'test-edge-capability', 'active', 'curator', now()) RETURNING id"
+        )
+        cap_id = cur.fetchone()["id"]
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute(
+                "INSERT INTO jobber.concept_edge (from_concept_id, to_concept_id, relation, necessity, origin) "
+                "VALUES (%s, %s, 'component_of', 'not_a_real_necessity', 'curator')",
+                (tool_id, cap_id),
+            )
 
 
 def test_migrations_reject_database_without_baseline(client, monkeypatch):

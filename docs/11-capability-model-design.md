@@ -1,9 +1,12 @@
 # 11 — Capability Model: Design Document
 
-**Status:** Phases 0–2 implemented, with deviations recorded in §11's Phase 2
-build notes (persistence moved to Postgres; person-side evidence moved to a
-separate `profile360` schema instead of this design's `evidence_claim`);
-Phases 3–5 still proposed, for review
+**Status:** Phases 0–3 implemented, with deviations recorded in §11's Phase 2
+and Phase 3 build notes (persistence moved to Postgres; person-side evidence
+moved to a separate `profile360` schema instead of this design's
+`evidence_claim`; Phase 3's derived tables carry no `person_id`, scoped to
+the single authoritative profile360 evidence set instead); Phases 4–5 still
+proposed, for review. See `docs/16-phase3-capability-engine.md` for Phase 3's
+full design and every deviation from this document.
 **Supersedes (conceptually):** the narrative-plus-embedding model shipped in v1
 **Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10),
 `docs/14-phase2-postgres-architecture.md` (Phase 2's Postgres schema/provenance
@@ -1433,7 +1436,7 @@ Supabase/Postgres before this phase started):**
    docs/14 §7. This is a stronger guarantee than Phase 0/1 had (those were
    verified against a synthetic legacy-schema SQLite database only).
 
-### Phase 3 — Capabilities *(~2 weeks)*
+### Phase 3 — Capabilities *(~2 weeks)* — **implemented, with deviations**
 
 **Build:** `capability_detail`, `component_of` edges, capability catalogue curation UI,
 Pass C, the derivation engine, `d_capability_coverage`, `d_role_fit`. Embedding
@@ -1444,6 +1447,57 @@ with four honest states and per-capability evidence. Q1–Q5 all answered.
 
 **Exit criteria:** ~100–150 curated capabilities; capability agreement ≥ 0.80 on the
 hand-labelled subset.
+
+**Build notes — decisions made during implementation, materially different
+from the plan above, driven by facts this document could not have
+anticipated (no `jobber.person`, and `profile360.claims`/`profile360.capabilities`'
+real confirmed shapes rather than doc 11's own `evidence_claim` guess):**
+
+1. **No `person_id` on either derived table** — flagged as a deliberate
+   deviation in brief §41 itself. `jobber.person` does not exist in
+   production (docs/14 §6/§9) and reintroducing it purely to match this
+   section's original DDL would have violated the Phase 2 architectural
+   boundary on day one of Phase 3. Both `d_capability_coverage` and
+   `d_role_fit` are keyed on the concept/role alone.
+2. **Autonomy is read from the claim's episode, not the claim.**
+   `profile360.claims` has a confirmed `depth` column but no `autonomy`
+   column at all; `profile360.episodes` has the confirmed `autonomy` column
+   instead (docs/14 §5). §3.1's "the engine sees claims about the
+   capability's core component concepts, at sufficient depth... within one
+   episode" already pointed at episode-scoped reasoning; Phase 3 additionally
+   sources the autonomy modifier itself from that same episode, out of
+   necessity, not preference.
+3. **`profile360_capability_mapping`-sourced direct evidence can never alone
+   reach `evidenced`.** `profile360.capabilities`'s confirmed shape carries
+   no structured depth/autonomy at all (`current_assessment` is free text
+   this build does not parse) — so once a capability has any modifier
+   threshold (and `min_depth` always does, defaulting to `owned`), this
+   evidence source is structurally capped at `partial` by the same
+   "never fabricate a missing modifier" rule §7 states for every other case.
+4. **The capability catalogue itself was not seeded toward 100-150** in this
+   build — same root cause as Phase 2's empty `eval_run`: no credential for
+   the real Supabase project, no captured production corpus to curate
+   against. The curation *machinery* (catalogue CRUD, component-edge
+   validation, coverage/role-fit derivation) is complete and tested; what a
+   real operator does with it against their actual captured postings/CV
+   corpus is unscoped to this build environment, exactly as Phase 1's
+   ~300-500 concept target and Phase 2's gold set were.
+5. **Modifier accuracy (§9.3) is permanently not applicable in this
+   codebase**, not merely unmeasured — see
+   `docs/16-phase3-capability-engine.md` §13 for why: this codebase's own
+   extraction pipeline produces no depth/autonomy-bearing claim at all to
+   score against gold (that belongs to profile360, a separate tool).
+6. **The 16-document gold-set stratification (§9.2) could not be built as
+   originally specified** — 7 of its 16 documents (CV/LinkedIn, project
+   write-ups) describe person-side capture, which profile360 now owns
+   entirely; this codebase has no extraction pipeline over that content to
+   generate labels for. `docs/16` §13 documents the honest, adapted scope:
+   gold documents are limited to `jobber.document` job postings, the only
+   content this codebase's own `extract_role_requirements` pipeline touches.
+7. **Tested against the same real, disposable Postgres 16 + pgvector every
+   phase since Phase 2 has used** — 166 tests total after Phase 3, run twice,
+   `0 failed` both times. See `docs/16-phase3-capability-engine.md` §15 and
+   the Phase 3 completion report for exact figures.
 
 ### Phase 4 — Economics *(~2 weeks)*
 

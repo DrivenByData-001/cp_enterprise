@@ -66,6 +66,12 @@ def _pg_available(admin_url: str) -> bool:
 # legacy_role_analysis; that data now lives directly on role_instance or in
 # profile360, per the reconciliation pass.
 _RESETTABLE_JOBBER_TABLES = [
+    "capability_gold_judgment",
+    "eval_run",
+    "gold_claim",
+    "gold_document",
+    "d_role_fit",
+    "d_capability_coverage",
     "person_capability_assertion",
     "preference_observation",
     "profile360_capability_mapping",

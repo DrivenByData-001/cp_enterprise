@@ -3,7 +3,13 @@ from pydantic import BaseModel
 
 from .. import profile360_reader as p360
 from ..db import db_cursor
-from ..extraction import ExtractionSubjectError, map_profile360_capability, map_profile360_claim
+from ..extraction import (
+    ExtractionSubjectError,
+    map_profile360_capability,
+    map_profile360_claim,
+    map_profile360_claim_to_capability,
+    run_pass_c,
+)
 
 router = APIRouter(prefix="/api/profile360", tags=["profile360"])
 
@@ -76,6 +82,25 @@ def map_capability(capability_id: str):
             raise HTTPException(404, str(e)) from e
         except p360.Profile360UnavailableError as e:
             raise HTTPException(503, str(e)) from e
+
+
+@router.post("/claims/{claim_id}/map-capability")
+def map_claim_to_capability(claim_id: str):
+    """Phase 3 Pass C (brief §23): try to attribute a profile360 claim
+    directly to a curated capability, not just an atomic concept."""
+    with db_cursor() as cur:
+        try:
+            return map_profile360_claim_to_capability(cur, claim_id)
+        except ExtractionSubjectError as e:
+            raise HTTPException(404, str(e)) from e
+        except p360.Profile360UnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+
+
+@router.post("/pass-c/run")
+def run_pass_c_route(limit: int = 25):
+    with db_cursor() as cur:
+        return run_pass_c(cur, limit=limit)
 
 
 def _mapping_rows(cur, table: str, id_column: str, concept_column: str, review_status: str | None) -> list[dict]:

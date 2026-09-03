@@ -5,7 +5,11 @@ space: your career narrative and captured job postings are embedded into the
 same vector space, so "closest roles to me" and "gap to a target role" become
 similarity computations, not guesswork — and, since Phase 2, an evidence-backed
 capability model connects specific requirement claims on a role to specific
-evidence about you, traceable in both directions.
+evidence about you, traceable in both directions. Since Phase 3, a
+deterministic capability-coverage/role-fit engine turns curated capabilities
+(economically meaningful units of "what you can do", composed from atomic
+concepts) into four honest evidence states — see
+`docs/16-phase3-capability-engine.md`.
 
 **Persistence is Postgres** (a Supabase project in production; any Postgres —
 including a disposable local one — for development and tests). SQLite is no
@@ -38,6 +42,14 @@ kept for reproducibility.
   shows one of four states — Evidenced / Partial / User-asserted / No evidence
   found — each traceable to its source on both sides. "No evidence found"
   never means "you lack this."
+- **Capabilities are curated, coverage is derived.** A capability (e.g. "Lead
+  a reserving process") is a deliberately curated concept with a
+  demonstration standard and core/supporting/contextual atomic components.
+  Whether *you* can evidence it is always computed by a deterministic engine
+  from accepted claims — never extracted, never an AI judgment call, and
+  compositional evidence (you've used the parts) alone can never become
+  "evidenced" without something directly stating the whole capability. See
+  `docs/16-phase3-capability-engine.md`.
 - **Preferences are structurally separate from capability.** Would-you-enjoy-it
   is tracked on its own dimensions, with its own source/basis/confidence.
   Personality/psychometric material can only ever enter as a low-authority
@@ -114,8 +126,15 @@ one from a missing key — is recorded, never silently swallowed.
    one-click "I have done this" for anything you can personally assert with
    no document behind it.
 9. **profile360** — browse read-only person-side claims/capabilities and
-   request an AI-suggested mapping onto the canonical vocabulary; every
+   request an AI-suggested mapping onto the canonical vocabulary — including,
+   for claims, a capability-level attribution attempt ("Pass C") — every
    suggestion lands unreviewed until you accept or reject it.
+9a. **Capabilities** — curate the capability catalogue: create/edit a
+    capability's demonstration standard and depth/autonomy thresholds, and
+    manage its core/supporting/contextual component edges to atomic concepts.
+9b. **Coverage** — your personal capability coverage, grouped Evidenced /
+    Partial / User asserted / No evidence found, each expandable into its
+    full evidence trace back to profile360.
 10. **Preferences** — record what you'd enjoy, separately from what you can
     do, with its own evidence basis (observed behaviour ranks above a
     psychometric/typology hypothesis, never the reverse).
@@ -136,12 +155,14 @@ security model.
 
 ## Deliberately out of scope for now
 
-- A real skill graph + gap analysis beyond the closed-vocabulary requirement
-  claims already built — the full compositional capability-coverage engine
-  (doc 11 Phase 3/4: `capability_detail`, `component_of` edges,
-  `d_capability_coverage`) is not built; comparison today is a direct
-  claim-to-mapping join, not a derived compositional score.
+- Compensation/economics: gap-value ranking, archetype compensation,
+  `d_gap_value`, monetary gap ranking, learning-time/transition-effort
+  estimates (doc 11 Phase 4/5) — Phase 3 stops at the structural evidence
+  picture (four states, blocking gaps), deliberately before anything
+  monetary. See `docs/16-phase3-capability-engine.md` §17.
 - `salary_benchmarks` / compensation modelling (doc 11 Phase 4).
+- Prerequisite/adjacent/substitutable capability graphs and any transition-
+  effort judgment layer (doc 11 Phase 5).
 - Actuarial exam tracking.
 - OCR for scanned/image-only PDFs — selectable-text PDFs only for now.
 - A general-purpose web scraper for discovering candidate postings (brief
