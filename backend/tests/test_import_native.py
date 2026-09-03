@@ -32,7 +32,7 @@ def _fake_run(**kwargs):
     )
     run = ai.AITaskRun(
         task=kwargs["task"],
-        model="claude-test-model",
+        model="gpt-4o-mini",
         prompt_name=kwargs["prompt_name"],
         prompt_version="deadbeefcafe",
         started_at="2026-01-01T00:00:00+00:00",
@@ -55,7 +55,7 @@ def test_native_import_feeds_existing_pipeline(client, monkeypatch):
     assert isinstance(body["id"], int)
     assert body["extraction"]["job"]["title"] == "Senior Actuarial Analyst"
     assert body["run"]["task"] == "job_posting_extract"
-    assert body["run"]["model"] == "claude-test-model"
+    assert body["run"]["model"] == "gpt-4o-mini"
 
     # actually landed in the same table the legacy import path writes to
     with db.db_cursor() as cur:
@@ -73,7 +73,7 @@ def test_native_import_rejects_blank_text(client):
 
 def test_native_import_surfaces_missing_config_as_503(client, monkeypatch):
     def _raise_config(**kwargs):
-        raise ai.AIConfigError("ANTHROPIC_API_KEY is not set")
+        raise ai.AIConfigError("OPENAI_API_KEY is not set")
 
     monkeypatch.setattr(import_routes, "run_json_task", _raise_config)
 

@@ -20,7 +20,7 @@ def _text_block(text: str) -> SimpleNamespace:
 
 
 def _fake_response(text: str) -> SimpleNamespace:
-    return SimpleNamespace(content=[_text_block(text)])
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
 
 @pytest.fixture(autouse=True)
@@ -35,8 +35,8 @@ def _prompt_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _configured_env(monkeypatch):
-    monkeypatch.setenv("CP_AI_MODEL", "claude-test-model")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    monkeypatch.setenv("CP_AI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
 
 
 # --- missing configuration -------------------------------------------------
@@ -49,7 +49,7 @@ def test_missing_model_raises_config_error(monkeypatch):
 
 
 def test_missing_api_key_raises_config_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ai.AIConfigError):
         ai.run_json_task(task="t", prompt_name="widget.md", user_input="x", output_model=_Widget)
 
@@ -64,14 +64,14 @@ def test_unknown_prompt_raises_config_error():
 
 def test_successful_task_returns_output_and_run_metadata(monkeypatch):
     monkeypatch.setattr(
-        ai.Anthropic,
+        ai.OpenAI,
         "__init__",
         lambda self, *a, **kw: None,
     )
     monkeypatch.setattr(
-        ai.Anthropic,
-        "messages",
-        property(lambda self: SimpleNamespace(create=lambda **kw: _fake_response('{"name": "gizmo", "count": 3}'))),
+        ai.OpenAI,
+        "chat",
+        property(lambda self: SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: _fake_response('{"name": "gizmo", "count": 3}')))),
         raising=False,
     )
 
@@ -79,7 +79,7 @@ def test_successful_task_returns_output_and_run_metadata(monkeypatch):
 
     assert result.output == _Widget(name="gizmo", count=3)
     assert result.run.task == "widget_extract"
-    assert result.run.model == "claude-test-model"
+    assert result.run.model == "gpt-4o-mini"
     assert result.run.prompt_name == "widget.md"
     assert result.run.status == "ok"
     assert result.run.prompt_version == ai.prompt_version("Extract a widget.")
@@ -87,13 +87,13 @@ def test_successful_task_returns_output_and_run_metadata(monkeypatch):
 
 
 def test_response_wrapped_in_code_fence_is_stripped(monkeypatch):
-    monkeypatch.setattr(ai.Anthropic, "__init__", lambda self, *a, **kw: None)
+    monkeypatch.setattr(ai.OpenAI, "__init__", lambda self, *a, **kw: None)
     monkeypatch.setattr(
-        ai.Anthropic,
-        "messages",
+        ai.OpenAI,
+        "chat",
         property(
             lambda self: SimpleNamespace(
-                create=lambda **kw: _fake_response('```json\n{"name": "gizmo", "count": 1}\n```')
+                completions=SimpleNamespace(create=lambda **kw: _fake_response('```json\n{"name": "gizmo", "count": 1}\n```'))
             )
         ),
         raising=False,
@@ -107,11 +107,11 @@ def test_response_wrapped_in_code_fence_is_stripped(monkeypatch):
 
 
 def test_malformed_json_raises_response_format_error(monkeypatch):
-    monkeypatch.setattr(ai.Anthropic, "__init__", lambda self, *a, **kw: None)
+    monkeypatch.setattr(ai.OpenAI, "__init__", lambda self, *a, **kw: None)
     monkeypatch.setattr(
-        ai.Anthropic,
-        "messages",
-        property(lambda self: SimpleNamespace(create=lambda **kw: _fake_response("not json at all {"))),
+        ai.OpenAI,
+        "chat",
+        property(lambda self: SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: _fake_response("not json at all {")))),
         raising=False,
     )
 
@@ -123,12 +123,12 @@ def test_malformed_json_raises_response_format_error(monkeypatch):
 
 
 def test_schema_invalid_json_raises_schema_validation_error(monkeypatch):
-    monkeypatch.setattr(ai.Anthropic, "__init__", lambda self, *a, **kw: None)
+    monkeypatch.setattr(ai.OpenAI, "__init__", lambda self, *a, **kw: None)
     monkeypatch.setattr(
-        ai.Anthropic,
-        "messages",
+        ai.OpenAI,
+        "chat",
         # valid JSON, but "count" is missing and required
-        property(lambda self: SimpleNamespace(create=lambda **kw: _fake_response('{"name": "gizmo"}'))),
+        property(lambda self: SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: _fake_response('{"name": "gizmo"}')))),
         raising=False,
     )
 
@@ -140,16 +140,16 @@ def test_schema_invalid_json_raises_schema_validation_error(monkeypatch):
 
 
 def test_provider_error_raises_provider_error(monkeypatch):
-    import anthropic
+    import openai
 
     def _boom(**kw):
-        raise anthropic.APIConnectionError(request=SimpleNamespace())
+        raise openai.APIConnectionError(request=SimpleNamespace())
 
-    monkeypatch.setattr(ai.Anthropic, "__init__", lambda self, *a, **kw: None)
+    monkeypatch.setattr(ai.OpenAI, "__init__", lambda self, *a, **kw: None)
     monkeypatch.setattr(
-        ai.Anthropic,
-        "messages",
-        property(lambda self: SimpleNamespace(create=_boom)),
+        ai.OpenAI,
+        "chat",
+        property(lambda self: SimpleNamespace(completions=SimpleNamespace(create=_boom))),
         raising=False,
     )
 

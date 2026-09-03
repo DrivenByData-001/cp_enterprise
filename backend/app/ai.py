@@ -3,9 +3,9 @@ Central AI task abstraction (native task layer).
 
 A small, provider-agnostic way to run one AI extraction task: load a
 versioned prompt from `prompts/`, call the configured model, and validate
-its JSON output into a caller-supplied Pydantic model. Anthropic is the
-first (and, for now, only) provider — swapping providers later means
-changing `_client()`/`run_json_task()` here, not touching call sites.
+its JSON output into a caller-supplied Pydantic model. OpenAI is the current
+provider — swapping providers later means changing `_client()`/`run_json_task()`
+here, not touching call sites.
 
 See docs/13-ai-task-layer.md for the architecture and the Phase 2
 (`extraction_run`) integration plan.
@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generic, TypeVar
 
-import anthropic
-from anthropic import Anthropic
+import openai
+from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
@@ -90,10 +90,10 @@ def ai_model_name() -> str:
     return model
 
 
-def _client() -> Anthropic:
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise AIConfigError("ANTHROPIC_API_KEY is not set")
-    return Anthropic()
+def _client() -> OpenAI:
+    if not os.getenv("OPENAI_API_KEY"):
+        raise AIConfigError("OPENAI_API_KEY is not set")
+    return OpenAI()
 
 
 def load_prompt(name: str) -> str:
@@ -152,21 +152,22 @@ def run_json_task(
     started_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        response = client.messages.create(
+        response = client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
-            system=_DEFAULT_SYSTEM_PROMPT,
             messages=[
+                {"role": "system", "content": _DEFAULT_SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": f"{prompt_text}\n\n---\n\nINPUT TO PROCESS:\n{user_input}",
                 }
             ],
+            response_format={"type": "json_object"},
         )
-    except anthropic.APIError as e:
-        raise AIProviderError(f"Anthropic API error: {e}") from e
+    except openai.APIError as e:
+        raise AIProviderError(f"OpenAI API error: {e}") from e
 
-    raw_text = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+    raw_text = response.choices[0].message.content or ""
     text = _strip_code_fence(raw_text)
 
     try:

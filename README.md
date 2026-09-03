@@ -7,13 +7,13 @@ similarity computations, not guesswork.
 
 This is v1 — a thin, working slice: **capture → decompose → embed → compare**.
 Local-only, no cloud. Job posting extraction now runs natively against the
-Anthropic API (needs `ANTHROPIC_API_KEY`); everything else needs no API key.
+OpenAI API (needs `OPENAI_API_KEY`); everything else needs no API key.
 
 ## How it fits together
 
 - **Posting extraction is native.** Paste a job posting on the Import page and
   click "Extract with AI & import" — the backend calls the configured
-  Anthropic model, validates the structured result, and imports it directly.
+  OpenAI model, validates the structured result, and imports it directly.
   See `docs/13-ai-task-layer.md` for the AI task abstraction this runs on.
   The old manual workflow (paste `prompts/extract_job_posting.md` + the
   posting into Claude/ChatGPT, paste the resulting JSON back) still works as
@@ -50,7 +50,7 @@ npm run dev
 Open http://localhost:5173. The first import will download the embedding
 model (~130MB, one-time, needs internet access to huggingface.co).
 
-`ANTHROPIC_API_KEY`/`CP_AI_MODEL` are only needed for native AI posting
+`OPENAI_API_KEY`/`CP_AI_MODEL` are only needed for native AI posting
 extraction (`POST /api/import/native`, the primary Import-page workflow);
 without them the rest of the app runs normally and the legacy JSON import
 path still works.
@@ -62,7 +62,7 @@ path still works.
    a timestamped snapshot).
 2. **Import** — paste the raw posting text into the Import page and click
    "Extract with AI & import"; the app extracts, validates, and imports it
-   in one step (needs `ANTHROPIC_API_KEY`/`CP_AI_MODEL`, see above). The
+  in one step (needs `OPENAI_API_KEY`/`CP_AI_MODEL`, see above). The
    legacy path — paste `prompts/extract_job_posting.md` + the posting into
    Claude/ChatGPT, paste the resulting JSON back — remains available on the
    same page for migration/recovery, or drop multiple `.json` files at once
@@ -175,11 +175,11 @@ cd ../frontend
 npm install
 ```
 
-Native AI posting extraction also needs an Anthropic API key and model name.
+Native AI posting extraction also needs an OpenAI API key and model name.
 Set them in the shell where you start the backend; never commit them. In
 PowerShell:
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "your-api-key"
-$env:CP_AI_MODEL = "claude-sonnet-5"
+$env:OPENAI_API_KEY = "your-api-key"
+$env:CP_AI_MODEL = "gpt-4o-mini"
 ```

@@ -7,4 +7,4 @@ python-multipart
 pydantic
 pytest
 httpx
-anthropic
+openai

@@ -23,21 +23,21 @@ different prompt file and output model, not a new integration.
 ### `backend/app/ai.py` — the AI task abstraction
 
 - `run_json_task(task, prompt_name, user_input, output_model, max_tokens=8192) -> AITaskResult[T]`
-  loads a prompt from `prompts/`, calls the configured Anthropic model, and
+  loads a prompt from `prompts/`, calls the configured OpenAI model, and
   validates the JSON response into `output_model`.
 - Four typed failure modes, so callers never see a raw provider/JSON/Pydantic
   exception:
-  - `AIConfigError` — missing `ANTHROPIC_API_KEY`/`CP_AI_MODEL`, or an unknown
+  - `AIConfigError` — missing `OPENAI_API_KEY`/`CP_AI_MODEL`, or an unknown
     prompt file.
   - `AIProviderError` — the provider was unreachable or returned an error
-    (`anthropic.APIError` and subclasses).
+    (`openai.APIError` and subclasses).
   - `AIResponseFormatError` — the response text wasn't valid JSON.
   - `AISchemaValidationError` — valid JSON that doesn't satisfy `output_model`.
 - `AITaskResult` carries both the validated `output` and an `AITaskRun` —
   `task`, `model`, `prompt_name`, `prompt_version`, `started_at`,
   `finished_at`, `status`, `input_chars`, `output_chars`. See §4.
 - Provider details (model name, API key) are read from environment/config,
-  never hardcoded, and nothing outside `ai.py` imports the `anthropic`
+  never hardcoded, and nothing outside `ai.py` imports the `openai`
   package — swapping providers means changing `_client()`/`run_json_task()`
   here only.
 
@@ -73,8 +73,8 @@ migration/recovery/debugging. No more "take this prompt to Claude/ChatGPT."
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API credential. Never committed; read from the environment only. |
-| `CP_AI_MODEL` | Model name to call, e.g. `claude-sonnet-5`. No default — an unset value is a configuration error, not a silent fallback. |
+| `OPENAI_API_KEY` | OpenAI API credential. Never committed; read from the environment only. |
+| `CP_AI_MODEL` | Model name to call, e.g. `gpt-4o-mini`. No default — an unset value is a configuration error, not a silent fallback. |
 
 See the README for local setup.
 
@@ -153,12 +153,12 @@ correct place for it to be resolved, not here.
 ```bash
 cd backend
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-...
-export CP_AI_MODEL=claude-sonnet-5
+export OPENAI_API_KEY=sk-...
+export CP_AI_MODEL=gpt-4o-mini
 python3 -m uvicorn app.main:app --reload --port 8000
 ```
 
-Without `ANTHROPIC_API_KEY`/`CP_AI_MODEL` set, `POST /api/import/native`
+Without `OPENAI_API_KEY`/`CP_AI_MODEL` set, `POST /api/import/native`
 returns `503` with a message naming the missing variable — the rest of the
 app (embeddings, legacy JSON import, everything else) is unaffected, since
 no other code path imports `app.ai`.
