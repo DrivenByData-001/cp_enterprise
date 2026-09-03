@@ -27,7 +27,7 @@ from .models import (
     ConceptAdjudicationResult,
     RequirementExtractionResult,
 )
-from .profile360_reader import display_text, get_capability, get_claim
+from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
 from .span_validation import validate_span
 
 
@@ -391,6 +391,73 @@ def map_profile360_claim(cur, claim_id: str) -> dict:
         mapping_table="profile360_claim_mapping", mapping_id_column="profile360_claim_id",
         concept_id_column="jobber_concept_id", type_codes=None,
     )
+
+
+def map_profile360_claim_to_capability(cur, claim_id: str) -> dict:
+    """Phase 3 Pass C (brief §23): the same closed-vocabulary mapping as
+    map_profile360_claim, but the candidate list is restricted to
+    capability-typed concepts only — for the case where a claim's text
+    plausibly states the *whole* integrated capability, not merely an
+    atomic component of one (doc 11 §3.1's "direct" evidence route: "the
+    source text plainly states the whole thing"). Writes into the same
+    profile360_claim_mapping table/review queue as map_profile360_claim, so
+    the existing Profile360.tsx "Claims" review queue surfaces these with no
+    frontend change — nothing here can become an accepted mapping without
+    that human review step (brief: "Pass C output must go through review
+    before it affects evidenced coverage")."""
+    row = get_claim(cur, claim_id)
+    if row is None:
+        raise ExtractionSubjectError("profile360 claim not found")
+    return _map_profile360_row(
+        cur, row_kind="claim", row_id=claim_id, row=row,
+        prompt_name="map_profile360_claim.md", task="capability_attribute",
+        mapping_table="profile360_claim_mapping", mapping_id_column="profile360_claim_id",
+        concept_id_column="jobber_concept_id", type_codes=["capability"],
+    )
+
+
+def run_pass_c(cur, limit: int = 25) -> dict:
+    """Batch entrypoint over the profile360 claim corpus (brief §23): attempt
+    capability attribution for claims that have no existing *mapping row* to
+    a capability concept yet. Bounded by `limit`, safe to re-run repeatedly —
+    a claim that was successfully mapped (or already has a human-reviewed
+    mapping) is skipped on the next run. A claim the model *declined* writes
+    no row at all (same convention as map_profile360_claim/
+    map_profile360_capability — a decline is not persisted anywhere) and so
+    is legitimately retried on the next run, e.g. after the catalogue grows;
+    this costs one AI call per still-unmapped claim per run, not a
+    correctness issue."""
+    try:
+        claims = list_claims(cur, limit=limit, offset=0)
+    except Profile360UnavailableError as e:
+        return {"status": "unavailable", "error": str(e), "attempted": 0, "mapped": 0, "failed": 0, "results": []}
+
+    cur.execute(
+        """
+        SELECT DISTINCT profile360_claim_id FROM jobber.profile360_claim_mapping
+        WHERE jobber_concept_id IN (SELECT id FROM jobber.concept WHERE type_code = 'capability')
+        """
+    )
+    already_attempted = {str(r["profile360_claim_id"]) for r in cur.fetchall()}
+
+    attempted = mapped = failed = 0
+    results = []
+    for claim in claims:
+        claim_id = str(claim["id"])
+        if claim_id in already_attempted:
+            continue
+        attempted += 1
+        try:
+            result = map_profile360_claim_to_capability(cur, claim_id)
+        except ExtractionSubjectError:
+            continue
+        if result["status"] == "failed":
+            failed += 1
+        elif result.get("mapped"):
+            mapped += 1
+        results.append({"profile360_claim_id": claim_id, **result})
+
+    return {"status": "ok", "attempted": attempted, "mapped": mapped, "failed": failed, "results": results}
 
 
 def map_profile360_capability(cur, capability_id: str) -> dict:

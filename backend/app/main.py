@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import run_migrations
 from .routes import (
+    capabilities,
     comparison,
     concepts,
     episodes,
+    evaluation,
     import_routes,
     preferences,
     profile,
@@ -42,6 +44,8 @@ app.include_router(role_instances.router)
 app.include_router(profile360.router)
 app.include_router(preferences.router)
 app.include_router(comparison.router)
+app.include_router(capabilities.router)
+app.include_router(evaluation.router)
 
 
 @app.get("/api/health")

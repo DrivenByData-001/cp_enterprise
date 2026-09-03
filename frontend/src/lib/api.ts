@@ -95,6 +95,17 @@ export type SpaceResponse = {
   points: SpacePoint[]
   profile: { x: number; y: number; z: number } | null
   note?: string
+  role_count: number
+  embedded_role_count: number
+  embedding_model: string
+}
+
+export type RebuildEmbeddingsSummary = {
+  model: string
+  roles_scanned: number
+  embeddings_created: number
+  embeddings_updated: number
+  skipped: number
 }
 
 export type ConceptType = {
@@ -214,6 +225,130 @@ export type MappingAttemptResult = {
 
 export type ComparisonStatus = 'evidenced' | 'partial' | 'user_asserted' | 'not_found'
 
+// --- Phase 3: capability catalogue / coverage -------------------------------
+
+export type DepthLevel = 'exposed' | 'applied' | 'owned' | 'set_standard'
+export type AutonomyLevel = 'assisted' | 'independent' | 'directed_others' | 'accountable'
+export type Necessity = 'core' | 'supporting' | 'contextual'
+export type EconomicSalience = 'low' | 'medium' | 'high'
+
+export type ComponentEdge = {
+  edge_id: string
+  necessity: Necessity
+  concept_id: string
+  canonical_name: string
+  type_code: string
+}
+
+export type CapabilityComponents = { core: ComponentEdge[]; supporting: ComponentEdge[]; contextual: ComponentEdge[] }
+
+export type CapabilitySummary = {
+  id: string
+  canonical_name: string
+  definition: string | null
+  status: string
+  origin: string
+  created_at: string
+  reviewed_at: string | null
+  demonstration_standard: string
+  min_depth: DepthLevel
+  min_autonomy: AutonomyLevel | null
+  requires_all_core: boolean
+  min_core_required: number | null
+  economic_salience: EconomicSalience | null
+  notes: string | null
+  core_component_count: number
+  supporting_component_count: number
+  contextual_component_count: number
+}
+
+export type CoverageEpisodeSummary = {
+  episode_id: string
+  core_met: string[]
+  core_missing: string[]
+  supporting_met: string[]
+  supporting_missing: string[]
+  contextual_met: string[]
+  contextual_missing: string[]
+}
+
+export type CapabilityCoverageTrace = {
+  capability: { id: string; canonical_name: string }
+  requirement: { min_depth: DepthLevel; min_autonomy: AutonomyLevel | null; requires_all_core: boolean; min_core_required: number | null }
+  direct_evidence: {
+    source_kind: 'claim' | 'capability'
+    mapping_id: string
+    review_status: string
+    mapping_basis: string
+    display: string | null
+    depth: DepthLevel | null
+    autonomy: AutonomyLevel | null
+    episode_id: string | null
+    meets_depth: boolean
+    meets_autonomy: boolean
+  }[]
+  compositional:
+    | {
+        core_total: number
+        supporting_total: number
+        contextual_total: number
+        best_episode: CoverageEpisodeSummary | null
+        episodes_considered: number
+        core_complete: boolean
+        core_required: number
+        meaningful: boolean
+      }
+    | { core_total: 0; supporting_total: 0; contextual_total: 0; note: string }
+  assertion: { id: string; note: string | null; created_at: string; promoted_to_profile360_at: string | null } | null
+  status_reason: { code: string; message: string }
+}
+
+export type CapabilityCoverage = {
+  capability_concept_id: string
+  canonical_name?: string
+  status: ComparisonStatus
+  coverage_score: number
+  core_components_total: number
+  core_components_met: number
+  strongest_depth: DepthLevel | null
+  strongest_autonomy: AutonomyLevel | null
+  directly_claimed: boolean
+  last_demonstrated: string | null
+  years_active: number | null
+  supporting_profile360_claim_ids: string[]
+  trace: CapabilityCoverageTrace
+}
+
+export type Capability = CapabilitySummary & { components: CapabilityComponents; coverage: CapabilityCoverage | null }
+
+export type CapabilityInput = {
+  canonical_name: string
+  definition?: string | null
+  demonstration_standard: string
+  min_depth?: DepthLevel
+  min_autonomy?: AutonomyLevel | null
+  requires_all_core?: boolean
+  min_core_required?: number | null
+  economic_salience?: EconomicSalience | null
+  notes?: string | null
+  status?: string
+}
+
+export type RebuildSummary = {
+  engine_version: string
+  capability_coverage: { computed: number; removed_stale: number; engine_version: string }
+  role_fit: { computed: number; removed_stale: number; engine_version: string }
+}
+
+export type EvalMetric = { measured: boolean; value: number | null; n: number; note?: string; [key: string]: unknown }
+export type EvalReport = {
+  span_validity: EvalMetric
+  concept_linking_f1: EvalMetric
+  modifier_accuracy: EvalMetric
+  proposals_per_document: EvalMetric
+  capability_agreement: EvalMetric
+}
+
 export type ComparisonItem = {
   concept: { id: string; canonical_name: string; type_code: string }
   status: ComparisonStatus
@@ -228,13 +363,22 @@ export type ComparisonItem = {
   person_side: {
     mappings: { id: string; profile360_id: string; review_status: string; mapping_basis: string; mapping_kind: string; display: string | null }[]
     assertion: { id: string; note: string | null; created_at: string; promoted_to_profile360_at: string | null } | null
+    component_of: { id: string; canonical_name: string; necessity: Necessity }[]
+    coverage: CapabilityCoverage | null
   }
 }
+
+export type GapConcept = { id: string; canonical_name: string; type_code: string }
 
 export type ComparisonResult = {
   role: { id: string; title: string; kind: string }
   items: ComparisonItem[]
   counts: Record<ComparisonStatus, number>
+  blocking_gaps: GapConcept[]
+  unverified_required: (GapConcept & { status: ComparisonStatus })[]
+  fit_score: number | null
+  embedding_similarity: number | null
+  engine_version: string
 }
 
 export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
@@ -318,6 +462,8 @@ export const api = {
   getProfile: () => req<Profile>('/profile'),
   getProfileHistory: () => req<Profile360Row[]>('/profile/history'),
   getSpace: () => req<SpaceResponse>('/space'),
+  rebuildRoleEmbeddings: (force = false) =>
+    req<RebuildEmbeddingsSummary>(`/space/rebuild-role-embeddings${force ? '?force=true' : ''}`, { method: 'POST' }),
   listTargets: () => req<Role[]>('/targets'),
   importTarget: (payload: unknown) =>
     req<{ id: string; status: string }>('/targets', { method: 'POST', body: JSON.stringify(payload) }),
@@ -408,4 +554,39 @@ export const api = {
     req<PreferenceObservation[]>(`/preferences${dimensionCode ? `?dimension_code=${encodeURIComponent(dimensionCode)}` : ''}`),
   createPreferenceObservation: (payload: PreferenceObservationInput) =>
     req<{ id: string; status: string }>('/preferences', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // --- Phase 3: capability catalogue + coverage -------------------------------
+  listCapabilities: (params: { status?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.q) qs.set('q', params.q)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<CapabilitySummary[]>(`/capabilities${suffix}`)
+  },
+  listCapabilityCoverage: () => req<CapabilityCoverage[]>('/capabilities/coverage'),
+  createCapability: (payload: CapabilityInput) =>
+    req<{ id: string; status: string }>('/capabilities', { method: 'POST', body: JSON.stringify(payload) }),
+  getCapability: (id: string) => req<Capability>(`/capabilities/${id}`),
+  updateCapability: (id: string, payload: Partial<CapabilityInput>) =>
+    req<{ id: string; status: string }>(`/capabilities/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  getCapabilityCoverage: (id: string) => req<CapabilityCoverage>(`/capabilities/${id}/coverage`),
+  addComponent: (capabilityId: string, payload: { concept_id: string; necessity: Necessity }) =>
+    req<{ id: string; status: string }>(`/capabilities/${capabilityId}/components`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateComponent: (capabilityId: string, edgeId: string, necessity: Necessity) =>
+    req<{ id: string; status: string }>(`/capabilities/${capabilityId}/components/${edgeId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ necessity }),
+    }),
+  removeComponent: (capabilityId: string, edgeId: string) =>
+    req<{ status: string }>(`/capabilities/${capabilityId}/components/${edgeId}`, { method: 'DELETE' }),
+  rebuildCapabilities: () => req<RebuildSummary>('/capabilities/rebuild', { method: 'POST' }),
+
+  mapClaimToCapability: (claimId: string) =>
+    req<MappingAttemptResult>(`/profile360/claims/${encodeURIComponent(claimId)}/map-capability`, { method: 'POST' }),
+  runPassC: (limit = 25) =>
+    req<{ status: string; attempted: number; mapped: number; failed: number }>(`/profile360/pass-c/run?limit=${limit}`, {
+      method: 'POST',
+    }),
+
+  getEvalReport: (split?: 'dev' | 'test') => req<EvalReport>(`/eval/report${split ? `?split=${split}` : ''}`),
 }

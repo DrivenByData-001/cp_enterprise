@@ -189,15 +189,66 @@ export default function Space() {
   const [error, setError] = useState<string | null>(null)
   const [hover, setHover] = useState<HoverInfo | null>(null)
   const [autoRotate, setAutoRotate] = useState(true)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildMessage, setRebuildMessage] = useState<string | null>(null)
   const navigate = useNavigate()
 
+  const reload = () => api.getSpace().then(setData).catch((e) => setError(String(e)))
+
   useEffect(() => {
-    api.getSpace().then(setData).catch((e) => setError(String(e)))
+    reload()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const rebuildEmbeddings = async () => {
+    setRebuilding(true)
+    setRebuildMessage(null)
+    try {
+      const result = await api.rebuildRoleEmbeddings()
+      setRebuildMessage(
+        `Embedded ${result.embeddings_created} role(s), updated ${result.embeddings_updated}, skipped ${result.skipped}.`,
+      )
+      await reload()
+    } catch (e) {
+      setRebuildMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRebuilding(false)
+    }
+  }
 
   if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
   if (!data) return <p className="muted">Loading…</p>
-  if (data.note) return <p className="muted">{data.note}</p>
+  if (data.note) {
+    const staleRoles = data.role_count > 0 && data.embedded_role_count < data.role_count
+    return (
+      <div>
+        <p className="muted">{data.note}</p>
+        {staleRoles ? (
+          <>
+            <p className="secondary">
+              {data.role_count} role{data.role_count === 1 ? '' : 's'} loaded, but only {data.embedded_role_count}{' '}
+              currently {data.embedded_role_count === 1 ? 'has' : 'have'} an embedding for the active model (
+              {data.embedding_model}). This is expected right after a model change, or for roles captured before
+              embeddings moved into their own table — rebuild to restore Space.
+            </p>
+            <button className="primary" onClick={rebuildEmbeddings} disabled={rebuilding}>
+              {rebuilding ? 'Rebuilding…' : 'Rebuild role embeddings'}
+            </button>
+            {rebuildMessage && (
+              <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+                {rebuildMessage}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="secondary">
+            {data.role_count} role{data.role_count === 1 ? '' : 's'} loaded — capture at least one more, and a
+            profile360 snapshot, to see a projection.
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>

@@ -1,62 +1,47 @@
-"""Evidence-backed role comparison (brief §11). Deliberately does not build the
-full doc 11 Phase 3/4 derivation engine (component_of edges, compositional
-coverage) — that machinery doesn't exist yet even for the local vocabulary.
-What this does implement, honestly: for each requirement_claim on a role, walk
-the mapping tables to the same concept and report exactly one of the four
-epistemic statuses, with a trace in both directions (brief §11) rather than a
-score. "Not found" always means absence of evidence, never asserted absence of
-ability (brief definition of done #8).
+"""Evidence-backed role comparison (brief §11/§16/§17/§28), upgraded to
+Phase 3's capability engine. Status assignment lives in `app.capability_engine`
+only — this route is presentation: it enriches the engine's trace with the
+role-side document detail (unchanged Phase 2 shape) and returns the
+structural picture (per-requirement status + blocking/unverified gaps)
+before any score. `fit_score`/`embedding_similarity` are included but
+deliberately secondary (brief §18/§19) — the frontend must not present them
+as the headline result.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import profile360_reader as p360
+from .. import capability_engine
 from ..db import db_cursor, instance_type_to_app_kind
 from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
 
 
-def _person_side(cur, concept_id: str) -> dict:
+def _requirement_documents(cur, requirement_claim_ids: list[str]) -> dict[str, dict | None]:
+    """Role-side document detail per requirement_claim — kept as a small,
+    separate query rather than folded into capability_engine.derive_role_fit,
+    since that engine is deliberately jobber.document-agnostic (role-fit
+    status never depends on which document a requirement came from)."""
+    if not requirement_claim_ids:
+        return {}
     cur.execute(
         """
-        SELECT id, profile360_claim_id AS profile360_id, review_status, mapping_basis, 'claim' AS mapping_kind
-        FROM jobber.profile360_claim_mapping WHERE jobber_concept_id = %s
-        UNION ALL
-        SELECT id, profile360_capability_id AS profile360_id, review_status, mapping_basis, 'capability' AS mapping_kind
-        FROM jobber.profile360_capability_mapping WHERE jobber_capability_concept_id = %s
+        SELECT rc.id AS requirement_claim_id, d.id AS document_id, d.title, d.provenance_quality, d.url
+        FROM jobber.requirement_claim rc
+        LEFT JOIN jobber.document d ON d.id = rc.document_id
+        WHERE rc.id = ANY(%s::uuid[])
         """,
-        (concept_id, concept_id),
+        (requirement_claim_ids,),
     )
-    mappings = cur.fetchall()
-
-    for m in mappings:
-        try:
-            source = (
-                p360.get_claim(cur, m["profile360_id"])
-                if m["mapping_kind"] == "claim"
-                else p360.get_capability(cur, m["profile360_id"])
-            )
-            m["display"] = p360.display_text(source) if source else None
-        except p360.Profile360UnavailableError:
-            m["display"] = None
-
-    cur.execute(
-        "SELECT id, note, created_at, promoted_to_profile360_at FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s",
-        (concept_id,),
-    )
-    assertion = cur.fetchone()
-
-    accepted = [m for m in mappings if m["review_status"] == "accepted"]
-    if accepted:
-        return {"status": "evidenced", "mappings": accepted, "assertion": None}
-    pending = [m for m in mappings if m["review_status"] == "unreviewed"]
-    if pending:
-        return {"status": "partial", "mappings": pending, "assertion": None}
-    if assertion:
-        return {"status": "user_asserted", "mappings": [], "assertion": assertion}
-    return {"status": "not_found", "mappings": [], "assertion": None}
+    out: dict[str, dict | None] = {}
+    for r in cur.fetchall():
+        out[str(r["requirement_claim_id"])] = (
+            {"id": str(r["document_id"]), "title": r["title"], "provenance": r["provenance_quality"], "url": r["url"]}
+            if r["document_id"]
+            else None
+        )
+    return out
 
 
 @router.get("/role/{role_instance_id}")
@@ -75,50 +60,55 @@ def compare_role(role_instance_id: str):
             "kind": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
         }
 
-        cur.execute(
-            """
-            SELECT rc.id, rc.requirement_type, rc.basis, rc.review_status, rc.evidence_span,
-                   c.id AS concept_id, c.canonical_name, c.type_code,
-                   d.id AS document_id, d.title AS document_title, d.provenance_quality AS document_provenance, d.url AS document_url
-            FROM jobber.requirement_claim rc
-            JOIN jobber.concept c ON c.id = rc.concept_id
-            LEFT JOIN jobber.document d ON d.id = rc.document_id
-            WHERE rc.role_instance_id = %s
-            ORDER BY rc.requirement_type, c.canonical_name
-            """,
-            (role_instance_id,),
-        )
-        requirement_rows = cur.fetchall()
+        try:
+            fit = capability_engine.derive_role_fit(cur, role_instance_id)
+        except capability_engine.RoleInstanceNotFoundError:
+            raise HTTPException(404, "role_instance not found")
+
+        trace_items = fit["trace"]["items"]
+        docs_by_claim = _requirement_documents(cur, [item["requirement_claim_id"] for item in trace_items])
 
         items = []
-        for rc in requirement_rows:
-            concept_id = str(rc["concept_id"])
-            person = _person_side(cur, concept_id)
-            items.append(
-                {
-                    "concept": {"id": concept_id, "canonical_name": rc["canonical_name"], "type_code": rc["type_code"]},
-                    "status": person["status"],
-                    "role_side": {
-                        "requirement_claim_id": str(rc["id"]),
-                        "requirement_type": rc["requirement_type"],
-                        "basis": rc["basis"],
-                        "review_status": rc["review_status"],
-                        "evidence_span": rc["evidence_span"],
-                        "document": (
-                            {"id": str(rc["document_id"]), "title": rc["document_title"], "provenance": rc["document_provenance"], "url": rc["document_url"]}
-                            if rc["document_id"]
-                            else None
-                        ),
-                    },
-                    "person_side": {"mappings": person["mappings"], "assertion": person["assertion"]},
+        for item in trace_items:
+            role_side = {
+                "requirement_claim_id": item["requirement_claim_id"],
+                "requirement_type": item["requirement_type"],
+                "basis": item["role_side"]["basis"],
+                "review_status": item["role_side"]["review_status"],
+                "evidence_span": item["role_side"]["evidence_span"],
+                "document": docs_by_claim.get(item["requirement_claim_id"]),
+            }
+            detail = item["detail"]
+            if detail["kind"] == "concept":
+                person_side = {
+                    "mappings": detail["mappings"],
+                    "assertion": detail["assertion"],
+                    "component_of": detail.get("component_of", []),
+                    "coverage": None,
                 }
-            )
+            else:
+                person_side = {"mappings": [], "assertion": None, "component_of": [], "coverage": detail["coverage"]}
+            items.append({"concept": item["concept"], "status": item["status"], "role_side": role_side, "person_side": person_side})
 
-    counts = {"evidenced": 0, "partial": 0, "user_asserted": 0, "not_found": 0}
-    for item in items:
-        counts[item["status"]] += 1
+    counts = {
+        "evidenced": fit["n_evidenced"],
+        "partial": fit["n_partial"],
+        "user_asserted": fit["n_asserted"],
+        "not_found": fit["n_not_found"],
+    }
 
-    return {"role": role, "items": items, "counts": counts}
+    return {
+        "role": role,
+        "items": items,
+        "counts": counts,
+        # Structural summary (brief §17/§18) — shown before, and separate
+        # from, fit_score in the UI.
+        "blocking_gaps": fit["blocking_gaps"],
+        "unverified_required": fit["unverified_required"],
+        "fit_score": fit["fit_score"],
+        "embedding_similarity": fit["embedding_similarity"],
+        "engine_version": capability_engine.ENGINE_VERSION,
+    }
 
 
 class AssertCapability(BaseModel):
@@ -133,7 +123,7 @@ def assert_capability(payload: AssertCapability):
     see jobber.person_capability_assertion / docs/14 §6 for why this is
     deliberately not profile360's concern, and a TEMPORARY navigation
     override only — see `promote` below for the path into profile360's own
-    review pipeline."""
+    review pipeline. Unchanged from Phase 2."""
     with db_cursor() as cur:
         cur.execute("SELECT 1 FROM jobber.concept WHERE id = %s AND status = 'active'", (payload.concept_id,))
         if not cur.fetchone():

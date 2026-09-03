@@ -149,3 +149,81 @@ class ConceptAdjudicationResult(BaseModel):
 class ClaimMappingResult(BaseModel):
     chosen_canonical_name: Optional[str] = None
     reasoning: Optional[str] = None
+
+
+# --- Phase 3: capability catalogue curation (backend/app/routes/capabilities.py) --
+
+_DEPTH_LEVELS = ("exposed", "applied", "owned", "set_standard")
+_AUTONOMY_LEVELS = ("assisted", "independent", "directed_others", "accountable")
+_NECESSITY_LEVELS = ("core", "supporting", "contextual")
+
+
+class CapabilityCreate(BaseModel):
+    canonical_name: str
+    definition: Optional[str] = None
+    demonstration_standard: str
+    min_depth: str = "owned"
+    min_autonomy: Optional[str] = None
+    requires_all_core: bool = True
+    min_core_required: Optional[int] = None
+    economic_salience: Optional[str] = None  # catalogue metadata only — never drives Phase 3 results (brief §5)
+    notes: Optional[str] = None
+    status: str = "active"
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.min_depth not in _DEPTH_LEVELS:
+            raise ValueError(f"min_depth must be one of {_DEPTH_LEVELS}")
+        if self.min_autonomy is not None and self.min_autonomy not in _AUTONOMY_LEVELS:
+            raise ValueError(f"min_autonomy must be one of {_AUTONOMY_LEVELS}")
+        if self.economic_salience is not None and self.economic_salience not in ("low", "medium", "high"):
+            raise ValueError("economic_salience must be one of low, medium, high")
+        if self.status not in ("proposed", "active", "deprecated"):
+            raise ValueError("status must be one of proposed, active, deprecated")
+        return self
+
+
+class CapabilityUpdate(BaseModel):
+    canonical_name: Optional[str] = None
+    definition: Optional[str] = None
+    demonstration_standard: Optional[str] = None
+    min_depth: Optional[str] = None
+    min_autonomy: Optional[str] = None
+    requires_all_core: Optional[bool] = None
+    min_core_required: Optional[int] = None
+    economic_salience: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.min_depth is not None and self.min_depth not in _DEPTH_LEVELS:
+            raise ValueError(f"min_depth must be one of {_DEPTH_LEVELS}")
+        if self.min_autonomy is not None and self.min_autonomy not in _AUTONOMY_LEVELS:
+            raise ValueError(f"min_autonomy must be one of {_AUTONOMY_LEVELS}")
+        if self.economic_salience is not None and self.economic_salience not in ("low", "medium", "high"):
+            raise ValueError("economic_salience must be one of low, medium, high")
+        if self.status is not None and self.status not in ("proposed", "active", "deprecated"):
+            raise ValueError("status must be one of proposed, active, deprecated")
+        return self
+
+
+class ComponentEdgeCreate(BaseModel):
+    concept_id: str
+    necessity: str
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.necessity not in _NECESSITY_LEVELS:
+            raise ValueError(f"necessity must be one of {_NECESSITY_LEVELS}")
+        return self
+
+
+class ComponentEdgeUpdate(BaseModel):
+    necessity: str
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.necessity not in _NECESSITY_LEVELS:
+            raise ValueError(f"necessity must be one of {_NECESSITY_LEVELS}")
+        return self

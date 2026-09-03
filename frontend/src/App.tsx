@@ -13,6 +13,8 @@ import Targets from './pages/Targets'
 import AddTarget from './pages/AddTarget'
 import Episodes from './pages/Episodes'
 import Vocabulary from './pages/Vocabulary'
+import Capabilities from './pages/Capabilities'
+import CapabilityCoverage from './pages/CapabilityCoverage'
 
 function App() {
   return (
@@ -32,6 +34,12 @@ function App() {
         </NavLink>
         <NavLink to="/vocabulary" className={({ isActive }) => (isActive ? 'active' : '')}>
           Vocabulary
+        </NavLink>
+        <NavLink to="/capabilities" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Capabilities
+        </NavLink>
+        <NavLink to="/coverage" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Coverage
         </NavLink>
         <NavLink to="/profile360" className={({ isActive }) => (isActive ? 'active' : '')}>
           profile360
@@ -53,6 +61,8 @@ function App() {
         <Route path="/targets/new" element={<AddTarget />} />
         <Route path="/episodes" element={<Episodes />} />
         <Route path="/vocabulary" element={<Vocabulary />} />
+        <Route path="/capabilities" element={<Capabilities />} />
+        <Route path="/coverage" element={<CapabilityCoverage />} />
         <Route path="/profile360" element={<Profile360 />} />
         <Route path="/preferences" element={<Preferences />} />
         <Route path="/import" element={<Import />} />

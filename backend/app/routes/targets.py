@@ -1,24 +1,27 @@
 from fastapi import APIRouter, HTTPException
 
 from ..db import create_document, db_cursor, flatten_role_instance, upsert_role_instance
-from ..embeddings import cosine_similarity, embed_text, ensure_profile_embedding, get_embeddings, set_embedding
+from ..embeddings import cosine_similarity, embed_text, ensure_profile_embedding, get_embeddings, role_embedding_text, set_embedding
 from ..models import TargetImport
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
 
 
 def _compose_target_text(target) -> str:
-    skill_names = [s.skill for s in target.skill_decomposition]
-    subject_names = [s.subject for s in target.technical_subjects]
-    parts = [
-        target.title,
-        target.summary,
-        target.description,
-        "\n".join(target.typical_tasks),
-        "Skills: " + ", ".join(skill_names) if skill_names else None,
-        "Technical subjects: " + ", ".join(subject_names) if subject_names else None,
-    ]
-    return "\n\n".join(p for p in parts if p)
+    """Thin wrapper around the canonical `embeddings.role_embedding_text` —
+    kept as its own named function since callers here work with the
+    not-yet-stored `TargetRole` payload object, not a stored row."""
+    return role_embedding_text(
+        {
+            "node_type": "target",
+            "title": target.title,
+            "summary": target.summary,
+            "description": target.description,
+            "typical_tasks": target.typical_tasks,
+            "skill_decomposition": [s.model_dump() for s in target.skill_decomposition],
+            "technical_subjects": [s.model_dump() for s in target.technical_subjects],
+        }
+    )
 
 
 def target_columns(cur, payload: TargetImport) -> dict:
