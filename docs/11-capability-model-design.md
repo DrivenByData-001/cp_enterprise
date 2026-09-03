@@ -1,8 +1,13 @@
 # 11 — Capability Model: Design Document
 
-**Status:** Phases 0–1 implemented (§11); Phases 2–5 still proposed, for review
+**Status:** Phases 0–2 implemented, with deviations recorded in §11's Phase 2
+build notes (persistence moved to Postgres; person-side evidence moved to a
+separate `profile360` schema instead of this design's `evidence_claim`);
+Phases 3–5 still proposed, for review
 **Supersedes (conceptually):** the narrative-plus-embedding model shipped in v1
-**Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10)
+**Related:** `docs/10-career-nav-scoping.md` (original scoping — parts now obsolete, see §10),
+`docs/14-phase2-postgres-architecture.md` (Phase 2's Postgres schema/provenance
+as actually built, and every deviation from this document)
 **Deferred concepts:** `docs/12-architectural-notes-future.md` (potential; market-dependent capability value)
 
 ---
@@ -202,13 +207,23 @@ retrospectively.
 This is a direct break from the current `upsert_job_role`, which deletes and
 re-inserts all skills for a role on every edit (`backend/app/db.py:167`).
 
-### 3.5 SQLite through Phase 3
+### 3.5 SQLite through Phase 3 — superseded in Phase 2, by an external fact
 
 Stay on SQLite. Every query in this design is a join, an aggregate, or a two-hop
 recursive CTE — all supported. Move to Postgres when either (a) vector search over
 concepts outgrows a brute-force scan (>~50k concepts, which will not happen), or
 (b) more than one person uses the system. Keep the DDL portable: no SQLite-specific
 types, integer booleans, ISO-8601 text dates.
+
+**Superseded in Phase 2.** Neither trigger above fired — this was overridden by
+an external fact this document didn't anticipate: the SQLite corpus was migrated
+to a Supabase/Postgres project (`jobber` schema) outside this codebase, and the
+Phase 2 brief required the application to move onto it rather than keep
+building new functionality on SQLite. The reasoning above about query
+complexity was correct and remains true — nothing about the data model's
+*logical* shape changed, only where it lives and, incidentally, that pgvector
+replaced the brute-force cosine scan §7.3 step 2 depended on. See
+`docs/14-phase2-postgres-architecture.md` §1.
 
 ---
 
@@ -1318,7 +1333,7 @@ above:**
    captured database, re-run `migrate_phase1.py` against a **copy** of it first,
    same caution as Phase 0.
 
-### Phase 2 — Evidence *(~2 weeks)*
+### Phase 2 — Evidence *(~2 weeks)* — **implemented, with deviations**
 
 **Build:** `evidence_claim`, `requirement_claim`, span validation, claim review queue,
 Pass B over CV / LinkedIn / project write-ups, `user_asserted` claim creation.
@@ -1329,6 +1344,94 @@ the highlighted span in the source document. The first thing the current app can
 at all.
 
 **Exit criteria:** span validity ≥ 0.99; concept-linking F1 ≥ 0.75 on dev.
+
+**Build notes — decisions made during implementation, materially different from
+the plan above, driven by a Phase 2 brief this document could not have
+anticipated (a separate `profile360` schema became the person-side evidence
+store outside this codebase, and the corpus was already migrated to
+Supabase/Postgres before this phase started):**
+
+1. **`evidence_claim` was not built — deliberately, not by oversight.** The
+   Phase 2 brief established an architectural boundary this document didn't
+   have: person-side career evidence (documents, episodes, claims, evidence,
+   capabilities) now lives in a separate, authoritative `profile360` schema
+   owned by a different tool, and jobber must not duplicate it. Building
+   `evidence_claim` here — a second, competing home for person-side claims —
+   would violate that boundary on day one. What was built instead: a thin
+   cross-schema mapping layer (`jobber.profile360_claim_mapping`,
+   `jobber.profile360_capability_mapping`) that links a profile360 claim/
+   capability to a canonical jobber concept without copying the underlying
+   evidence, plus one deliberately minimal, evidence-free
+   `jobber.person_capability_assertion` table for exactly doc 11 §5.3's
+   "no document supports it" `user_asserted` case, scoped to the comparison
+   UI's "I have done this" action. See
+   `docs/14-phase2-postgres-architecture.md` §6 for the full reasoning.
+2. **`requirement_claim` was built essentially as specified in §4.4**, with
+   one addition: `basis` gains `user_asserted` (this document only specified
+   `stated | implied | inferred` for it) — a `role_instance` with no source
+   document at all (an imagined target, or an explicitly-labelled synthetic/
+   reference role) can still carry a user-declared requirement, and it must
+   be recorded as what it is rather than dressed up as `inferred`. See
+   `backend/migrations/0003_requirement_claims_and_runs.sql`.
+3. **`role_instance` was finally built** — flagged "unscoped" in both the
+   Phase 0 and Phase 1 build notes above, and correctly predicted there as
+   something "whoever scopes Phase 2 must build." Its 23 already-migrated
+   production rows predate this codebase's own DDL, and this build initially
+   had no credential to inspect their real shape — so an early version of
+   this section described that shape as a reconstruction. A later
+   reconciliation pass corrected it against a live inspection of the real
+   `open-brain` project (2026-09-03): production's shape differs from §4.3's
+   DDL below in load-bearing ways (UUID ids throughout, legacy detail as
+   direct columns rather than a side table) — see docs/14 §3 for the
+   confirmed shape and why §4.3 below is design history, not a description of
+   the live table.
+4. **Persistence moved to Postgres**, superseding §3.5 — see that section's
+   own updated note and docs/14 §1 for why.
+5. **Span validation is wired in for real, exactly as §8.3 mandated "Phase 2,
+   day one"** — every AI-proposed `evidence_span` is checked with
+   `span_validation.validate_span` before a claim is ever written, not just
+   before it reaches a review queue; a failing span is dropped (never
+   silently corrected or queued) and counted, and a document whose
+   `provenance_quality` is anything other than `'original'` (a legacy
+   reconstruction, a user-composed narrative) has every claim's `basis`
+   downgraded to `inferred` with no stored span regardless of what the model
+   claimed to quote — validating that a reconstructed document's text
+   contains a phrase proves nothing about whether the *original* advert did.
+   See `backend/app/extraction.py`.
+6. **The canonicalisation cascade (§7.3) is now fully implemented**, not just
+   steps 1–2 as in Phase 1: step 3 (model adjudication over embedding-
+   retrieved candidates) runs via a dedicated, batched prompt
+   (`prompts/adjudicate_concept_candidates.md`) — one call per document
+   covering every still-unresolved surface form after exact match, each
+   scoped to its own top-10 candidate list, never allowed to choose outside
+   it. Declined/candidate-less items fall through to `concept_proposal`
+   exactly as step 4 specifies.
+7. **`extraction_run` was redesigned relative to this section's own DDL**,
+   because Phase 2 introduced task subjects doc 11 didn't anticipate — a
+   profile360 claim or capability has no jobber `document_id` to point a
+   `NOT NULL` foreign key at. `document_id` became nullable, alongside three
+   sibling subject columns (`role_instance_id`, `profile360_claim_id`,
+   `profile360_capability_id`) discriminated by a new `subject_type` column,
+   with a CHECK enforcing exactly one is set — never a fabricated FK to
+   satisfy the original NOT NULL. `vocabulary_version_id` stayed NOT NULL, and
+   is now real: `concept_linking.get_or_create_current_vocabulary_version`
+   versions by a genuine change in active concept count rather than
+   inventing one per run. Both successful and failed runs are recorded
+   (`status='failed'` carries `error_type`/`error_message`), satisfying the
+   Phase 2 brief's provenance requirements beyond what this section
+   originally asked for.
+8. **No `eval_run`/gold-set work was done.** This is a real, acknowledged gap
+   against this section's exit criteria, not a silent drop — the Phase 2
+   brief's own definition of done doesn't mention evaluation, and building a
+   16-document gold set was judged lower priority than the schema/ingestion/
+   comparison spine within the time available. Flagged for whoever picks up
+   Phase 3: the span-validity and concept-linking-F1 gates below are still
+   the right bar, they simply haven't been measured yet.
+9. **Tested against a real, disposable Postgres for every test in the suite**
+   (`backend/tests/`, `postgresql+pgvector`, created and dropped per test
+   session) — not SQLite, not a mock, and never the production database. See
+   docs/14 §7. This is a stronger guarantee than Phase 0/1 had (those were
+   verified against a synthetic legacy-schema SQLite database only).
 
 ### Phase 3 — Capabilities *(~2 weeks)*
 

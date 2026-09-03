@@ -1,8 +1,20 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import init_db
-from .routes import concepts, episodes, import_routes, profile, roles, space, targets
+from .db import run_migrations
+from .routes import (
+    comparison,
+    concepts,
+    episodes,
+    import_routes,
+    preferences,
+    profile,
+    profile360,
+    role_instances,
+    roles,
+    space,
+    targets,
+)
 
 app = FastAPI(title="Career Navigator")
 
@@ -16,7 +28,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    run_migrations()
 
 
 app.include_router(import_routes.router)
@@ -26,6 +38,10 @@ app.include_router(space.router)
 app.include_router(targets.router)
 app.include_router(episodes.router)
 app.include_router(concepts.router)
+app.include_router(role_instances.router)
+app.include_router(profile360.router)
+app.include_router(preferences.router)
+app.include_router(comparison.router)
 
 
 @app.get("/api/health")

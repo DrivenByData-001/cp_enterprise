@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [sort, setSort] = useState('similarity')
   const [facetType, setFacetType] = useState('')
   const [facets, setFacets] = useState<Facet[]>([])
-  const [conceptId, setConceptId] = useState<number | ''>('')
+  const [conceptId, setConceptId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -78,7 +78,7 @@ export default function Dashboard() {
           {facetType && (
             <select
               value={conceptId}
-              onChange={(e) => setConceptId(e.target.value ? Number(e.target.value) : '')}
+              onChange={(e) => setConceptId(e.target.value)}
             >
               <option value="">All {facetType}s</option>
               {facets.map((f) => (

@@ -1,26 +1,6 @@
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from app import ai, db  # noqa: E402
-from app.models import Analysis, Job, JobPostingImport, Metadata  # noqa: E402
-from app.routes import import_routes  # noqa: E402
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "career_nav.db")
-    monkeypatch.setattr(import_routes, "embed_text", lambda text: [])
-
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    with TestClient(app) as c:
-        yield c
+from app import ai, db
+from app.models import Analysis, Job, JobPostingImport, Metadata
+from app.routes import import_routes
 
 
 def _fake_run(**kwargs):
@@ -52,18 +32,34 @@ def test_native_import_feeds_existing_pipeline(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "imported"
-    assert isinstance(body["id"], int)
+    assert isinstance(body["id"], str)
     assert body["extraction"]["job"]["title"] == "Senior Actuarial Analyst"
     assert body["run"]["task"] == "job_posting_extract"
     assert body["run"]["model"] == "gpt-4o-mini"
 
     # actually landed in the same table the legacy import path writes to
     with db.db_cursor() as cur:
-        cur.execute("SELECT title, organisation, node_type FROM job_roles WHERE id = ?", (body["id"],))
+        cur.execute("SELECT title, organisation, instance_type FROM jobber.role_instance WHERE id = %s", (body["id"],))
         row = cur.fetchone()
-    assert row[0] == "Senior Actuarial Analyst"
-    assert row[1] == "Aviva"
-    assert row[2] == "posting"
+    assert row["title"] == "Senior Actuarial Analyst"
+    assert row["organisation"] == "Aviva"
+    assert row["instance_type"] == "observed_posting"
+
+
+def test_native_import_creates_source_document(client, monkeypatch):
+    monkeypatch.setattr(import_routes, "run_json_task", _fake_run)
+
+    resp = client.post("/api/import/native", json={"text": "Senior Actuarial Analyst at Aviva..."})
+    role_id = resp.json()["id"]
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT document_id FROM jobber.role_instance WHERE id = %s", (role_id,))
+        document_id = cur.fetchone()["document_id"]
+        assert document_id is not None
+        cur.execute("SELECT provenance_quality, kind FROM jobber.document WHERE id = %s", (document_id,))
+        doc = cur.fetchone()
+    assert doc["provenance_quality"] == "original"
+    assert doc["kind"] == "job_posting"
 
 
 def test_native_import_rejects_blank_text(client):

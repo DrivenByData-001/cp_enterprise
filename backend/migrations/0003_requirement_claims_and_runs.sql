@@ -1,0 +1,91 @@
+-- Phase 2: extraction/task-run provenance + the canonical market-side claim
+-- (requirement_claim). See docs/11-capability-model-design.md §4.1/§4.4 for
+-- the design this generalises, and docs/14-phase2-postgres-architecture.md
+-- §6 for why there is no person-side evidence_claim table here (that is
+-- profile360's role, not jobber's).
+--
+-- extraction_run is redesigned relative to doc 11's original DDL: doc 11
+-- assumed every task has exactly one document to point at. Phase 2 adds task
+-- types whose subject is a profile360 claim/capability (no jobber document
+-- at all), so `document_id` is nullable alongside three sibling subject
+-- columns, discriminated by `subject_type` — never a fabricated FK to
+-- satisfy a NOT NULL that doesn't fit the task.
+--
+-- All ids/FKs here are UUID: role_instance_id and document_id reference the
+-- live, UUID-keyed production tables directly (same schema, confirmed types
+-- — no defensive fallback needed); profile360_claim_id/profile360_capability_id
+-- are cross-schema references to profile360, whose UUID id type was also
+-- confirmed by live inspection (0004 adds the real FK for those).
+
+CREATE TABLE IF NOT EXISTS jobber.extraction_run (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task                  TEXT NOT NULL,   -- job_posting_extract | requirement_extract | concept_link_adjudicate | profile360_claim_map | profile360_capability_map
+    subject_type          TEXT NOT NULL CHECK (subject_type IN ('document', 'role_instance', 'profile360_claim', 'profile360_capability')),
+    document_id           UUID REFERENCES jobber.document(id),
+    role_instance_id      UUID REFERENCES jobber.role_instance(id),
+    profile360_claim_id      UUID,
+    profile360_capability_id UUID,
+    model                 TEXT NOT NULL,
+    prompt_name           TEXT NOT NULL,
+    prompt_version        TEXT NOT NULL,
+    vocabulary_version_id UUID NOT NULL REFERENCES jobber.vocabulary_version(id),
+    started_at            TIMESTAMPTZ NOT NULL,
+    finished_at           TIMESTAMPTZ,
+    status                TEXT NOT NULL CHECK (status IN ('ok', 'partial', 'failed')),
+    error_type            TEXT,   -- AIConfigError | AIProviderError | AIResponseFormatError | AISchemaValidationError, when status='failed'
+    error_message         TEXT,
+    input_chars           INTEGER,
+    output_chars          INTEGER,
+    notes                 TEXT,
+    CHECK (
+        (subject_type = 'document' AND document_id IS NOT NULL) OR
+        (subject_type = 'role_instance' AND role_instance_id IS NOT NULL) OR
+        (subject_type = 'profile360_claim' AND profile360_claim_id IS NOT NULL) OR
+        (subject_type = 'profile360_capability' AND profile360_capability_id IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_extraction_run_task ON jobber.extraction_run(task, status);
+CREATE INDEX IF NOT EXISTS idx_extraction_run_role_instance ON jobber.extraction_run(role_instance_id);
+
+-- concept_proposal.extraction_run_id was left FK-less in 0002 (extraction_run
+-- didn't exist yet).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_schema = 'jobber' AND table_name = 'concept_proposal'
+          AND constraint_name = 'concept_proposal_extraction_run_id_fkey'
+    ) THEN
+        ALTER TABLE jobber.concept_proposal
+            ADD CONSTRAINT concept_proposal_extraction_run_id_fkey
+            FOREIGN KEY (extraction_run_id) REFERENCES jobber.extraction_run(id);
+    END IF;
+END $$;
+
+-- requirement_claim: doc 11 §4.4, extended with 'user_asserted' basis — a
+-- role_instance with no document at all (an imagined target, or a synthetic/
+-- reference role) can still carry a user-declared requirement, and it must
+-- be recorded as what it is rather than dressed up as 'inferred'.
+CREATE TABLE IF NOT EXISTS jobber.requirement_claim (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role_instance_id      UUID NOT NULL REFERENCES jobber.role_instance(id) ON DELETE CASCADE,
+    concept_id            UUID NOT NULL REFERENCES jobber.concept(id),
+    requirement_type      TEXT NOT NULL CHECK (requirement_type IN ('required', 'preferred', 'contextual')),
+    importance            INTEGER CHECK (importance BETWEEN 1 AND 5),
+    basis                 TEXT NOT NULL CHECK (basis IN ('stated', 'implied', 'inferred', 'user_asserted')),
+    document_id           UUID REFERENCES jobber.document(id),
+    evidence_span         TEXT,
+    evidence_offset_start INTEGER,
+    evidence_offset_end   INTEGER,
+    extraction_run_id     UUID REFERENCES jobber.extraction_run(id),
+    review_status         TEXT NOT NULL DEFAULT 'unreviewed' CHECK (review_status IN ('unreviewed', 'accepted', 'rejected', 'corrected')),
+    reviewed_at           TIMESTAMPTZ,
+    superseded_by         UUID REFERENCES jobber.requirement_claim(id),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- doc 11 §5.2 invariants 1-2, carried over verbatim:
+    CHECK (basis <> 'user_asserted' OR extraction_run_id IS NULL),
+    CHECK (basis NOT IN ('stated', 'implied') OR (document_id IS NOT NULL AND evidence_span IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_claim_role ON jobber.requirement_claim(role_instance_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_claim_concept ON jobber.requirement_claim(concept_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_claim_review ON jobber.requirement_claim(review_status);

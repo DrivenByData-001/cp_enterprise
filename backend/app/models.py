@@ -59,10 +59,6 @@ class JobPostingImport(BaseModel):
     analysis: Analysis = Analysis()
 
 
-class ProfileUpdate(BaseModel):
-    narrative_text: str
-
-
 class SkillDecompositionItem(BaseModel):
     skill: str
     examples: list[str] = []
@@ -96,22 +92,6 @@ class TargetImport(BaseModel):
     skills: list[Skill] = []
 
 
-class EpisodeCreate(BaseModel):
-    kind: str  # employment | project | study | qualification | other
-    title: str
-    organisation: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    date_precision: str = "month"  # day | month | year
-    parent_episode_id: Optional[int] = None
-    domain_hint: Optional[str] = None
-    context_note: Optional[str] = None
-
-
-class EpisodeUpdate(EpisodeCreate):
-    pass
-
-
 class ConceptCreate(BaseModel):
     type_code: str
     canonical_name: str
@@ -125,7 +105,7 @@ class ProposalResolve(BaseModel):
     type_code: Optional[str] = None       # required if action == accept_new
     canonical_name: Optional[str] = None  # required if action == accept_new
     definition: Optional[str] = None
-    concept_id: Optional[int] = None      # required if action == accept_alias
+    concept_id: Optional[str] = None      # required if action == accept_alias
 
     @model_validator(mode="after")
     def _check_action_fields(self):
@@ -136,3 +116,36 @@ class ProposalResolve(BaseModel):
         if self.action not in ("accept_new", "accept_alias", "reject", "defer"):
             raise ValueError("action must be one of accept_new, accept_alias, reject, defer")
         return self
+
+
+# --- Phase 2: AI extraction task schemas (backend/app/extraction.py) --------
+#
+# These are output_model schemas for app.ai.run_json_task, not API
+# request/response models — kept here for consistency with JobPostingImport/
+# TargetImport above, which already serve the same dual purpose.
+
+class RequirementItem(BaseModel):
+    surface_form: str
+    requirement_type: str  # required | preferred | contextual
+    basis: str             # stated | implied
+    importance: Optional[int] = None
+    evidence_span: str
+
+
+class RequirementExtractionResult(BaseModel):
+    requirements: list[RequirementItem] = []
+
+
+class ConceptAdjudicationDecision(BaseModel):
+    item_index: int
+    chosen_canonical_name: Optional[str] = None
+    reasoning: Optional[str] = None
+
+
+class ConceptAdjudicationResult(BaseModel):
+    decisions: list[ConceptAdjudicationDecision] = []
+
+
+class ClaimMappingResult(BaseModel):
+    chosen_canonical_name: Optional[str] = None
+    reasoning: Optional[str] = None
