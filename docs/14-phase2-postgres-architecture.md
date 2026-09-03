@@ -208,13 +208,19 @@ profile360 mapping in the comparison view's epistemic ordering (`evidenced >
 partial > user_asserted > not_found`, see `app/routes/comparison.py`). It
 carries a `promoted_to_profile360_at` column and a
 `POST /api/comparison/assert/{concept_id}/promote` endpoint
-(`app/profile360_promotion.py`) that makes a best-effort attempt to queue the
-assertion into `profile360.manual_import_queue` for that tool's own review —
-introspecting that table's columns defensively, since its shape has not been
-confirmed, and returning a clear "unsupported" error rather than guessing at
-it. Until a person promotes (or profile360 grows a first-class import path for
-this), the assertion is explicitly a **temporary navigation override**, not
-evidence.
+(`app/profile360_promotion.py`) that queues the assertion into
+`profile360.manual_import_queue` for that tool's own review. That table's
+shape was confirmed by live inspection: `source_key` (TEXT, primary key —
+there is no `id` column at all), `imported_at`, `source_label`, `payload`
+(JSONB), `processed`, `processed_at`, `processing_notes`. The promotion path
+derives a deterministic `source_key`
+(`jobber_person_capability_assertion:<assertion uuid>`) and upserts on it, so
+re-promoting the same assertion updates the same queue row — resetting
+`processed`/`processed_at` so profile360's own tool picks it up again — rather
+than creating a duplicate; `promoted_to_profile360_at` is only set once that
+write has actually succeeded, never on a failed insert. Until a person
+promotes (or profile360 grows a first-class import path for this), the
+assertion is explicitly a **temporary navigation override**, not evidence.
 
 ## 7. Local development and tests
 

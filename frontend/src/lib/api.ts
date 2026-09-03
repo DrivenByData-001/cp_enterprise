@@ -400,7 +400,7 @@ export const api = {
   retractAssertion: (conceptId: string) =>
     req<{ status: string }>(`/comparison/assert/${conceptId}`, { method: 'DELETE' }),
   promoteAssertion: (conceptId: string) =>
-    req<{ status: string; profile360_manual_import_queue_id: string }>(`/comparison/assert/${conceptId}/promote`, { method: 'POST' }),
+    req<{ status: string; profile360_manual_import_source_key: string }>(`/comparison/assert/${conceptId}/promote`, { method: 'POST' }),
 
   // --- Phase 2: preferences ---------------------------------------------------
   listPreferenceDimensions: () => req<PreferenceDimension[]>('/preferences/dimensions'),

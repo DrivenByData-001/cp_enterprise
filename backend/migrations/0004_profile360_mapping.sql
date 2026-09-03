@@ -42,10 +42,11 @@ CREATE INDEX IF NOT EXISTS idx_profile360_capability_mapping_review ON jobber.pr
 -- profile360 or silently become capability evidence — comparison.py treats
 -- it as strictly weaker than any profile360 mapping (see the status
 -- ordering there: evidenced > partial > user_asserted > not_found).
--- `promoted_to_profile360_at` tracks the one-way, best-effort promotion path
--- into profile360.manual_import_queue (backend/app/profile360_promotion.py)
--- — this row is not deleted on promotion so the UI can still show "you
--- asserted this, and it has been queued for profile360 to confirm".
+-- `promoted_to_profile360_at` tracks the one-way promotion path into
+-- profile360.manual_import_queue (confirmed schema — see
+-- backend/app/profile360_promotion.py) — this row is not deleted on
+-- promotion so the UI can still show "you asserted this, and it has been
+-- queued for profile360 to confirm".
 CREATE TABLE IF NOT EXISTS jobber.person_capability_assertion (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     jobber_concept_id        UUID NOT NULL REFERENCES jobber.concept(id),

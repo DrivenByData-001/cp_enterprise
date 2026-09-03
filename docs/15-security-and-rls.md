@@ -74,9 +74,10 @@ statement in this module targets the `profile360` schema, and its allowlisted
 table set is fixed to the eleven tables named in §3 — there is no code path
 that can query an arbitrary profile360 table from a request parameter. The one
 exception anywhere in this codebase is `backend/app/profile360_promotion.py`,
-which writes a single best-effort row into `profile360.manual_import_queue`
-(deliberately excluded from the read-only allowlist above, since it is never
-browsed generically) when a user promotes a local capability assertion — see
+which upserts one row into `profile360.manual_import_queue` (confirmed
+schema, keyed by a deterministic `source_key` — deliberately excluded from
+the read-only allowlist above, since it is never browsed generically) when a
+user promotes a local capability assertion — see
 `docs/14` §6. The only jobber-side tables that reference profile360 rows at
 all are the two mapping tables and `preference_observation`
 (`backend/migrations/0004_profile360_mapping.sql`,

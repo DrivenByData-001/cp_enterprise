@@ -24,12 +24,12 @@
 -- profile360.claims/capabilities/episodes, so migrations now genuinely
 -- require *something* at those tables to apply at all — even for a
 -- jobber-only local setup that will never touch the profile360-mapping
--- features. `claims`/`capabilities` match the columns confirmed by live
--- inspection (docs/14 §5); `episodes`/`snapshots` do not have a confirmed
--- shape beyond `id` being uuid, so they get the minimum needed to be a valid
--- FK target plus one guessed text field so profile360_reader.display_text
--- has something to show — never trust these two as a shape reference for
--- anything beyond that.
+-- features. `claims`/`capabilities`/`manual_import_queue` match the columns
+-- confirmed by live inspection (docs/14 §5/§6); `episodes`/`snapshots` do not
+-- have a confirmed shape beyond `id` being uuid, so they get the minimum
+-- needed to be a valid FK target plus one guessed text field so
+-- profile360_reader.display_text has something to show — never trust these
+-- two as a shape reference for anything beyond that.
 --
 -- Usage: applied by backend/tests/conftest.py before run_migrations(), and by
 -- hand for local dev against a from-scratch Postgres:
@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS profile360.snapshots (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     narrative_text TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Confirmed shape (docs/14 §6) — identity is source_key, not `id`; there is
+-- no id column at all. app/profile360_promotion.py is the only writer.
+CREATE TABLE IF NOT EXISTS profile360.manual_import_queue (
+    source_key       TEXT PRIMARY KEY,
+    imported_at      TIMESTAMPTZ DEFAULT now(),
+    source_label     TEXT NOT NULL,
+    payload          JSONB NOT NULL,
+    processed        BOOLEAN DEFAULT false,
+    processed_at     TIMESTAMPTZ,
+    processing_notes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS jobber.concept_type (

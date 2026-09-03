@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from .. import profile360_reader as p360
 from ..db import db_cursor, instance_type_to_app_kind
-from ..profile360_promotion import Profile360PromotionUnsupportedError, promote_assertion_to_profile360
+from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
 
@@ -162,10 +162,10 @@ def retract_assertion(concept_id: str):
 
 @router.post("/assert/{concept_id}/promote")
 def promote_assertion(concept_id: str):
-    """Best-effort promotion of a jobber-local assertion into profile360's
-    own review pipeline (profile360.manual_import_queue) — see
-    app/profile360_promotion.py for exactly what this can and can't do
-    without a confirmed schema for that table."""
+    """Promotes a jobber-local assertion into profile360's own review
+    pipeline (profile360.manual_import_queue, confirmed schema — see
+    app/profile360_promotion.py) so profile360 can review and confirm it on
+    its own terms."""
     with db_cursor() as cur:
         cur.execute("SELECT id FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s", (concept_id,))
         row = cur.fetchone()
@@ -173,5 +173,5 @@ def promote_assertion(concept_id: str):
             raise HTTPException(404, "no assertion for this concept")
         try:
             return promote_assertion_to_profile360(cur, str(row["id"]))
-        except Profile360PromotionUnsupportedError as e:
+        except Profile360PromotionError as e:
             raise HTTPException(503, str(e)) from e

@@ -89,7 +89,7 @@ _RESETTABLE_JOBBER_TABLES = [
 # The profile360 stub tables local_baseline.sql provides (claims/capabilities
 # with the confirmed live shape, episodes/snapshots with a minimal guessed
 # one) — reset between tests same as jobber's own tables.
-_RESETTABLE_PROFILE360_TABLES = ["claims", "capabilities", "episodes", "snapshots"]
+_RESETTABLE_PROFILE360_TABLES = ["claims", "capabilities", "episodes", "snapshots", "manual_import_queue"]
 
 
 @pytest.fixture(scope="session")
