@@ -136,3 +136,36 @@ class ProposalResolve(BaseModel):
         if self.action not in ("accept_new", "accept_alias", "reject", "defer"):
             raise ValueError("action must be one of accept_new, accept_alias, reject, defer")
         return self
+
+
+# --- Phase 2: AI extraction task schemas (backend/app/extraction.py) --------
+#
+# These are output_model schemas for app.ai.run_json_task, not API
+# request/response models — kept here for consistency with JobPostingImport/
+# TargetImport above, which already serve the same dual purpose.
+
+class RequirementItem(BaseModel):
+    surface_form: str
+    requirement_type: str  # required | preferred | contextual
+    basis: str             # stated | implied
+    importance: Optional[int] = None
+    evidence_span: str
+
+
+class RequirementExtractionResult(BaseModel):
+    requirements: list[RequirementItem] = []
+
+
+class ConceptAdjudicationDecision(BaseModel):
+    item_index: int
+    chosen_canonical_name: Optional[str] = None
+    reasoning: Optional[str] = None
+
+
+class ConceptAdjudicationResult(BaseModel):
+    decisions: list[ConceptAdjudicationDecision] = []
+
+
+class ClaimMappingResult(BaseModel):
+    chosen_canonical_name: Optional[str] = None
+    reasoning: Optional[str] = None
