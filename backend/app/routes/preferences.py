@@ -14,7 +14,8 @@ class PreferenceObservationCreate(BaseModel):
     strength: int  # 1-3
     basis: str  # observed_behavior | user_stated | repeated_episode_evidence | validated_psychometric | typology_hypothesis
     source_label: Optional[str] = None
-    episode_id: Optional[int] = None
+    profile360_episode_id: Optional[str] = None
+    profile360_claim_id: Optional[str] = None
     confidence: str = "low"  # low | medium | high
     occurred_at: Optional[str] = None
     note: Optional[str] = None
@@ -49,15 +50,16 @@ def create_observation(payload: PreferenceObservationCreate):
         cur.execute(
             """
             INSERT INTO jobber.preference_observation
-                (dimension_code, direction, strength, basis, source_label, episode_id,
-                 confidence, occurred_at, note)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (dimension_code, direction, strength, basis, source_label,
+                 profile360_episode_id, profile360_claim_id, confidence, occurred_at, note)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 payload.dimension_code, payload.direction, payload.strength, payload.basis,
-                payload.source_label, payload.episode_id, payload.confidence, payload.occurred_at, payload.note,
+                payload.source_label, payload.profile360_episode_id, payload.profile360_claim_id,
+                payload.confidence, payload.occurred_at, payload.note,
             ),
         )
-        new_id = cur.fetchone()["id"]
+        new_id = str(cur.fetchone()["id"])
     return {"id": new_id, "status": "created"}

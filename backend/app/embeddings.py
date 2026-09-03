@@ -77,7 +77,7 @@ def _parse_vector(raw) -> list[float]:
     return [float(x) for x in text.split(",")] if text else []
 
 
-def set_embedding(cur, owner_kind: str, owner_id: int, vector: list[float], model: str | None = None) -> None:
+def set_embedding(cur, owner_kind: str, owner_id: str, vector: list[float], model: str | None = None) -> None:
     """Upsert a jobber.d_embedding row. No-op if `vector` is empty (mirrors
     the pre-Phase-2 behaviour of simply not writing an embedding for blank
     text) rather than writing a zero vector that would rank as spuriously
@@ -96,7 +96,7 @@ def set_embedding(cur, owner_kind: str, owner_id: int, vector: list[float], mode
     )
 
 
-def get_embedding(cur, owner_kind: str, owner_id: int, model: str | None = None) -> list[float]:
+def get_embedding(cur, owner_kind: str, owner_id: str, model: str | None = None) -> list[float]:
     model = model or embedding_model_name()
     cur.execute(
         "SELECT vector FROM jobber.d_embedding WHERE owner_kind = %s AND owner_id = %s AND model = %s",
@@ -108,16 +108,16 @@ def get_embedding(cur, owner_kind: str, owner_id: int, model: str | None = None)
     return _parse_vector(row["vector"])
 
 
-def get_embeddings(cur, owner_kind: str, owner_ids: list[int], model: str | None = None) -> dict[int, list[float]]:
+def get_embeddings(cur, owner_kind: str, owner_ids: list[str], model: str | None = None) -> dict[str, list[float]]:
     if not owner_ids:
         return {}
     model = model or embedding_model_name()
     cur.execute(
         "SELECT owner_id, vector FROM jobber.d_embedding "
-        "WHERE owner_kind = %s AND model = %s AND owner_id = ANY(%s)",
+        "WHERE owner_kind = %s AND model = %s AND owner_id = ANY(%s::uuid[])",
         (owner_kind, model, owner_ids),
     )
-    return {row["owner_id"]: _parse_vector(row["vector"]) for row in cur.fetchall()}
+    return {str(row["owner_id"]): _parse_vector(row["vector"]) for row in cur.fetchall()}
 
 
 def nearest_by_vector(
@@ -126,9 +126,9 @@ def nearest_by_vector(
     query_vector: list[float],
     model: str | None = None,
     limit: int = 1,
-    exclude_owner_id: int | None = None,
-    owner_id_filter: list[int] | None = None,
-) -> list[tuple[int, float]]:
+    exclude_owner_id: str | None = None,
+    owner_id_filter: list[str] | None = None,
+) -> list[tuple[str, float]]:
     """Postgres-native nearest-neighbour lookup via pgvector's cosine-distance
     operator (`<=>`), replacing the pre-Phase-2 Python brute-force scan
     (concept_linking.py's old `nearest_concept`). Returns
@@ -145,10 +145,10 @@ def nearest_by_vector(
     where_clauses = ["owner_kind = %s", "model = %s"]
     where_params: list = [owner_kind, model]
     if exclude_owner_id is not None:
-        where_clauses.append("owner_id != %s")
+        where_clauses.append("owner_id != %s::uuid")
         where_params.append(exclude_owner_id)
     if owner_id_filter is not None:
-        where_clauses.append("owner_id = ANY(%s)")
+        where_clauses.append("owner_id = ANY(%s::uuid[])")
         where_params.append(owner_id_filter)
     where_sql = " AND ".join(where_clauses)
 
@@ -162,4 +162,40 @@ def nearest_by_vector(
         """,
         [qv, *where_params, qv, limit],
     )
-    return [(row["owner_id"], row["similarity"]) for row in cur.fetchall()]
+    return [(str(row["owner_id"]), row["similarity"]) for row in cur.fetchall()]
+
+
+def ensure_profile_embedding(cur) -> tuple[str | None, list[float]]:
+    """The "current profile vector" every similarity computation (Dashboard,
+    Space, Targets) needs, sourced from profile360's current snapshot instead
+    of a jobber-local narrative (docs/14 §9 — jobber does not recreate
+    person-side truth). The narrative text itself is never copied into
+    jobber; only a derived, rebuildable embedding is cached here, keyed by
+    the profile360 snapshot's own id — the same "embeddings are a signal,
+    never the sole home of a fact" principle d_embedding already applies to
+    concepts/role_instances/documents (doc 11 §4.6).
+
+    Returns (profile360_snapshot_id, vector) — (None, []) if profile360 has
+    no snapshot yet, or is unreachable from this connection (a local/test
+    database with no profile360 schema at all)."""
+    from .profile360_reader import Profile360UnavailableError, full_text, get_current_snapshot
+
+    try:
+        snapshot = get_current_snapshot(cur)
+    except Profile360UnavailableError:
+        return None, []
+    if not snapshot:
+        return None, []
+
+    snapshot_id = str(snapshot["id"])
+    vector = get_embedding(cur, "profile360_snapshot", snapshot_id)
+    if vector:
+        return snapshot_id, vector
+
+    text = full_text(snapshot)
+    if not text:
+        return snapshot_id, []
+    vector = embed_text(text)
+    if vector:
+        set_embedding(cur, "profile360_snapshot", snapshot_id, vector)
+    return snapshot_id, vector

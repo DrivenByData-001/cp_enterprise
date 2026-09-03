@@ -1,10 +1,16 @@
--- Phase 2: evidence-backed career preference layer. Structurally separate from
--- capability: no FK, view, or query in this migration or the app code joins
--- preference_observation into a capability/requirement/comparison table. That
--- separation is deliberate and load-bearing (Phase 2 brief §10, definition of
--- done #9-10) — personality/psychometric material can reach this table via
--- `basis`, and nothing built on top of `requirement_claim` or the comparison
--- view can see it.
+-- Phase 2: evidence-backed career preference layer. Structurally separate
+-- from capability: no FK, view, or query in this migration or the app code
+-- joins preference_observation into a capability/requirement/comparison
+-- table. That separation is deliberate and load-bearing (brief §10,
+-- definition of done #9-10) — personality/psychometric material can reach
+-- this table via `basis`, and nothing built on top of `requirement_claim` or
+-- the comparison view can see it.
+--
+-- Autobiographical grounding (episode_id / claim_id) points at profile360,
+-- the authoritative person-side store — never at a jobber-local episode
+-- table, which does not exist (docs/14 §9: jobber does not recreate
+-- person-side truth). Both are real FKs: profile360.episodes.id and
+-- profile360.claims.id were confirmed UUID by live inspection.
 
 CREATE TABLE IF NOT EXISTS jobber.preference_dimension (
     code       TEXT PRIMARY KEY,
@@ -27,23 +33,23 @@ INSERT INTO jobber.preference_dimension (code, label, definition, sort_order) VA
     ('lifestyle_environment', 'Lifestyle / working environment', 'Preference for a given pace, location, or working pattern', 11)
 ON CONFLICT (code) DO NOTHING;
 
--- basis is ranked exactly per the Phase 2 brief §10 source hierarchy, strongest
+-- basis is ranked exactly per the brief §10 source hierarchy, strongest
 -- first. `validated_psychometric` and `typology_hypothesis` are the only two
--- routes personality material can take, and both are the lowest-ranked bases —
--- structurally incapable of being mistaken for observed behaviour or explicit
--- user statement.
+-- routes personality material can take, and both are the lowest-ranked
+-- bases — structurally incapable of being mistaken for observed behaviour or
+-- explicit user statement.
 CREATE TABLE IF NOT EXISTS jobber.preference_observation (
-    id                    BIGSERIAL PRIMARY KEY,
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     dimension_code        TEXT NOT NULL REFERENCES jobber.preference_dimension(code),
     direction             TEXT NOT NULL CHECK (direction IN ('toward', 'away', 'neutral')),
-    strength              SMALLINT NOT NULL CHECK (strength BETWEEN 1 AND 3),  -- ordinal, never a fabricated float (doc 11 §5.1 precedent)
+    strength              SMALLINT NOT NULL CHECK (strength BETWEEN 1 AND 3),  -- ordinal, never a fabricated float
     basis                 TEXT NOT NULL CHECK (basis IN (
                                'observed_behavior', 'user_stated', 'repeated_episode_evidence',
                                'validated_psychometric', 'typology_hypothesis'
                            )),
-    source_label          TEXT,     -- free-text pointer to the concrete source, e.g. 'MBTI: INTP', 'episode 23'
-    profile360_claim_id   UUID,     -- optional grounding in a profile360 claim — unconstrained, see docs/14 §5
-    episode_id            BIGINT REFERENCES jobber.episode(id),
+    source_label          TEXT,     -- free-text pointer to the concrete source, e.g. 'MBTI: INTP'
+    profile360_claim_id   UUID REFERENCES profile360.claims(id),
+    profile360_episode_id UUID REFERENCES profile360.episodes(id),
     confidence            TEXT NOT NULL DEFAULT 'low' CHECK (confidence IN ('low', 'medium', 'high')),
     occurred_at           TEXT,     -- date/recency of the underlying evidence, if known (partial dates allowed)
     recorded_at           TIMESTAMPTZ NOT NULL DEFAULT now(),

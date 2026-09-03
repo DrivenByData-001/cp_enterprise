@@ -12,12 +12,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import profile360_reader as p360
-from ..db import db_cursor
+from ..db import db_cursor, instance_type_to_app_kind
+from ..profile360_promotion import Profile360PromotionUnsupportedError, promote_assertion_to_profile360
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
 
 
-def _person_side(cur, concept_id: int) -> dict:
+def _person_side(cur, concept_id: str) -> dict:
     cur.execute(
         """
         SELECT id, profile360_claim_id AS profile360_id, review_status, mapping_basis, 'claim' AS mapping_kind
@@ -42,7 +43,7 @@ def _person_side(cur, concept_id: int) -> dict:
             m["display"] = None
 
     cur.execute(
-        "SELECT id, note, created_at FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s",
+        "SELECT id, note, created_at, promoted_to_profile360_at FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s",
         (concept_id,),
     )
     assertion = cur.fetchone()
@@ -59,18 +60,26 @@ def _person_side(cur, concept_id: int) -> dict:
 
 
 @router.get("/role/{role_instance_id}")
-def compare_role(role_instance_id: int):
+def compare_role(role_instance_id: str):
     with db_cursor() as cur:
-        cur.execute("SELECT id, title, kind FROM jobber.role_instance WHERE id = %s", (role_instance_id,))
+        cur.execute(
+            "SELECT id, title, instance_type, target_basis FROM jobber.role_instance WHERE id = %s",
+            (role_instance_id,),
+        )
         role = cur.fetchone()
         if not role:
             raise HTTPException(404, "role_instance not found")
+        role = {
+            "id": str(role["id"]),
+            "title": role["title"],
+            "kind": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
+        }
 
         cur.execute(
             """
             SELECT rc.id, rc.requirement_type, rc.basis, rc.review_status, rc.evidence_span,
                    c.id AS concept_id, c.canonical_name, c.type_code,
-                   d.id AS document_id, d.title AS document_title, d.provenance AS document_provenance, d.url AS document_url
+                   d.id AS document_id, d.title AS document_title, d.provenance_quality AS document_provenance, d.url AS document_url
             FROM jobber.requirement_claim rc
             JOIN jobber.concept c ON c.id = rc.concept_id
             LEFT JOIN jobber.document d ON d.id = rc.document_id
@@ -83,19 +92,20 @@ def compare_role(role_instance_id: int):
 
         items = []
         for rc in requirement_rows:
-            person = _person_side(cur, rc["concept_id"])
+            concept_id = str(rc["concept_id"])
+            person = _person_side(cur, concept_id)
             items.append(
                 {
-                    "concept": {"id": rc["concept_id"], "canonical_name": rc["canonical_name"], "type_code": rc["type_code"]},
+                    "concept": {"id": concept_id, "canonical_name": rc["canonical_name"], "type_code": rc["type_code"]},
                     "status": person["status"],
                     "role_side": {
-                        "requirement_claim_id": rc["id"],
+                        "requirement_claim_id": str(rc["id"]),
                         "requirement_type": rc["requirement_type"],
                         "basis": rc["basis"],
                         "review_status": rc["review_status"],
                         "evidence_span": rc["evidence_span"],
                         "document": (
-                            {"id": rc["document_id"], "title": rc["document_title"], "provenance": rc["document_provenance"], "url": rc["document_url"]}
+                            {"id": str(rc["document_id"]), "title": rc["document_title"], "provenance": rc["document_provenance"], "url": rc["document_url"]}
                             if rc["document_id"]
                             else None
                         ),
@@ -112,7 +122,7 @@ def compare_role(role_instance_id: int):
 
 
 class AssertCapability(BaseModel):
-    concept_id: int
+    concept_id: str
     note: str | None = None
 
 
@@ -121,7 +131,9 @@ def assert_capability(payload: AssertCapability):
     """The one-click "I have done this" action (doc 11 §5.3) — records that
     the user asserts this concept with no document behind it. Not a claim:
     see jobber.person_capability_assertion / docs/14 §6 for why this is
-    deliberately not profile360's concern."""
+    deliberately not profile360's concern, and a TEMPORARY navigation
+    override only — see `promote` below for the path into profile360's own
+    review pipeline."""
     with db_cursor() as cur:
         cur.execute("SELECT 1 FROM jobber.concept WHERE id = %s AND status = 'active'", (payload.concept_id,))
         if not cur.fetchone():
@@ -135,14 +147,31 @@ def assert_capability(payload: AssertCapability):
             """,
             (payload.concept_id, payload.note),
         )
-        new_id = cur.fetchone()["id"]
+        new_id = str(cur.fetchone()["id"])
     return {"id": new_id, "status": "asserted"}
 
 
 @router.delete("/assert/{concept_id}")
-def retract_assertion(concept_id: int):
+def retract_assertion(concept_id: str):
     with db_cursor() as cur:
         cur.execute("DELETE FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s", (concept_id,))
         if cur.rowcount == 0:
             raise HTTPException(404, "no assertion for this concept")
     return {"status": "retracted"}
+
+
+@router.post("/assert/{concept_id}/promote")
+def promote_assertion(concept_id: str):
+    """Best-effort promotion of a jobber-local assertion into profile360's
+    own review pipeline (profile360.manual_import_queue) — see
+    app/profile360_promotion.py for exactly what this can and can't do
+    without a confirmed schema for that table."""
+    with db_cursor() as cur:
+        cur.execute("SELECT id FROM jobber.person_capability_assertion WHERE jobber_concept_id = %s", (concept_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "no assertion for this concept")
+        try:
+            return promote_assertion_to_profile360(cur, str(row["id"]))
+        except Profile360PromotionUnsupportedError as e:
+            raise HTTPException(503, str(e)) from e

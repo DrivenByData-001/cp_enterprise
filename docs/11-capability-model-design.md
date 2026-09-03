@@ -1372,15 +1372,19 @@ Supabase/Postgres before this phase started):**
    document at all (an imagined target, or an explicitly-labelled synthetic/
    reference role) can still carry a user-declared requirement, and it must
    be recorded as what it is rather than dressed up as `inferred`. See
-   `backend/migrations/0002_requirement_claims_and_provenance.sql`.
+   `backend/migrations/0003_requirement_claims_and_runs.sql`.
 3. **`role_instance` was finally built** — flagged "unscoped" in both the
    Phase 0 and Phase 1 build notes above, and correctly predicted there as
-   something "whoever scopes Phase 2 must build." Its real-world shape is a
-   reconstruction, not an observation: the Phase 2 brief asserted 23 rows
-   already existed in production under this exact name before this build had
-   any credential to inspect them — see docs/14 §3 for why §4.3's DDL below
-   was trusted as the best available evidence of that live shape, and what to
-   verify before relying on that trust.
+   something "whoever scopes Phase 2 must build." Its 23 already-migrated
+   production rows predate this codebase's own DDL, and this build initially
+   had no credential to inspect their real shape — so an early version of
+   this section described that shape as a reconstruction. A later
+   reconciliation pass corrected it against a live inspection of the real
+   `open-brain` project (2026-09-03): production's shape differs from §4.3's
+   DDL below in load-bearing ways (UUID ids throughout, legacy detail as
+   direct columns rather than a side table) — see docs/14 §3 for the
+   confirmed shape and why §4.3 below is design history, not a description of
+   the live table.
 4. **Persistence moved to Postgres**, superseding §3.5 — see that section's
    own updated note and docs/14 §1 for why.
 5. **Span validation is wired in for real, exactly as §8.3 mandated "Phase 2,
@@ -1388,7 +1392,7 @@ Supabase/Postgres before this phase started):**
    `span_validation.validate_span` before a claim is ever written, not just
    before it reaches a review queue; a failing span is dropped (never
    silently corrected or queued) and counted, and a document whose
-   provenance is anything other than `original_capture` (a legacy
+   `provenance_quality` is anything other than `'original'` (a legacy
    reconstruction, a user-composed narrative) has every claim's `basis`
    downgraded to `inferred` with no stored span regardless of what the model
    claimed to quote — validating that a reconstructed document's text

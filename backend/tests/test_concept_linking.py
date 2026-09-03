@@ -5,13 +5,13 @@ from app import concept_linking, db
 from app.embeddings import nearest_by_vector, set_embedding
 
 
-def _active_concept(cur, name: str, type_code: str = "tool") -> int:
+def _active_concept(cur, name: str, type_code: str = "tool") -> str:
     cur.execute(
         "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
         "VALUES (%s, %s, 'active', 'curator', now()) RETURNING id",
         (type_code, name),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])
 
 
 def test_exact_match_case_folds_and_matches_alias(client):
@@ -54,16 +54,16 @@ def test_nearest_by_vector_orders_by_cosine_distance(client):
 def test_run_pass_b_auto_resolves_exact_matches_and_proposes_unresolved(client):
     with db.db_cursor() as cur:
         python_id = _active_concept(cur, "Python")
-        role_id = db.upsert_role_instance(cur, None, {"kind": "posting", "title": "R"}, skills=[])
+        role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "R"}, skills=[])
         cur.execute(
-            "INSERT INTO jobber.role_skill_observation (role_instance_id, name) VALUES (%s, %s), (%s, %s)",
+            "INSERT INTO jobber.role_skill_observation (role_instance_id, surface_form) VALUES (%s, %s), (%s, %s)",
             (role_id, "Python", role_id, "some brand new skill nobody curated yet"),
         )
 
         counts = concept_linking.run_pass_b(cur)
 
-        cur.execute("SELECT resolved_concept_id FROM jobber.role_skill_observation WHERE name = 'Python'")
-        resolved = cur.fetchone()["resolved_concept_id"]
+        cur.execute("SELECT canonical_concept_id FROM jobber.role_skill_observation WHERE surface_form = 'Python'")
+        resolved = str(cur.fetchone()["canonical_concept_id"])
         cur.execute("SELECT status FROM jobber.concept_proposal WHERE surface_form = %s", ("some brand new skill nobody curated yet",))
         proposal = cur.fetchone()
 

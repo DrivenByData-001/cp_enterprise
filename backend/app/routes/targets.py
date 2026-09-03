@@ -1,14 +1,10 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException
 
-from ..db import db_cursor, get_or_create_document, row_to_dict, upsert_role_instance
-from ..embeddings import cosine_similarity, embed_text, get_embedding, get_embeddings, set_embedding
+from ..db import create_document, db_cursor, flatten_role_instance, upsert_role_instance
+from ..embeddings import cosine_similarity, embed_text, ensure_profile_embedding, get_embeddings, set_embedding
 from ..models import TargetImport
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
-
-_TARGET_JSON_COLUMNS = ("typical_tasks", "skill_decomposition", "technical_subjects", "raw_json")
 
 
 def _compose_target_text(target) -> str:
@@ -31,38 +27,44 @@ def target_columns(cur, payload: TargetImport) -> dict:
 
     document_id = None
     if text.strip():
-        # A target's text is a user/AI-composed narrative, never an original
-        # employer advert — 'user_paste' provenance, never 'original_capture'.
-        document_id, _ = get_or_create_document(
+        # Neither 'original' (not a verbatim capture of pre-existing source
+        # material — it's a user/AI-synthesized narrative) nor
+        # 'legacy_extracted'/'reconstructed' (not from the SQLite migration,
+        # not explicitly flagged as a reconstruction) genuinely fits a
+        # target's narrative. 'unknown' is the least wrong of the four
+        # production values: it correctly keeps this out of "trustworthy
+        # original evidence" without asserting something false. See docs/14 §3.
+        document_id, _duplicate_of = create_document(
             cur,
             kind="narrative",
-            body=text,
-            provenance="user_paste",
+            content_text=text,
+            provenance_quality="unknown",
             title=target.title,
             source=meta.source,
             url=meta.url,
         )
 
     return {
-        "kind": "target_imagined" if target.is_imagined else "target_real",
+        "instance_type": "user_defined_target",
+        "target_basis": "imagined" if target.is_imagined else "real_role",
         "document_id": document_id,
         "title": target.title,
         "organisation": target.organisation,
         "seniority_level": target.seniority_level,
-        "captured_at": meta.captured_at or datetime.now(timezone.utc).isoformat(),
-        "url": meta.url,
         "description": target.description,
         "summary": target.summary,
         "career_track": target.career_track,
         "extraction_status": meta.extraction_status,
         "extraction_notes": meta.notes_for_user,
-        "typical_tasks": target.typical_tasks or None,
-        "skill_decomposition": [s.model_dump() for s in target.skill_decomposition] or None,
-        "technical_subjects": [s.model_dump() for s in target.technical_subjects] or None,
-        "grounding_note": target.grounding_note,
-        "feasibility_note": target.feasibility_note,
-        "is_plausible": target.is_plausible,
-        "raw_json": payload.model_dump(mode="json"),
+        "legacy_analysis": {
+            "typical_tasks": target.typical_tasks or None,
+            "skill_decomposition": [s.model_dump() for s in target.skill_decomposition] or None,
+            "technical_subjects": [s.model_dump() for s in target.technical_subjects] or None,
+            "grounding_note": target.grounding_note,
+            "feasibility_note": target.feasibility_note,
+            "is_plausible": target.is_plausible,
+            "raw_json": payload.model_dump(mode="json"),
+        },
         "_embedding_text": text,
     }
 
@@ -70,20 +72,14 @@ def target_columns(cur, payload: TargetImport) -> dict:
 @router.get("")
 def list_targets():
     with db_cursor() as cur:
-        cur.execute(
-            "SELECT id FROM jobber.profile_snapshots WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1"
-        )
-        prow = cur.fetchone()
-        profile_vec = get_embedding(cur, "profile_snapshot", prow["id"]) if prow else []
+        _, profile_vec = ensure_profile_embedding(cur)
 
         cur.execute(
-            "SELECT ri.*, lra.* FROM jobber.role_instance ri "
-            "LEFT JOIN jobber.legacy_role_analysis lra ON lra.role_instance_id = ri.id "
-            "WHERE ri.kind != 'posting' ORDER BY ri.created_at DESC"
+            "SELECT ri.*, d.url AS url FROM jobber.role_instance ri "
+            "LEFT JOIN jobber.document d ON d.id = ri.document_id "
+            "WHERE ri.instance_type != 'observed_posting' ORDER BY ri.created_at DESC"
         )
-        rows = [row_to_dict(r, _TARGET_JSON_COLUMNS) for r in cur.fetchall()]
-        for r in rows:
-            r["node_type"] = r["kind"]
+        rows = [flatten_role_instance(r) for r in cur.fetchall()]
 
         vec_by_id = get_embeddings(cur, "role_instance", [r["id"] for r in rows])
 
@@ -106,13 +102,13 @@ def import_target(payload: TargetImport):
 
 
 @router.put("/{target_id}")
-def update_target(target_id: int, payload: TargetImport):
+def update_target(target_id: str, payload: TargetImport):
     with db_cursor() as cur:
-        cur.execute("SELECT kind FROM jobber.role_instance WHERE id = %s", (target_id,))
+        cur.execute("SELECT instance_type FROM jobber.role_instance WHERE id = %s", (target_id,))
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "target not found")
-    if row["kind"] == "posting":
+    if row["instance_type"] == "observed_posting":
         raise HTTPException(400, "this is a posting — edit it via PUT /api/roles/{id}")
 
     skills = [s.model_dump() for s in payload.skills]

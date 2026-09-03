@@ -13,7 +13,7 @@ function SourceAwareIngest() {
   const pdfInput = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
-  const goToRequirements = (id: number) => setTimeout(() => navigate(`/role-instances/${id}/requirements`), 500)
+  const goToRequirements = (id: string) => setTimeout(() => navigate(`/role-instances/${id}/requirements`), 500)
 
   const submitText = async () => {
     setBusy(true)

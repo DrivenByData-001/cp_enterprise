@@ -1,8 +1,21 @@
+"""Read-only: profile360 is the authoritative person-side store (docs/14 §9)
+— jobber.profile_snapshots does not exist, and this app no longer accepts a
+narrative write here. Writing/updating the narrative is profile360's own
+tool's job now; this page only displays its current snapshot. The embedding
+used for similarity elsewhere in this app (Dashboard/Space/Targets) is
+computed from this same snapshot's text on demand — see
+`embeddings.ensure_profile_embedding` — not stored as a fact here.
+"""
+
 from fastapi import APIRouter, HTTPException
 
+from .. import profile360_reader as p360
 from ..db import db_cursor
-from ..embeddings import embed_text, embedding_model_name, set_embedding
-from ..models import ProfileUpdate
+
+
+def _with_display(row: dict) -> dict:
+    return {**row, "id": str(row["id"]), "_display": p360.display_text(row)}
+
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -10,44 +23,18 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 @router.get("")
 def get_current_profile():
     with db_cursor() as cur:
-        cur.execute(
-            "SELECT id, narrative_text, embedding_model, created_at FROM jobber.profile_snapshots "
-            "WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1"
-        )
-        row = cur.fetchone()
-    return row
+        try:
+            snapshot = p360.get_current_snapshot(cur)
+        except p360.Profile360UnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+    return _with_display(snapshot) if snapshot else None
 
 
 @router.get("/history")
 def get_profile_history():
     with db_cursor() as cur:
-        cur.execute(
-            "SELECT id, narrative_text, embedding_model, is_current, created_at "
-            "FROM jobber.profile_snapshots ORDER BY created_at DESC"
-        )
-        return cur.fetchall()
-
-
-@router.post("")
-def update_profile(payload: ProfileUpdate):
-    text = payload.narrative_text.strip()
-    if not text:
-        raise HTTPException(400, "narrative_text cannot be empty")
-
-    vector = embed_text(text)
-
-    with db_cursor() as cur:
-        cur.execute("UPDATE jobber.profile_snapshots SET is_current = FALSE")
-        cur.execute(
-            """
-            INSERT INTO jobber.profile_snapshots (narrative_text, embedding_model, is_current, created_at)
-            VALUES (%s, %s, TRUE, now())
-            RETURNING id
-            """,
-            (text, embedding_model_name() if vector else None),
-        )
-        new_id = cur.fetchone()["id"]
-        if vector:
-            set_embedding(cur, "profile_snapshot", new_id, vector)
-
-    return {"id": new_id, "status": "saved"}
+        try:
+            snapshots = p360.list_snapshots(cur)
+        except p360.Profile360UnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+    return [_with_display(s) for s in snapshots]

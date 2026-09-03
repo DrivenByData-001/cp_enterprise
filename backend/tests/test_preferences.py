@@ -70,7 +70,7 @@ def test_psychometric_basis_is_accepted_but_ranked_last_in_the_vocabulary(client
             JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
             WHERE tc.table_schema = 'jobber' AND tc.table_name = 'preference_observation'
               AND tc.constraint_type = 'FOREIGN KEY'
-              AND kcu.column_name NOT IN ('dimension_code', 'episode_id')
+              AND kcu.column_name NOT IN ('dimension_code', 'profile360_claim_id', 'profile360_episode_id')
             """
         )
         stray_fks = cur.fetchone()["n"]

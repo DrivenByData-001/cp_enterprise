@@ -33,8 +33,12 @@ nothing to verify beyond "the backend's role has BYPASSRLS" — see §1.
 
 ## 3. `profile360` — disabled today, a reviewed manual migration to close it
 
-Most `profile360` tables have RLS disabled today — the brief names this as a
-known issue. Fixing it is provided as
+Eleven `profile360` tables have RLS disabled today — live inspection (2026-09-03,
+see `docs/14` §5) confirmed the full list: `documents, episodes, concepts,
+claims, evidence, claim_concepts, capabilities, capability_claims,
+contradictions, open_questions, snapshots`. (An earlier version of the manual
+migration below covered only eight, missing `concepts`, `claim_concepts`, and
+`capability_claims` — it now covers all eleven.) Fixing it is provided as
 `backend/migrations/manual/9001_enable_profile360_rls.sql`, **not** run
 automatically (not by `app.db.run_migrations()`, not by the test suite, not on
 backend startup). The brief is explicit that enabling RLS blind can break
@@ -66,14 +70,18 @@ for whoever operates the real project, informed but not made by this build.
 ## 4. What this build reads from profile360, and how
 
 `backend/app/profile360_reader.py` is read-only: no `INSERT`/`UPDATE`/`DELETE`
-statement in this codebase targets the `profile360` schema, and its
-allowlisted table set is fixed to the eight tables the brief names
-(`documents, episodes, claims, evidence, capabilities, contradictions,
-open_questions, snapshots`) — there is no code path that can query an
-arbitrary profile360 table from a request parameter. The only jobber-side
-tables that reference profile360 rows at all are the two mapping tables
-(`backend/migrations/0003_profile360_mapping.sql`), which store a foreign id
-and mapping metadata, never a copy of the underlying claim/evidence text.
+statement in this module targets the `profile360` schema, and its allowlisted
+table set is fixed to the eleven tables named in §3 — there is no code path
+that can query an arbitrary profile360 table from a request parameter. The one
+exception anywhere in this codebase is `backend/app/profile360_promotion.py`,
+which writes a single best-effort row into `profile360.manual_import_queue`
+(deliberately excluded from the read-only allowlist above, since it is never
+browsed generically) when a user promotes a local capability assertion — see
+`docs/14` §6. The only jobber-side tables that reference profile360 rows at
+all are the two mapping tables and `preference_observation`
+(`backend/migrations/0004_profile360_mapping.sql`,
+`0005_preferences.sql`), which store a foreign id and mapping metadata, never
+a copy of the underlying claim/evidence text.
 
 ## 5. Secrets and environment configuration
 

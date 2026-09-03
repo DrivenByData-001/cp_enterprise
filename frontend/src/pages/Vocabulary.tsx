@@ -24,7 +24,7 @@ function ProposalCard({
   const [typeCode, setTypeCode] = useState(group.suggested_type ?? conceptTypes[0]?.code ?? '')
   const [name, setName] = useState(group.surface_form)
   const [definition, setDefinition] = useState('')
-  const [aliasConceptId, setAliasConceptId] = useState<number | ''>(group.nearest_concept_id ?? '')
+  const [aliasConceptId, setAliasConceptId] = useState<string>(group.nearest_concept_id ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -124,7 +124,7 @@ function ProposalCard({
             <span className="secondary">Alias of</span>
             <select
               value={aliasConceptId}
-              onChange={(e) => setAliasConceptId(e.target.value ? Number(e.target.value) : '')}
+              onChange={(e) => setAliasConceptId(e.target.value)}
             >
               <option value="">— choose a concept —</option>
               {concepts.map((c) => (
@@ -143,7 +143,7 @@ function ProposalCard({
                 run({
                   surface_form: group.surface_form,
                   action: 'accept_alias',
-                  concept_id: aliasConceptId as number,
+                  concept_id: aliasConceptId,
                 })
               }
             >

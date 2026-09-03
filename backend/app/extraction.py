@@ -61,11 +61,11 @@ def _record_extraction_run(
     model: str,
     prompt_name: str,
     prompt_version: str,
-    vocabulary_version_id: int,
+    vocabulary_version_id: str,
     started_at: datetime,
     status: str,
-    document_id: int | None = None,
-    role_instance_id: int | None = None,
+    document_id: str | None = None,
+    role_instance_id: str | None = None,
     profile360_claim_id: str | None = None,
     profile360_capability_id: str | None = None,
     error_type: str | None = None,
@@ -73,7 +73,7 @@ def _record_extraction_run(
     input_chars: int | None = None,
     output_chars: int | None = None,
     notes: str | None = None,
-) -> int:
+) -> str:
     cur.execute(
         """
         INSERT INTO jobber.extraction_run
@@ -89,23 +89,23 @@ def _record_extraction_run(
             error_type, error_message, input_chars, output_chars, notes,
         ),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])
 
 
-def _concepts_by_ids(cur, ids: list[int]) -> list[dict]:
+def _concepts_by_ids(cur, ids: list[str]) -> list[dict]:
     if not ids:
         return []
     cur.execute(
-        "SELECT id, type_code, canonical_name, definition FROM jobber.concept WHERE id = ANY(%s)",
+        "SELECT id, type_code, canonical_name, definition FROM jobber.concept WHERE id = ANY(%s::uuid[])",
         (ids,),
     )
-    return cur.fetchall()
+    return [{**row, "id": str(row["id"])} for row in cur.fetchall()]
 
 
 _VALID_IMPORTANCE = {1, 2, 3, 4, 5}
 
 
-def extract_role_requirements(cur, role_instance_id: int) -> dict:
+def extract_role_requirements(cur, role_instance_id: str) -> dict:
     """Phase A (open extraction of requirement surface forms + verbatim
     spans) + Phase B (doc 11 §7.3 canonicalisation cascade) against one
     role_instance's source document. Returns a summary dict; never raises for
@@ -120,14 +120,15 @@ def extract_role_requirements(cur, role_instance_id: int) -> dict:
             "this role_instance has no source document — nothing to extract requirements from"
         )
 
-    cur.execute("SELECT id, body, provenance FROM jobber.document WHERE id = %s", (role["document_id"],))
+    cur.execute("SELECT id, content_text, provenance_quality FROM jobber.document WHERE id = %s", (role["document_id"],))
     document = cur.fetchone()
+    document["id"] = str(document["id"])
 
     vocabulary_version_id = get_or_create_current_vocabulary_version(cur)
     started_at = datetime.now(timezone.utc)
     model, pversion = _safe_task_metadata("extract_role_requirements.md")
 
-    user_input = f"Source document text:\n\n{document['body']}"
+    user_input = f"Source document text:\n\n{document['content_text']}"
     try:
         result = run_json_task(
             task="requirement_extract",
@@ -149,13 +150,16 @@ def extract_role_requirements(cur, role_instance_id: int) -> dict:
     # verbatim — check it. §4/§14: a legacy-reconstructed (or otherwise
     # non-original) document can never back a stated/implied claim, however
     # good the span looks, because the text itself isn't guaranteed original.
-    can_trust_spans = document["provenance"] == "original_capture"
+    # provenance_quality is production's column (docs/14 §3) — 'original'
+    # means a genuine verbatim capture; 'legacy_extracted'/'reconstructed'/
+    # 'unknown' all downgrade to inferred with no stored span.
+    can_trust_spans = document["provenance_quality"] == "original"
 
     # (surface_form, requirement_type, basis_to_store, span_to_store, importance, context_text)
     validated: list[tuple] = []
     rejected_span_count = 0
     for item in result.output.requirements:
-        if not validate_span(document["body"], item.evidence_span):
+        if not validate_span(document["content_text"], item.evidence_span):
             rejected_span_count += 1
             continue
         importance = item.importance if item.importance in _VALID_IMPORTANCE else None
@@ -166,7 +170,7 @@ def extract_role_requirements(cur, role_instance_id: int) -> dict:
             validated.append((item.surface_form, item.requirement_type, "inferred", None, importance, item.evidence_span))
 
     # Phase B cascade: exact match first (free), else collect for batched adjudication.
-    item_concept: dict[int, int] = {}
+    item_concept: dict[int, str] = {}  # keyed by list index (int), valued by concept id (uuid str)
     to_adjudicate: list[dict] = []
     for idx, (surface_form, *_rest) in enumerate(validated):
         concept_id = exact_match_concept_id(cur, normalize_name(surface_form))

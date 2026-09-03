@@ -59,10 +59,6 @@ class JobPostingImport(BaseModel):
     analysis: Analysis = Analysis()
 
 
-class ProfileUpdate(BaseModel):
-    narrative_text: str
-
-
 class SkillDecompositionItem(BaseModel):
     skill: str
     examples: list[str] = []
@@ -96,22 +92,6 @@ class TargetImport(BaseModel):
     skills: list[Skill] = []
 
 
-class EpisodeCreate(BaseModel):
-    kind: str  # employment | project | study | qualification | other
-    title: str
-    organisation: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    date_precision: str = "month"  # day | month | year
-    parent_episode_id: Optional[int] = None
-    domain_hint: Optional[str] = None
-    context_note: Optional[str] = None
-
-
-class EpisodeUpdate(EpisodeCreate):
-    pass
-
-
 class ConceptCreate(BaseModel):
     type_code: str
     canonical_name: str
@@ -125,7 +105,7 @@ class ProposalResolve(BaseModel):
     type_code: Optional[str] = None       # required if action == accept_new
     canonical_name: Optional[str] = None  # required if action == accept_new
     definition: Optional[str] = None
-    concept_id: Optional[int] = None      # required if action == accept_alias
+    concept_id: Optional[str] = None      # required if action == accept_alias
 
     @model_validator(mode="after")
     def _check_action_fields(self):

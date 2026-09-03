@@ -121,7 +121,7 @@ class MappingReview(BaseModel):
 
 
 @router.post("/mappings/{mapping_id}/review")
-def review_mapping(mapping_id: int, payload: MappingReview):
+def review_mapping(mapping_id: str, payload: MappingReview):
     if payload.kind not in ("claim", "capability"):
         raise HTTPException(400, "kind must be 'claim' or 'capability'")
     if payload.action not in ("accept", "reject"):

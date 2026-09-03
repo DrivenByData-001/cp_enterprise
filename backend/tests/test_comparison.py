@@ -6,26 +6,26 @@ person side (mapping -> profile360 row)."""
 from app import db
 
 
-def _active_concept(cur, name: str, type_code: str = "tool") -> int:
+def _active_concept(cur, name: str, type_code: str = "tool") -> str:
     cur.execute(
         "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
         "VALUES (%s, %s, 'active', 'curator', now()) RETURNING id",
         (type_code, name),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])
 
 
-def _role_with_requirement(cur, concept_id: int, basis="stated", document=True) -> tuple[int, int]:
+def _role_with_requirement(cur, concept_id: str, basis="stated", document=True) -> tuple[str, str]:
     document_id = None
     if document:
-        document_id, _ = db.get_or_create_document(cur, kind="job_posting", body="Requires the thing.", provenance="original_capture")
-    role_id = db.upsert_role_instance(cur, None, {"kind": "posting", "title": "R", "document_id": document_id}, skills=[])
+        document_id, _ = db.create_document(cur, kind="job_posting", content_text="Requires the thing.", provenance_quality="original")
+    role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "R", "document_id": document_id}, skills=[])
     cur.execute(
         "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span) "
         "VALUES (%s, %s, 'required', %s, %s, %s) RETURNING id",
         (role_id, concept_id, basis, document_id, "Requires the thing." if document else None),
     )
-    return role_id, cur.fetchone()["id"]
+    return role_id, str(cur.fetchone()["id"])
 
 
 def test_not_found_when_nothing_backs_the_requirement(client):
@@ -38,7 +38,7 @@ def test_not_found_when_nothing_backs_the_requirement(client):
     body = resp.json()
     assert body["counts"]["not_found"] == 1
     assert body["items"][0]["status"] == "not_found"
-    assert body["items"][0]["role_side"]["document"]["provenance"] == "original_capture"
+    assert body["items"][0]["role_side"]["document"]["provenance"] == "original"
     assert body["items"][0]["role_side"]["evidence_span"] == "Requires the thing."
 
 

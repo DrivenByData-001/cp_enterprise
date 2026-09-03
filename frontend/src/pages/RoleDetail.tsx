@@ -12,7 +12,7 @@ export default function RoleDetail() {
   useEffect(() => {
     if (!id) return
     api
-      .getRole(Number(id))
+      .getRole(id)
       .then(setRole)
       .catch((e) => setError(String(e)))
   }, [id])

@@ -18,10 +18,10 @@ const STATUS_COLOR: Record<ComparisonStatus, string> = {
 
 export default function Comparison() {
   const { id } = useParams()
-  const roleId = Number(id)
+  const roleId = id ?? ''
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busyConceptId, setBusyConceptId] = useState<number | null>(null)
+  const [busyConceptId, setBusyConceptId] = useState<string | null>(null)
 
   const reload = () => api.compareRole(roleId).then(setData)
 
@@ -30,7 +30,7 @@ export default function Comparison() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleId])
 
-  const assert = async (conceptId: number) => {
+  const assert = async (conceptId: string) => {
     setBusyConceptId(conceptId)
     try {
       await api.assertCapability(conceptId)

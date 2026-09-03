@@ -32,18 +32,18 @@ def test_native_import_feeds_existing_pipeline(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "imported"
-    assert isinstance(body["id"], int)
+    assert isinstance(body["id"], str)
     assert body["extraction"]["job"]["title"] == "Senior Actuarial Analyst"
     assert body["run"]["task"] == "job_posting_extract"
     assert body["run"]["model"] == "gpt-4o-mini"
 
     # actually landed in the same table the legacy import path writes to
     with db.db_cursor() as cur:
-        cur.execute("SELECT title, organisation, kind FROM jobber.role_instance WHERE id = %s", (body["id"],))
+        cur.execute("SELECT title, organisation, instance_type FROM jobber.role_instance WHERE id = %s", (body["id"],))
         row = cur.fetchone()
     assert row["title"] == "Senior Actuarial Analyst"
     assert row["organisation"] == "Aviva"
-    assert row["kind"] == "posting"
+    assert row["instance_type"] == "observed_posting"
 
 
 def test_native_import_creates_source_document(client, monkeypatch):
@@ -56,9 +56,9 @@ def test_native_import_creates_source_document(client, monkeypatch):
         cur.execute("SELECT document_id FROM jobber.role_instance WHERE id = %s", (role_id,))
         document_id = cur.fetchone()["document_id"]
         assert document_id is not None
-        cur.execute("SELECT provenance, kind FROM jobber.document WHERE id = %s", (document_id,))
+        cur.execute("SELECT provenance_quality, kind FROM jobber.document WHERE id = %s", (document_id,))
         doc = cur.fetchone()
-    assert doc["provenance"] == "original_capture"
+    assert doc["provenance_quality"] == "original"
     assert doc["kind"] == "job_posting"
 
 

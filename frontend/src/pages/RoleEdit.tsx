@@ -16,7 +16,7 @@ export default function RoleEdit() {
   useEffect(() => {
     if (!id) return
     api
-      .getRole(Number(id))
+      .getRole(id)
       .then((r) => {
         setRole(r)
         setText(JSON.stringify(r.raw_json, null, 2))

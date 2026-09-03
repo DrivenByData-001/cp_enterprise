@@ -1,10 +1,9 @@
 import io
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ..db import db_cursor, get_or_create_document, upsert_role_instance
+from ..db import app_kind_to_instance_type, create_document, db_cursor, upsert_role_instance
 from ..embeddings import embed_text, set_embedding
 from ..extraction import ExtractionSubjectError, extract_role_requirements
 
@@ -31,7 +30,7 @@ def _derive_title(text: str, given: str | None) -> str:
 
 def _ingest_raw(payload: RawIngest) -> dict:
     """The minimal, source-aware capture path (brief §4/§13): raw text ->
-    immutable document (provenance='original_capture' — this is always a
+    immutable document (provenance_quality='original' — this is always a
     fresh capture, never a reconstruction) -> a bare role_instance. Deliberately
     does not run AI extraction inline — ingestion and extraction are separate
     steps (§13: "normalize ingestion... before running AI extraction"), so a
@@ -39,32 +38,33 @@ def _ingest_raw(payload: RawIngest) -> dict:
     text = payload.text.strip()
     if not text:
         raise HTTPException(400, "text is required")
-    if payload.kind not in ("posting", "target_real", "target_imagined", "synthetic_reference"):
-        raise HTTPException(400, "invalid kind")
+    try:
+        instance_type, target_basis = app_kind_to_instance_type(payload.kind)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     with db_cursor() as cur:
-        document_id, created = get_or_create_document(
+        document_id, duplicate_of = create_document(
             cur,
             kind="job_posting" if payload.kind == "posting" else "narrative",
-            body=text,
-            provenance="original_capture",
+            content_text=text,
+            provenance_quality="original",
             title=payload.title,
             source=payload.source or "user_paste",
             url=payload.source_url,
-            document_date=payload.posting_date,
+            source_date=payload.posting_date,
         )
         role_id = upsert_role_instance(
             cur,
             None,
             {
-                "kind": payload.kind,
+                "instance_type": instance_type,
+                "target_basis": target_basis,
                 "document_id": document_id,
                 "title": _derive_title(text, payload.title),
                 "organisation": payload.organisation,
                 "location": payload.location,
                 "posting_date": payload.posting_date,
-                "url": payload.source_url,
-                "captured_at": datetime.now(timezone.utc).isoformat(),
             },
             skills=[],
         )
@@ -72,7 +72,12 @@ def _ingest_raw(payload: RawIngest) -> dict:
         if vector:
             set_embedding(cur, "role_instance", role_id, vector)
 
-    return {"id": role_id, "document_id": document_id, "document_reused": not created, "status": "ingested"}
+    return {
+        "id": role_id,
+        "document_id": document_id,
+        "duplicate_of_document_id": duplicate_of,
+        "status": "ingested",
+    }
 
 
 @router.post("/ingest")
@@ -114,7 +119,7 @@ async def ingest_pdf(
 
 
 @router.post("/{role_id}/extract-requirements")
-def extract_requirements(role_id: int):
+def extract_requirements(role_id: str):
     with db_cursor() as cur:
         try:
             return extract_role_requirements(cur, role_id)
@@ -123,7 +128,7 @@ def extract_requirements(role_id: int):
 
 
 @router.get("/{role_id}/requirements")
-def list_requirements(role_id: int):
+def list_requirements(role_id: str):
     with db_cursor() as cur:
         cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_id,))
         if not cur.fetchone():
@@ -133,7 +138,7 @@ def list_requirements(role_id: int):
             SELECT rc.id, rc.requirement_type, rc.importance, rc.basis, rc.evidence_span,
                    rc.review_status, rc.created_at, rc.extraction_run_id,
                    c.id AS concept_id, c.canonical_name, c.type_code,
-                   d.id AS document_id, d.title AS document_title, d.provenance AS document_provenance
+                   d.id AS document_id, d.title AS document_title, d.provenance_quality AS document_provenance
             FROM jobber.requirement_claim rc
             JOIN jobber.concept c ON c.id = rc.concept_id
             LEFT JOIN jobber.document d ON d.id = rc.document_id
@@ -150,7 +155,7 @@ class ReviewAction(BaseModel):
 
 
 @router.post("/{role_id}/requirements/{claim_id}/review")
-def review_requirement(role_id: int, claim_id: int, payload: ReviewAction):
+def review_requirement(role_id: str, claim_id: str, payload: ReviewAction):
     if payload.action not in ("accept", "reject"):
         raise HTTPException(400, "action must be 'accept' or 'reject'")
     new_status = "accepted" if payload.action == "accept" else "rejected"

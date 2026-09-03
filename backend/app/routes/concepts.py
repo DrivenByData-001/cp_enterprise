@@ -23,7 +23,7 @@ def _group_proposals(cur, status: str) -> list[dict]:
 
     live_counts: dict[str, int] = {}
     if status == "pending":
-        cur.execute("SELECT name FROM jobber.role_skill_observation WHERE resolved_concept_id IS NULL")
+        cur.execute("SELECT surface_form AS name FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
         for r in cur.fetchall():
             key = normalize_name(r["name"])
             live_counts[key] = live_counts.get(key, 0) + 1
@@ -67,7 +67,7 @@ def get_facets(type_code: str):
             """
             SELECT c.id, c.canonical_name, COUNT(DISTINCT rso.role_instance_id) AS role_count
             FROM jobber.concept c
-            JOIN jobber.role_skill_observation rso ON rso.resolved_concept_id = c.id
+            JOIN jobber.role_skill_observation rso ON rso.canonical_concept_id = c.id
             WHERE c.status = 'active' AND c.type_code = %s
             GROUP BY c.id
             ORDER BY role_count DESC, c.canonical_name
@@ -143,16 +143,16 @@ def resolve_proposal(payload: ProposalResolve):
 
         cur.execute(
             "UPDATE jobber.concept_proposal SET status = %s, resolved_concept_id = %s, resolved_at = %s "
-            "WHERE id = ANY(%s)",
+            "WHERE id = ANY(%s::uuid[])",
             (new_status, resolved_concept_id, now, proposal_ids),
         )
 
         if resolved_concept_id is not None:
-            cur.execute("SELECT id, name FROM jobber.role_skill_observation WHERE resolved_concept_id IS NULL")
+            cur.execute("SELECT id, surface_form AS name FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
             matching_ids = [r["id"] for r in cur.fetchall() if normalize_name(r["name"]) == surface_form]
             if matching_ids:
                 cur.execute(
-                    "UPDATE jobber.role_skill_observation SET resolved_concept_id = %s WHERE id = ANY(%s)",
+                    "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = ANY(%s::uuid[])",
                     (resolved_concept_id, matching_ids),
                 )
 
@@ -193,7 +193,7 @@ def create_concept(payload: ConceptCreate):
 
 
 @router.get("/{concept_id}")
-def get_concept(concept_id: int):
+def get_concept(concept_id: str):
     with db_cursor() as cur:
         cur.execute("SELECT * FROM jobber.concept WHERE id = %s", (concept_id,))
         row = cur.fetchone()

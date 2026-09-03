@@ -1,210 +1,46 @@
-from datetime import date, datetime, timezone
+"""Read-only: profile360 is the authoritative person-side store (docs/14 §9)
+— jobber.episode does not exist, and this app no longer accepts episode
+writes here. Authoring episodes is profile360's own tool's job now; this
+page only browses its episodes.
 
-import psycopg
+The derived timeline/duration math doc 11 §5.4 specified (union-of-spans
+years of experience, per-episode duration) is deliberately not rebuilt here:
+it needs confirmed start/end-date field names on profile360.episodes, which
+this build has not inspected beyond `id` being uuid (docs/14 §5/§9). Once
+those are known, this is the place to add it back, over profile360 data
+instead of a local table.
+"""
+
 from fastapi import APIRouter, HTTPException
 
-from ..db import db_cursor, get_or_create_person
-from ..models import EpisodeCreate, EpisodeUpdate
+from .. import profile360_reader as p360
+from ..db import db_cursor
+
+
+def _with_display(row: dict) -> dict:
+    return {**row, "id": str(row["id"]), "_display": p360.display_text(row)}
+
 
 router = APIRouter(prefix="/api/episodes", tags=["episodes"])
 
 
-# --- Derived date-span helpers -----------------------------------------------
-#
-# docs/11-capability-model-design.md §5.4 derives "years of experience" and
-# "recency" per-concept, from episodes holding an accepted claim for that
-# concept. That per-concept version stays profile360's concern now (docs/14
-# §6) — this remains the same career-span-only version Phase 0 shipped:
-# applied across all of a person's episodes with no concept filter, recomputed
-# on every read, never stored.
-
-def _parse_partial_date(raw: str | None) -> date | None:
-    """Parse an ISO date that may be YYYY, YYYY-MM, or YYYY-MM-DD."""
-    if not raw:
-        return None
-    parts = raw.split("-")
-    try:
-        year = int(parts[0])
-        month = int(parts[1]) if len(parts) > 1 else 1
-        day = int(parts[2]) if len(parts) > 2 else 1
-        return date(year, month, day)
-    except (ValueError, IndexError):
-        return None
-
-
-def _episode_span(ep: dict, today: date) -> tuple[date, date] | None:
-    start = _parse_partial_date(ep.get("start_date"))
-    if start is None:
-        return None
-    end = _parse_partial_date(ep.get("end_date")) or today
-    if end < start:
-        end = start
-    return (start, end)
-
-
-def _years_between(start: date, end: date) -> float:
-    return round((end - start).days / 365.25, 2)
-
-
-def _union_span_years(spans: list[tuple[date, date]]) -> float:
-    """Total years covered by the union of date ranges — overlapping episodes
-    (e.g. a project nested inside a job) must not double-count."""
-    if not spans:
-        return 0.0
-    ordered = sorted(spans, key=lambda s: s[0])
-    merged: list[tuple[date, date]] = [ordered[0]]
-    for start, end in ordered[1:]:
-        last_start, last_end = merged[-1]
-        if start <= last_end:
-            merged[-1] = (last_start, max(last_end, end))
-        else:
-            merged.append((start, end))
-    return round(sum((end - start).days for start, end in merged) / 365.25, 2)
-
-
-def _with_derived(episodes: list[dict]) -> list[dict]:
-    today = date.today()
-    out = []
-    for ep in episodes:
-        span = _episode_span(ep, today)
-        ep = {**ep, "duration_years": _years_between(*span) if span else None}
-        out.append(ep)
-    return out
-
-
-# --- CRUD ---------------------------------------------------------------------
-
 @router.get("")
 def list_episodes():
     with db_cursor() as cur:
-        person_id = get_or_create_person(cur)
-        cur.execute(
-            "SELECT * FROM jobber.episode WHERE person_id = %s ORDER BY start_date IS NULL, start_date",
-            (person_id,),
-        )
-        episodes = cur.fetchall()
-    return _with_derived(episodes)
-
-
-@router.get("/timeline")
-def get_timeline():
-    """Career history ordered by date, plus derived spans (§5.4) — computed on
-    every read, never stored."""
-    with db_cursor() as cur:
-        person_id = get_or_create_person(cur)
-        cur.execute(
-            "SELECT * FROM jobber.episode WHERE person_id = %s ORDER BY start_date IS NULL, start_date",
-            (person_id,),
-        )
-        episodes = cur.fetchall()
-
-    today = date.today()
-    enriched = _with_derived(episodes)
-    spans = [s for ep in episodes if (s := _episode_span(ep, today)) is not None]
-
-    return {
-        "episodes": enriched,
-        "total_span_years": _union_span_years(spans),
-        "earliest_start": min((s[0].isoformat() for s in spans), default=None),
-        "latest_end": max((s[1].isoformat() for s in spans), default=None),
-    }
+        try:
+            episodes = p360.list_episodes(cur)
+        except p360.Profile360UnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+    return [_with_display(e) for e in episodes]
 
 
 @router.get("/{episode_id}")
-def get_episode(episode_id: int):
-    with db_cursor() as cur:
-        cur.execute("SELECT * FROM jobber.episode WHERE id = %s", (episode_id,))
-        row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, "episode not found")
-    return _with_derived([row])[0]
-
-
-def _validate_parent(cur, parent_id: int | None, person_id: int, self_id: int | None):
-    if parent_id is None:
-        return
-    if parent_id == self_id:
-        raise HTTPException(400, "an episode cannot be its own parent")
-    cur.execute("SELECT person_id FROM jobber.episode WHERE id = %s", (parent_id,))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(400, "parent_episode_id does not exist")
-    if row["person_id"] != person_id:
-        raise HTTPException(400, "parent_episode_id belongs to a different person")
-
-
-@router.post("")
-def create_episode(payload: EpisodeCreate):
-    with db_cursor() as cur:
-        person_id = get_or_create_person(cur)
-        _validate_parent(cur, payload.parent_episode_id, person_id, None)
-        cur.execute(
-            """
-            INSERT INTO jobber.episode
-                (person_id, kind, title, organisation, start_date, end_date,
-                 date_precision, parent_episode_id, domain_hint, context_note, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                person_id,
-                payload.kind,
-                payload.title,
-                payload.organisation,
-                payload.start_date,
-                payload.end_date,
-                payload.date_precision,
-                payload.parent_episode_id,
-                payload.domain_hint,
-                payload.context_note,
-                datetime.now(timezone.utc),
-            ),
-        )
-        episode_id = cur.fetchone()["id"]
-    return {"id": episode_id, "status": "created"}
-
-
-@router.put("/{episode_id}")
-def update_episode(episode_id: int, payload: EpisodeUpdate):
-    with db_cursor() as cur:
-        cur.execute("SELECT person_id FROM jobber.episode WHERE id = %s", (episode_id,))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(404, "episode not found")
-        person_id = row["person_id"]
-        _validate_parent(cur, payload.parent_episode_id, person_id, episode_id)
-        cur.execute(
-            """
-            UPDATE jobber.episode SET
-                kind = %s, title = %s, organisation = %s, start_date = %s, end_date = %s,
-                date_precision = %s, parent_episode_id = %s, domain_hint = %s, context_note = %s
-            WHERE id = %s
-            """,
-            (
-                payload.kind,
-                payload.title,
-                payload.organisation,
-                payload.start_date,
-                payload.end_date,
-                payload.date_precision,
-                payload.parent_episode_id,
-                payload.domain_hint,
-                payload.context_note,
-                episode_id,
-            ),
-        )
-    return {"id": episode_id, "status": "updated"}
-
-
-@router.delete("/{episode_id}")
-def delete_episode(episode_id: int):
+def get_episode(episode_id: str):
     with db_cursor() as cur:
         try:
-            cur.execute("DELETE FROM jobber.episode WHERE id = %s", (episode_id,))
-        except psycopg.errors.ForeignKeyViolation:
-            raise HTTPException(
-                400, "cannot delete an episode that has other episodes nested under it — reassign or delete those first"
-            )
-        if cur.rowcount == 0:
-            raise HTTPException(404, "episode not found")
-    return {"status": "deleted"}
+            episode = p360.get_episode(cur, episode_id)
+        except p360.Profile360UnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+    if not episode:
+        raise HTTPException(404, "episode not found")
+    return _with_display(episode)

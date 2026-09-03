@@ -3,6 +3,8 @@ source restrictions, unresolved-concept proposals, and failed-AI-run
 persistence (brief §5/§8/§9/§16) — app.extraction directly, with
 app.extraction.run_json_task mocked (never a live OpenAI call)."""
 
+import uuid
+
 import pytest
 
 from app import ai, db, extraction
@@ -23,19 +25,19 @@ def _fake_run(output, task, prompt_name):
     return ai.AITaskResult(output=output, run=run)
 
 
-def _make_role_with_document(cur, body: str, provenance: str = "original_capture") -> tuple[int, int]:
-    document_id, _ = db.get_or_create_document(cur, kind="job_posting", body=body, provenance=provenance)
-    role_id = db.upsert_role_instance(cur, None, {"kind": "posting", "title": "Test posting", "document_id": document_id}, skills=[])
+def _make_role_with_document(cur, body: str, provenance_quality: str = "original") -> tuple[str, str]:
+    document_id, _ = db.create_document(cur, kind="job_posting", content_text=body, provenance_quality=provenance_quality)
+    role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "Test posting", "document_id": document_id}, skills=[])
     return role_id, document_id
 
 
-def _make_active_concept(cur, canonical_name: str, type_code: str = "tool") -> int:
+def _make_active_concept(cur, canonical_name: str, type_code: str = "tool") -> str:
     cur.execute(
         "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
         "VALUES (%s, %s, 'active', 'curator', now()) RETURNING id",
         (type_code, canonical_name),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])
 
 
 def test_exact_match_resolves_without_adjudication_call(client, monkeypatch):
@@ -62,7 +64,7 @@ def test_exact_match_resolves_without_adjudication_call(client, monkeypatch):
         cur.execute("SELECT concept_id, basis, evidence_span, document_id FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
         claim = cur.fetchone()
 
-    assert claim["concept_id"] == python_id
+    assert str(claim["concept_id"]) == python_id
     assert claim["basis"] == "stated"
     assert claim["evidence_span"] == "Requires Python experience."
     assert claim["document_id"] is not None
@@ -113,7 +115,7 @@ def test_legacy_extracted_document_downgrades_basis_and_drops_span(client, monke
 
     with db.db_cursor() as cur:
         _make_active_concept(cur, "Python")
-        role_id, doc_id = _make_role_with_document(cur, body, provenance="legacy_extracted")
+        role_id, doc_id = _make_role_with_document(cur, body, provenance_quality="legacy_extracted")
         extraction.extract_role_requirements(cur, role_id)
 
         cur.execute("SELECT basis, evidence_span, document_id FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
@@ -124,7 +126,7 @@ def test_legacy_extracted_document_downgrades_basis_and_drops_span(client, monke
     # as if it were original-source evidence (brief §4/§5, docs/14 §4).
     assert claim["basis"] == "inferred"
     assert claim["evidence_span"] is None
-    assert claim["document_id"] == doc_id  # provenance link is kept even though the span isn't
+    assert str(claim["document_id"]) == doc_id  # provenance link is kept even though the span isn't
 
 
 def test_unresolved_surface_form_becomes_concept_proposal_and_accumulates(client, monkeypatch):
@@ -217,9 +219,11 @@ def test_failed_ai_call_is_recorded_and_creates_no_claims(client, monkeypatch):
 def test_extraction_subject_errors(client):
     with db.db_cursor() as cur:
         with pytest.raises(extraction.ExtractionSubjectError):
-            extraction.extract_role_requirements(cur, 999999)
+            extraction.extract_role_requirements(cur, str(uuid.uuid4()))
 
-        role_id = db.upsert_role_instance(cur, None, {"kind": "target_imagined", "title": "no document"}, skills=[])
+        role_id = db.upsert_role_instance(
+            cur, None, {"instance_type": "user_defined_target", "target_basis": "imagined", "title": "no document"}, skills=[]
+        )
         with pytest.raises(extraction.ExtractionSubjectError):
             extraction.extract_role_requirements(cur, role_id)
 

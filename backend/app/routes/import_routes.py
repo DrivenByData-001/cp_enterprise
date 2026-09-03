@@ -1,6 +1,5 @@
 import json
 from dataclasses import asdict
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -12,7 +11,7 @@ from ..ai import (
     AISchemaValidationError,
     run_json_task,
 )
-from ..db import db_cursor, get_or_create_document, upsert_role_instance
+from ..db import create_document, db_cursor, upsert_role_instance
 from ..embeddings import embed_text, set_embedding
 from ..models import JobPostingImport
 
@@ -37,33 +36,51 @@ def compose_role_text(job, analysis) -> str:
 
 
 def posting_columns(cur, payload: JobPostingImport) -> dict:
-    """Builds the flat column dict `upsert_role_instance` expects, plus — new
-    in Phase 2 — a `jobber.document` row backing the posting whenever there is
-    real posting text to capture (brief §4: "retain whenever available:
-    original advert text..."). `provenance='original_capture'`: this path is
-    always a fresh user paste of a real posting, never a reconstruction — the
-    weaker `legacy_extracted` provenance only ever applies to the 23
-    pre-existing migrated rows (docs/14 §4), never to anything this code path
-    writes.
+    """Builds the flat column dict `upsert_role_instance` expects, using
+    jobber.role_instance's real production columns (docs/14 §5) — including
+    packing the pre-capability-model scores/analysis fields into
+    `legacy_scores`/`legacy_analysis` JSONB, since production has no
+    individual column per score. Also creates a `jobber.document` row
+    backing the posting whenever there is real posting text to capture
+    (brief §4: "retain whenever available: original advert text...").
+    `provenance_quality='original'`: this path is always a fresh user paste
+    of a real posting, never a reconstruction.
     """
     job, meta, analysis = payload.job, payload.metadata, payload.analysis
     text = compose_role_text(job, analysis)
 
     document_id = None
     if text.strip():
-        document_id, _ = get_or_create_document(
+        document_id, _duplicate_of = create_document(
             cur,
             kind="job_posting",
-            body=text,
-            provenance="original_capture",
+            content_text=text,
+            provenance_quality="original",
             title=job.title,
             source=meta.source,
             url=meta.url,
-            document_date=job.posting_date,
+            source_date=job.posting_date,
         )
 
+    legacy_scores = {
+        "seniority_score": analysis.seniority_score,
+        "complexity_score": analysis.complexity_score,
+        "specialisation_score": analysis.specialisation_score,
+        "transferability_score": analysis.transferability_score,
+        "market_demand_score": analysis.market_demand_score,
+        "rarity_score": analysis.rarity_score,
+        "automation_risk_score": analysis.automation_risk_score,
+    }
+    legacy_analysis = {
+        "top_adjacent_roles": analysis.top_adjacent_roles,
+        "key_skills_summary": analysis.key_skills_summary,
+        "notes": analysis.notes,
+        "raw_json": json.loads(payload.model_dump_json()),
+    }
+
     return {
-        "kind": "posting",
+        "instance_type": "observed_posting",
+        "target_basis": None,
         "document_id": document_id,
         "title": job.title,
         "organisation": job.organisation,
@@ -73,36 +90,25 @@ def posting_columns(cur, payload: JobPostingImport) -> dict:
         "employment_type": job.employment_type,
         "seniority_level": job.seniority_level,
         "posting_date": job.posting_date,
-        "captured_at": meta.captured_at or datetime.now(timezone.utc).isoformat(),
-        "url": meta.url,
-        "summary": analysis.summary,
-        "career_track": analysis.career_track,
         "salary_min": job.salary_min,
         "salary_max": job.salary_max,
         "salary_estimate_min": analysis.salary_estimate_min,
         "salary_estimate_max": analysis.salary_estimate_max,
         "currency": job.currency,
-        "key_skills_summary": analysis.key_skills_summary,
         "description": job.description,
         "requirements": job.requirements,
         "responsibilities": job.responsibilities,
-        "notes": analysis.notes,
-        "seniority_score": analysis.seniority_score,
-        "complexity_score": analysis.complexity_score,
-        "specialisation_score": analysis.specialisation_score,
-        "transferability_score": analysis.transferability_score,
-        "market_demand_score": analysis.market_demand_score,
-        "rarity_score": analysis.rarity_score,
-        "automation_risk_score": analysis.automation_risk_score,
-        "top_adjacent_roles": analysis.top_adjacent_roles,
+        "summary": analysis.summary,
+        "career_track": analysis.career_track,
+        "legacy_scores": legacy_scores,
+        "legacy_analysis": legacy_analysis,
         "extraction_status": meta.extraction_status,
         "extraction_notes": meta.notes_for_user,
-        "raw_json": json.loads(payload.model_dump_json()),
         "_embedding_text": text,
     }
 
 
-def _insert_posting(payload: JobPostingImport) -> int:
+def _insert_posting(payload: JobPostingImport) -> str:
     skills = [s.model_dump() for s in payload.skills]
     with db_cursor() as cur:
         columns = posting_columns(cur, payload)

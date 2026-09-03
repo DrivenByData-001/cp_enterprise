@@ -2,8 +2,8 @@ import numpy as np
 from fastapi import APIRouter
 from sklearn.decomposition import PCA
 
-from ..db import db_cursor
-from ..embeddings import get_embedding, get_embeddings
+from ..db import db_cursor, instance_type_to_app_kind
+from ..embeddings import ensure_profile_embedding, get_embeddings
 
 router = APIRouter(prefix="/api/space", tags=["space"])
 
@@ -12,19 +12,15 @@ router = APIRouter(prefix="/api/space", tags=["space"])
 def get_space():
     with db_cursor() as cur:
         cur.execute(
-            "SELECT ri.id, ri.title, ri.organisation, ri.career_track, ri.kind, lra.is_plausible "
-            "FROM jobber.role_instance ri "
-            "LEFT JOIN jobber.legacy_role_analysis lra ON lra.role_instance_id = ri.id"
+            "SELECT id, title, organisation, career_track, instance_type, target_basis, "
+            "(legacy_analysis->>'is_plausible')::boolean AS is_plausible "
+            "FROM jobber.role_instance"
         )
-        all_roles = cur.fetchall()
+        all_roles = [dict(r, id=str(r["id"])) for r in cur.fetchall()]
         vec_by_id = get_embeddings(cur, "role_instance", [r["id"] for r in all_roles])
         roles = [r for r in all_roles if r["id"] in vec_by_id]
 
-        cur.execute(
-            "SELECT id FROM jobber.profile_snapshots WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1"
-        )
-        prow = cur.fetchone()
-        profile_vec = get_embedding(cur, "profile_snapshot", prow["id"]) if prow else []
+        _, profile_vec = ensure_profile_embedding(cur)
 
     vectors = [vec_by_id[r["id"]] for r in roles]
     if profile_vec:
@@ -47,8 +43,8 @@ def get_space():
                 "title": role["title"],
                 "organisation": role["organisation"],
                 "career_track": role["career_track"],
-                "node_type": role["kind"],
-                "is_plausible": bool(role["is_plausible"]) if role["is_plausible"] is not None else None,
+                "node_type": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
+                "is_plausible": role["is_plausible"],
                 "x": float(x),
                 "y": float(y),
                 "z": float(z),

@@ -11,7 +11,7 @@ const BASIS_LABEL: Record<string, string> = {
 
 export default function RoleRequirements() {
   const { id } = useParams()
-  const roleId = Number(id)
+  const roleId = id ?? ''
   const [claims, setClaims] = useState<RequirementClaim[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -42,7 +42,7 @@ export default function RoleRequirements() {
     }
   }
 
-  const review = async (claimId: number, action: 'accept' | 'reject') => {
+  const review = async (claimId: string, action: 'accept' | 'reject') => {
     await api.reviewRequirement(roleId, claimId, action)
     await reload()
   }

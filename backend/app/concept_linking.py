@@ -10,6 +10,11 @@ AI-adjudicated cascade is a separate, explicit call, not folded in here.
 Kept out of db.py deliberately, so db.py doesn't acquire a module-load-time
 dependency on embeddings.py (today routes/roles.py and routes/targets.py, plus
 app/extraction.py, import it).
+
+Every concept/proposal/vocabulary-version id here is a UUID, returned as a
+plain `str` (psycopg hands back `uuid.UUID` objects natively; converting at
+this boundary means the rest of the app only ever compares/keys on strings —
+see docs/14 §7 for why that consistency matters).
 """
 
 import re
@@ -25,7 +30,7 @@ def normalize_name(raw: str) -> str:
     return re.sub(r"\s+", " ", (raw or "").strip()).casefold()
 
 
-def exact_match_concept_id(cur, normalized_name: str) -> int | None:
+def exact_match_concept_id(cur, normalized_name: str) -> str | None:
     """§7.3 step 1: case-folded match against active concept.canonical_name /
     concept_alias.alias. Cheap enough to call inline on every skill insert."""
     if not normalized_name:
@@ -36,7 +41,7 @@ def exact_match_concept_id(cur, normalized_name: str) -> int | None:
     )
     row = cur.fetchone()
     if row:
-        return row["id"]
+        return str(row["id"])
     cur.execute(
         """
         SELECT c.id FROM jobber.concept c
@@ -46,7 +51,7 @@ def exact_match_concept_id(cur, normalized_name: str) -> int | None:
         (normalized_name,),
     )
     row = cur.fetchone()
-    return row["id"] if row else None
+    return str(row["id"]) if row else None
 
 
 def ensure_concept_embeddings(cur) -> int:
@@ -73,12 +78,12 @@ def ensure_concept_embeddings(cur) -> int:
         vec = embed_text(text)
         if not vec:
             continue
-        set_embedding(cur, "concept", row["id"], vec, model=model)
+        set_embedding(cur, "concept", str(row["id"]), vec, model=model)
         computed += 1
     return computed
 
 
-def nearest_concept(cur, surface_form: str, limit: int = 1) -> tuple[int, float] | None:
+def nearest_concept(cur, surface_form: str, limit: int = 1) -> tuple[str, float] | None:
     """§7.3 step 2: embed the surface form, pgvector cosine-distance search
     over active concepts' d_embedding rows. Returns the single best
     (concept_id, similarity) for concept_proposal.nearest_concept_id/
@@ -88,7 +93,7 @@ def nearest_concept(cur, surface_form: str, limit: int = 1) -> tuple[int, float]
     return results[0] if results else None
 
 
-def nearest_concepts(cur, surface_form: str, limit: int = 10, type_codes: list[str] | None = None) -> list[tuple[int, float]]:
+def nearest_concepts(cur, surface_form: str, limit: int = 10, type_codes: list[str] | None = None) -> list[tuple[str, float]]:
     """Top-`limit` active concepts nearest to `surface_form` by embedding
     cosine similarity, optionally restricted to a set of concept types. This
     is the candidate-retrieval half of §7.3's cascade; the adjudication half
@@ -111,7 +116,7 @@ def nearest_concepts(cur, surface_form: str, limit: int = 10, type_codes: list[s
         clauses.append("type_code = ANY(%s)")
         params.append(type_codes)
     cur.execute(f"SELECT id FROM jobber.concept WHERE {' AND '.join(clauses)}", params)
-    active_ids = [r["id"] for r in cur.fetchall()]
+    active_ids = [str(r["id"]) for r in cur.fetchall()]
     if not active_ids:
         return []
 
@@ -121,32 +126,32 @@ def nearest_concepts(cur, surface_form: str, limit: int = 10, type_codes: list[s
 def run_pass_b(cur) -> dict:
     """The concrete Phase 1 implementation of "Pass B over the posting
     corpus" (docs/11 §7.1, scoped per the Phase 1 build notes in §11):
-    operates on role_skill_observation.name rather than fresh document-text
-    extraction. For every unresolved skill row: exact match auto-resolves it;
-    otherwise it joins a concept_proposal grouped by normalized surface form,
-    carrying a nearest-concept suggestion. Safe to re-run repeatedly. Takes a
-    cursor (not a connection) — callers control the transaction, consistent
-    with the rest of this Postgres port."""
+    operates on role_skill_observation.surface_form rather than fresh
+    document-text extraction. For every unresolved skill row: exact match
+    auto-resolves it; otherwise it joins a concept_proposal grouped by
+    normalized surface form, carrying a nearest-concept suggestion. Safe to
+    re-run repeatedly. Takes a cursor (not a connection) — callers control
+    the transaction, consistent with the rest of this Postgres port."""
     ensure_concept_embeddings(cur)
 
-    cur.execute("SELECT id, name FROM jobber.role_skill_observation WHERE resolved_concept_id IS NULL")
+    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
     unresolved = cur.fetchall()
 
     auto_resolved = 0
-    surface_forms: dict[str, list[int]] = {}
+    surface_forms: dict[str, list[str]] = {}
     for row in unresolved:
-        normalized = normalize_name(row["name"])
+        normalized = normalize_name(row["surface_form"])
         if not normalized:
             continue
         concept_id = exact_match_concept_id(cur, normalized)
         if concept_id is not None:
             cur.execute(
-                "UPDATE jobber.role_skill_observation SET resolved_concept_id = %s WHERE id = %s",
+                "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = %s",
                 (concept_id, row["id"]),
             )
             auto_resolved += 1
         else:
-            surface_forms.setdefault(normalized, []).append(row["id"])
+            surface_forms.setdefault(normalized, []).append(str(row["id"]))
 
     proposals_created = proposals_updated = 0
     for normalized, ids in surface_forms.items():
@@ -181,22 +186,26 @@ def run_pass_b(cur) -> dict:
     }
 
 
-def get_or_create_current_vocabulary_version(cur, note: str | None = None) -> int:
+def get_or_create_current_vocabulary_version(cur, note: str | None = None) -> str:
     """A real, non-fabricated vocabulary_version_id for extraction_run to
     reference (brief §9): versioned by *change* in active concept count, not
     by every single extraction run. If the current active-concept count
     matches the most recent version's, reuse it; otherwise record a new one.
+    Ordered by `created_at`, not `id` — vocabulary_version.id is a random
+    UUID (gen_random_uuid()), which carries no chronological information at
+    all, unlike the old auto-incrementing integer id this logic was written
+    against originally.
     """
     cur.execute("SELECT COUNT(*) AS n FROM jobber.concept WHERE status = 'active'")
     current_count = cur.fetchone()["n"]
 
-    cur.execute("SELECT id, concept_count FROM jobber.vocabulary_version ORDER BY id DESC LIMIT 1")
+    cur.execute("SELECT id, concept_count FROM jobber.vocabulary_version ORDER BY created_at DESC LIMIT 1")
     latest = cur.fetchone()
     if latest and latest["concept_count"] == current_count:
-        return latest["id"]
+        return str(latest["id"])
 
     cur.execute(
         "INSERT INTO jobber.vocabulary_version (created_at, concept_count, note) VALUES (%s, %s, %s) RETURNING id",
         (datetime.now(timezone.utc), current_count, note),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])

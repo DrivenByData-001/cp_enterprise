@@ -15,14 +15,15 @@ operations. `_reset_data` (autouse, function-scoped) truncates every jobber
 table except the seeded vocabulary/reference tables before each test, which
 is simpler and no less correct against a real Postgres.
 
-A minimal `profile360` schema (matching the Phase 2 brief's table names,
-`claims`/`capabilities` only) is created in the same throwaway database, so
-profile360-mapping tests exercise real cross-schema SQL — including the
-migration's defensive FK-to-profile360 logic — without ever touching the
-real profile360 schema, whose actual shape this build has never seen (docs/14
-§5). It asserts nothing about the real schema; it exists only so the mapping
-code under test has *something* to satisfy `information_schema` introspection
-and a real foreign key against.
+Since the Phase 2 production-schema reconciliation pass, the throwaway
+database is bootstrapped with `backend/scripts/local_baseline.sql` before
+migrations run — the same stand-in for the live pre-Phase-2 `jobber` baseline
+(and a minimal `profile360` stub) that a from-scratch local dev setup uses
+(see that file's header and README). This means every test run is itself a
+live proof that all Phase 2 migrations apply cleanly on top of the confirmed
+production baseline shape — `test_migration_compatibility.py` asserts this
+explicitly, plus that migrations refuse to run at all against a database
+that never got that baseline (0001's preflight guard).
 """
 
 import sys
@@ -39,6 +40,9 @@ from app import db as db_module  # noqa: E402
 from app import embeddings  # noqa: E402
 from app.config import test_database_url  # noqa: E402
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+LOCAL_BASELINE_SQL = (BACKEND_DIR / "scripts" / "local_baseline.sql").read_text(encoding="utf-8")
+
 
 def _with_dbname(url: str, dbname: str) -> str:
     parts = urlsplit(url)
@@ -53,28 +57,14 @@ def _pg_available(admin_url: str) -> bool:
         return False
 
 
-_FAKE_PROFILE360_SCHEMA = """
-CREATE SCHEMA IF NOT EXISTS profile360;
-
-CREATE TABLE IF NOT EXISTS profile360.claims (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    claim_text TEXT NOT NULL,
-    basis TEXT NOT NULL DEFAULT 'stated',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS profile360.capabilities (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    depth TEXT NOT NULL DEFAULT 'applied',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-"""
-
 # Tables truncated between tests. Seed/reference tables (concept_type,
 # concept_edge_rule, preference_dimension) and migration_history are
 # deliberately excluded — they should persist exactly as a real deployment's
-# would.
+# would. This list is the full set of non-seed jobber tables that exist after
+# local_baseline.sql + all of migrations/*.sql have applied (docs/14 §3/§4) —
+# there is no more jobber.person/episode/episode_document/profile_snapshots or
+# legacy_role_analysis; that data now lives directly on role_instance or in
+# profile360, per the reconciliation pass.
 _RESETTABLE_JOBBER_TABLES = [
     "person_capability_assertion",
     "preference_observation",
@@ -87,19 +77,19 @@ _RESETTABLE_JOBBER_TABLES = [
     "concept_proposal",
     "concept_edge",
     "concept_xref",
-    "concept_alias",
     "capability_detail",
     "role_archetype_detail",
-    "legacy_role_analysis",
+    "concept_alias",
     "role_skill_observation",
     "role_instance",
-    "episode_document",
-    "episode",
-    "profile_snapshots",
-    "person",
     "concept",
     "document",
 ]
+
+# The profile360 stub tables local_baseline.sql provides (claims/capabilities
+# with the confirmed live shape, episodes/snapshots with a minimal guessed
+# one) — reset between tests same as jobber's own tables.
+_RESETTABLE_PROFILE360_TABLES = ["claims", "capabilities", "episodes", "snapshots"]
 
 
 @pytest.fixture(scope="session")
@@ -116,8 +106,7 @@ def postgres_test_db():
     try:
         with psycopg.connect(db_url, autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")  # gen_random_uuid() for the fake profile360 tables
-            conn.execute(_FAKE_PROFILE360_SCHEMA)
+            conn.execute(LOCAL_BASELINE_SQL)
         yield db_url
     finally:
         db_module.reset_pool()
@@ -147,7 +136,7 @@ def monkeypatch_session():
 def _reset_data(_configure_app_database):
     with db_module.db_cursor() as cur:
         cur.execute("TRUNCATE TABLE jobber." + ", jobber.".join(_RESETTABLE_JOBBER_TABLES) + " RESTART IDENTITY CASCADE")
-        cur.execute("TRUNCATE TABLE profile360.claims, profile360.capabilities RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE profile360." + ", profile360.".join(_RESETTABLE_PROFILE360_TABLES) + " RESTART IDENTITY CASCADE")
     yield
 
 
@@ -181,7 +170,6 @@ def _stub_embeddings(monkeypatch):
     monkeypatch.setattr(embeddings, "embed_text", _fake_embed_text)
     for target in (
         "app.concept_linking.embed_text",
-        "app.routes.profile.embed_text",
         "app.routes.import_routes.embed_text",
         "app.routes.targets.embed_text",
         "app.routes.role_instances.embed_text",

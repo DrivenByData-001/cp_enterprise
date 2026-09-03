@@ -43,17 +43,18 @@ function RoleStar({
   texture: THREE.Texture
   onHover: (h: HoverInfo) => void
   onLeave: () => void
-  onClick: (id: number) => void
+  onClick: (id: string) => void
 }) {
   const ref = useRef<THREE.Sprite>(null)
   const isTarget = point.node_type !== 'posting'
   const color = isTarget ? nodeAccentColor(point.node_type, point.is_plausible) : trackStarColor(point.career_track)
   const baseScale = isTarget ? 1.5 : 0.9
+  const phaseSeed = point.x + point.y + point.z
 
   useFrame(({ clock }) => {
     if (!ref.current) return
     if (isTarget) {
-      const pulse = 1 + Math.sin(clock.elapsedTime * 2 + point.id) * 0.15
+      const pulse = 1 + Math.sin(clock.elapsedTime * 2 + phaseSeed) * 0.15
       ref.current.scale.setScalar(baseScale * pulse)
     }
   })
@@ -140,7 +141,7 @@ function Scene({
   autoRotate: boolean
   onHover: (h: HoverInfo) => void
   onLeave: () => void
-  onClick: (id: number) => void
+  onClick: (id: string) => void
 }) {
   const texture = useStarTexture()
 

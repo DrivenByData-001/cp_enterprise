@@ -83,9 +83,10 @@ one from a missing key — is recorded, never silently swallowed.
 
 ## Using it
 
-1. **Profile** — write a short narrative of where you are right now. Save it;
-   it gets embedded and re-embedded every time you update it (each save keeps
-   a timestamped snapshot).
+1. **Profile** — a read-only view of your current profile360 snapshot (the
+   narrative itself is authored in profile360's own tool, not here) and its
+   history. It gets embedded on demand for every similarity computation
+   elsewhere in this app (Dashboard/Space/Targets).
 2. **Import** — two independent paths, both fine to use:
    - *Source-aware ingest* — paste raw text (or upload a selectable-text PDF)
      to capture it as an immutable document + `role_instance`, then extract
@@ -118,21 +119,20 @@ one from a missing key — is recorded, never silently swallowed.
 10. **Preferences** — record what you'd enjoy, separately from what you can
     do, with its own evidence basis (observed behaviour ranks above a
     psychometric/typology hypothesis, never the reverse).
-11. **History** — your own career as discrete episodes, entered by hand, with
-    a derived timeline. profile360 is now the authoritative person-side
-    evidence store; this page remains for the local, hand-entered timeline
-    it has always shown.
+11. **History** — a read-only browse of your career episodes from profile360,
+    the authoritative person-side evidence store. There is no more hand-entry
+    or timeline chart here; authoring episodes is profile360's own tool's job.
 
 ## Schema
 
 See `docs/14-phase2-postgres-architecture.md` for the full `jobber` schema
 (role_instance, document, concept vocabulary, requirement_claim,
-extraction_run, profile360 mapping tables, preferences) and exactly what is
-reconstructed-from-design vs. observed from a live database (this build had no
-credentials for the production Supabase project — read that doc before
-pointing this at it). `docs/11-capability-model-design.md` is the original
-design document the schema implements; `docs/15-security-and-rls.md` covers
-the backend/RLS security model.
+extraction_run, profile360 mapping tables, preferences), confirmed by direct
+live inspection of the production Supabase project (this build itself still
+has no credential for it — read that doc's §0/§2 before pointing this at it).
+`docs/11-capability-model-design.md` is the original design document the
+schema implements; `docs/15-security-and-rls.md` covers the backend/RLS
+security model.
 
 ## Deliberately out of scope for now
 
@@ -178,9 +178,13 @@ Then set `DATABASE_URL` in the shell where you start the backend (copy
 `.env.example` to `.env`, or export it directly). This works identically on
 Windows/macOS/Linux — `psycopg[binary]` ships prebuilt wheels, so there is
 nothing to compile, and no local Postgres server is required: point
-`DATABASE_URL` at your Supabase project's Postgres connection string (or any
-Postgres you control) and the backend applies its own schema migrations on
-startup.
+`DATABASE_URL` at your Supabase project's Postgres connection string and the
+backend applies its own schema migrations on startup. If you'd rather point it
+at a from-scratch local Postgres instead (no existing `jobber`/`profile360`
+data), run `psql "$DATABASE_URL" -f backend/scripts/local_baseline.sql` once
+first — the migrations assert a pre-existing baseline rather than creating it,
+since creating it would be the wrong thing to do against a real database that
+already has it (see `docs/14` §7).
 
 ```powershell
 # PowerShell

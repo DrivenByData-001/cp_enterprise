@@ -3,7 +3,10 @@ against Postgres instead of SQLite (brief §14/§20.2: "the existing 23
 migrated roles remain usable" — this is the behavioural half of that
 guarantee; docs/14 covers the schema-shape half). Nothing here is new
 behaviour — it is the same flows the SQLite-era app exposed, proven against
-the new persistence layer.
+the new persistence layer, except where the Phase 2 production-schema
+reconciliation pass genuinely removed a flow (profile/episode writes —
+profile360 is authoritative and read-only from this app now, docs/14 §9) —
+those are covered as read-only instead of dropped outright.
 """
 
 from app import concept_linking, db
@@ -38,6 +41,16 @@ LEGACY_TARGET = {
 }
 
 
+def _seed_profile_snapshot(narrative_text: str) -> None:
+    """profile360 is authoritative for the current profile narrative now
+    (docs/14 §9) — there is no more POST /api/profile to seed one through the
+    app's own API, so tests that need a non-empty "current profile" for
+    similarity computations write directly to the profile360 stub
+    local_baseline.sql provides."""
+    with db.db_cursor() as cur:
+        cur.execute("INSERT INTO profile360.snapshots (narrative_text) VALUES (%s)", (narrative_text,))
+
+
 def test_legacy_json_import_and_role_listing(client):
     resp = client.post("/api/import", json=LEGACY_POSTING)
     assert resp.status_code == 200
@@ -56,7 +69,7 @@ def test_legacy_json_import_and_role_listing(client):
 
 def test_role_filtering_by_career_track_and_min_similarity(client):
     client.post("/api/import", json=LEGACY_POSTING)
-    client.post("/api/profile", json={"narrative_text": "An actuary with reserving experience."})
+    _seed_profile_snapshot("An actuary with reserving experience.")
 
     by_track = client.get("/api/roles", params={"career_track": "actuarial"}).json()
     assert len(by_track) == 1
@@ -84,7 +97,7 @@ def test_delete_role(client):
 
 def test_target_import_listing_and_path(client):
     client.post("/api/import", json=LEGACY_POSTING)  # a real posting to serve as a stepping stone
-    client.post("/api/profile", json={"narrative_text": "An actuary with reserving experience."})
+    _seed_profile_snapshot("An actuary with reserving experience.")
 
     target_resp = client.post("/api/targets", json=LEGACY_TARGET)
     assert target_resp.status_code == 200
@@ -105,34 +118,24 @@ def test_update_target_rejects_editing_a_posting_via_target_route(client):
     assert resp.status_code == 404 or resp.status_code == 400
 
 
-def test_episodes_crud_and_timeline(client):
-    create = client.post(
-        "/api/episodes",
-        json={"kind": "employment", "title": "Actuarial Analyst", "organisation": "Aviva", "start_date": "2019-03", "end_date": "2022-08"},
-    )
-    assert create.status_code == 200
-    episode_id = create.json()["id"]
+def test_episodes_are_read_only_from_profile360(client):
+    """jobber.episode does not exist — episodes are profile360's own data,
+    browsed read-only (docs/14 §9). Seed profile360's stub table directly
+    since there is no ingestion path for it in this app."""
+    with db.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO profile360.episodes (title) VALUES (%s) RETURNING id",
+            ("Actuarial Analyst at Aviva",),
+        )
+        episode_id = str(cur.fetchone()["id"])
 
-    timeline = client.get("/api/episodes/timeline").json()
-    assert timeline["total_span_years"] > 3
-    assert timeline["episodes"][0]["duration_years"] > 3
+    episodes = client.get("/api/episodes").json()
+    assert any(e["id"] == episode_id for e in episodes)
 
-    update = client.put(
-        f"/api/episodes/{episode_id}",
-        json={"kind": "employment", "title": "Senior Actuarial Analyst", "organisation": "Aviva", "start_date": "2019-03", "end_date": "2022-08"},
-    )
-    assert update.status_code == 200
-    assert client.get(f"/api/episodes/{episode_id}").json()["title"] == "Senior Actuarial Analyst"
+    episode = client.get(f"/api/episodes/{episode_id}").json()
+    assert episode["_display"] == "Actuarial Analyst at Aviva"
 
-    assert client.delete(f"/api/episodes/{episode_id}").status_code == 200
-
-
-def test_nested_episode_blocks_parent_deletion(client):
-    parent_id = client.post("/api/episodes", json={"kind": "employment", "title": "Job", "start_date": "2019"}).json()["id"]
-    client.post("/api/episodes", json={"kind": "project", "title": "Project", "start_date": "2020", "parent_episode_id": parent_id})
-
-    resp = client.delete(f"/api/episodes/{parent_id}")
-    assert resp.status_code == 400
+    assert client.get("/api/episodes/00000000-0000-0000-0000-000000000000").status_code == 404
 
 
 def test_concept_crud_and_proposal_review_workflow(client):
@@ -162,29 +165,31 @@ def test_concept_crud_and_proposal_review_workflow(client):
     assert any(s["resolved_concept_id"] is not None for s in role["skills"] if s["name"].lower() == surface_form)
 
 
-def test_profile_update_and_history(client):
-    first = client.post("/api/profile", json={"narrative_text": "Version one."})
-    assert first.status_code == 200
-    second = client.post("/api/profile", json={"narrative_text": "Version two."})
-    assert second.status_code == 200
+def test_profile_reads_current_snapshot_and_history_from_profile360(client):
+    """jobber.profile_snapshots does not exist — the narrative lives only in
+    profile360, authored by its own tool; this app only ever reads it
+    (docs/14 §9). Seed the profile360 stub table directly, in two separate
+    transactions so their created_at values are actually ordered, since
+    that's the recency column get_current_snapshot sorts by."""
+    _seed_profile_snapshot("Version one.")
+    _seed_profile_snapshot("Version two.")
 
     current = client.get("/api/profile").json()
-    assert current["narrative_text"] == "Version two."
+    assert current["_display"] == "Version two."
 
     history = client.get("/api/profile/history").json()
     assert len(history) == 2
-    assert history[0]["is_current"] is True
+    assert {h["_display"] for h in history} == {"Version one.", "Version two."}
 
 
-def test_profile_rejects_blank_narrative(client):
-    resp = client.post("/api/profile", json={"narrative_text": "   "})
-    assert resp.status_code == 400
+def test_profile_returns_none_when_no_snapshot_exists(client):
+    assert client.get("/api/profile").json() is None
 
 
 def test_space_view(client):
     client.post("/api/import", json=LEGACY_POSTING)
     client.post("/api/targets", json=LEGACY_TARGET)
-    client.post("/api/profile", json={"narrative_text": "An actuary."})
+    _seed_profile_snapshot("An actuary.")
 
     space = client.get("/api/space").json()
     assert len(space["points"]) == 2

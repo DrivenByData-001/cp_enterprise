@@ -1,8 +1,7 @@
-"""profile360 claim/capability mapping (brief §7/§8/§16), against the fake
-profile360.claims/capabilities schema conftest.py creates in the throwaway
-test database — see conftest.py's module docstring for why this is a
-reasonable test double despite this build never having seen the real schema.
-"""
+"""profile360 claim/capability mapping (brief §7/§8/§16), against the
+profile360.claims/capabilities stub backend/scripts/local_baseline.sql
+creates in the throwaway test database — matching the confirmed live column
+shapes (docs/14 §5), not a loosely-typed test double."""
 
 import psycopg
 import pytest
@@ -12,10 +11,10 @@ from app.models import ClaimMappingResult
 from app.profile360_reader import Profile360UnavailableError, display_text, get_claim, list_claims
 
 
-def _insert_fake_claim(cur, claim_text: str, basis: str = "stated") -> str:
+def _insert_fake_claim(cur, claim_text: str, evidence_class: str = "stated") -> str:
     cur.execute(
-        "INSERT INTO profile360.claims (claim_text, basis) VALUES (%s, %s) RETURNING id",
-        (claim_text, basis),
+        "INSERT INTO profile360.claims (claim_text, evidence_class) VALUES (%s, %s) RETURNING id",
+        (claim_text, evidence_class),
     )
     return str(cur.fetchone()["id"])
 
@@ -25,13 +24,13 @@ def _insert_fake_capability(cur, name: str) -> str:
     return str(cur.fetchone()["id"])
 
 
-def _active_concept(cur, name: str, type_code: str = "tool") -> int:
+def _active_concept(cur, name: str, type_code: str = "tool") -> str:
     cur.execute(
         "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
         "VALUES (%s, %s, 'active', 'curator', now()) RETURNING id",
         (type_code, name),
     )
-    return cur.fetchone()["id"]
+    return str(cur.fetchone()["id"])
 
 
 def _fake_run(output, task, prompt_name):
@@ -70,11 +69,12 @@ def test_reader_rejects_non_allowlisted_table(client):
             fetch_rows(cur, "some_other_table")
 
 
-def test_defensive_fk_actually_attached_against_a_conforming_schema(client):
-    """conftest.py creates profile360.claims *before* migrations run, so the
-    migration's DO-block FK attempt (backend/migrations/0003) should have
-    succeeded for real — verified behaviourally: a bogus, non-existent
-    profile360_claim_id must be rejected at the database level."""
+def test_profile360_claim_mapping_fk_is_real_and_enforced(client):
+    """local_baseline.sql creates profile360.claims *before* migrations run,
+    so 0004_profile360_mapping.sql's real (not defensive/best-effort) FK to
+    profile360.claims(id) applies for real — verified behaviourally: a
+    bogus, non-existent profile360_claim_id must be rejected at the
+    database level."""
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         with db.db_cursor() as cur:
             concept_id = _active_concept(cur, "Python")
@@ -104,7 +104,7 @@ def test_map_profile360_claim_creates_unreviewed_mapping(client, monkeypatch):
         )
         mapping = cur.fetchone()
 
-    assert mapping["jobber_concept_id"] == python_id
+    assert str(mapping["jobber_concept_id"]) == python_id
     assert mapping["mapping_basis"] == "ai_suggested"
     assert mapping["review_status"] == "unreviewed"  # AI proposals are never auto-accepted (brief §7)
 

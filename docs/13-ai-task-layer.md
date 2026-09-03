@@ -99,7 +99,7 @@ See the README for local setup.
 ## 4. Relationship to `extraction_run` — done in Phase 2
 
 Everything this section originally deferred is now built. `role_instance` and
-per-posting `document` rows exist (`backend/app/db.py::get_or_create_document`,
+per-posting `document` rows exist (`backend/app/db.py::create_document`,
 called from `import_routes.py`/`role_instances.py` before the role is
 created), and `extraction_run` is written for real —
 `backend/app/extraction.py::_record_extraction_run` — for every AI task,
@@ -114,8 +114,10 @@ in `docs/11-capability-model-design.md`'s Phase 2 build notes (§11):
   original `NOT NULL` had no way to express that honestly.
 - **`import_posting_native` itself still does not write an `extraction_run`
   row** — it predates the capability model's `JobPostingImport` shape (§5
-  below) and stays a `legacy_role_analysis`-only path, matching §14 of the
-  Phase 2 brief ("old flat fields... are not authoritative Phase 2
+  below) and stays a legacy-scores/legacy-analysis-only path (packed into
+  `role_instance.legacy_scores`/`legacy_analysis` JSONB — docs/14 §3, not a
+  separate table), matching §14 of the Phase 2 brief ("old flat fields... are
+  not authoritative Phase 2
   outputs"). The four tasks that *do* write `extraction_run` are the new
   closed-vocabulary ones — see §7 below — reached via the separate
   "source-aware ingest" path (`POST /api/role-instances/ingest`) plus
@@ -133,9 +135,9 @@ itself still never touches storage, `extraction.py` does that on top of it).
 it asks for a flat `skills[]` array with free-text `category`/`importance`,
 plus a grab-bag of speculative "analysis" scores
 (`seniority_score`, `rarity_score`, `automation_risk_score`, ...). These are
-exactly the `legacy_role_analysis` fields `docs/11-capability-model-design.md`
-§10.2 says have "no provenance and no way to recompute them" and plans to
-retire. Per the task brief this integration does not attempt to fix that —
+exactly the fields `role_instance.legacy_scores`/`legacy_analysis` now hold
+(docs/14 §3) that `docs/11-capability-model-design.md` §10.2 says have "no
+provenance and no way to recompute them" and plans to retire. Per the task brief this integration does not attempt to fix that —
 `JobPostingImport` is used unchanged so the native path and the legacy JSON
 path stay interchangeable. It reproduces the same non-canonical vocabulary
 Phase 1 already treats as raw `concept_proposal` input (§10.1), which is the
@@ -187,7 +189,7 @@ Every one of the four validates its own hard rule before persisting
 anything: `requirement_extract`'s spans are checked with
 `span_validation.validate_span` (never trusted on the model's say-so, and
 downgraded to `basis='inferred'` with no span at all when the source
-document's provenance isn't `original_capture`); the two `profile360_*_map`
+document's `provenance_quality` isn't `'original'`); the two `profile360_*_map`
 tasks may only choose from the candidate list they were shown, verified by
 looking the chosen name up in that same list before writing a mapping row —
 a hallucinated name that doesn't match any candidate is treated as a

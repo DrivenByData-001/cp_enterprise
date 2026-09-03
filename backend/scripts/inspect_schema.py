@@ -1,13 +1,16 @@
 """Dump the actual `jobber` and `profile360` schemas from a live Postgres
-database, for reconciling against the reconstructions in
-`backend/migrations/` and `docs/14-phase2-postgres-architecture.md` §3/§5.
+database, for reconciling against what `backend/migrations/` and
+`docs/14-phase2-postgres-architecture.md` §3/§5 now assert as the confirmed
+production shape (reconciled against a live inspection on 2026-09-03).
 
 This build has never run this script against the real `open-brain` Supabase
-project (no credentials in this environment) — every migration is written to
-be additive/idempotent specifically so it is safe to apply either way, but
-column-level mismatches (a differently-named or differently-typed column
-already present on an already-migrated table) can only be found by actually
-looking, which is what this script is for.
+project itself (no credentials in this environment) — the confirmed facts in
+docs/14 came from a separate reviewer who did have access. Every migration is
+still written to be additive/idempotent so it is safe to apply either way,
+and `0001_live_schema_preflight.sql` asserts the load-bearing facts before
+anything else runs — but a handful of columns (`profile360.episodes`/
+`snapshots` beyond `id`) remain unconfirmed, and any drift since 2026-09-03
+can only be found by actually looking, which is what this script is for.
 
 Usage:
     cd backend && python3 scripts/inspect_schema.py

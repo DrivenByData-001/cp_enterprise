@@ -61,7 +61,7 @@ function MappingQueue({ kind }: { kind: Kind }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind])
 
-  const review = async (id: number, action: 'accept' | 'reject') => {
+  const review = async (id: string, action: 'accept' | 'reject') => {
     await api.reviewProfile360Mapping(id, kind, action)
     await reload()
   }
