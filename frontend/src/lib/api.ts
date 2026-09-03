@@ -189,6 +189,115 @@ export type ProposalStats = {
   proposals_per_document: number | null
 }
 
+export type RequirementClaim = {
+  id: number
+  requirement_type: 'required' | 'preferred' | 'contextual'
+  importance: number | null
+  basis: 'stated' | 'implied' | 'inferred' | 'user_asserted'
+  evidence_span: string | null
+  review_status: 'unreviewed' | 'accepted' | 'rejected' | 'corrected'
+  created_at: string
+  extraction_run_id: number | null
+  concept_id: number
+  canonical_name: string
+  type_code: string
+  document_id: number | null
+  document_title: string | null
+  document_provenance: string | null
+}
+
+export type ExtractionSummary = {
+  status: 'ok' | 'partial' | 'failed'
+  extraction_run_id: number
+  adjudication_run_id?: number | null
+  claims_created?: number
+  proposals_created?: number
+  proposals_updated?: number
+  rejected_span_count?: number
+  error?: string
+}
+
+export type IngestResult = { id: number; document_id: number; document_reused: boolean; status: string }
+
+export type Profile360Row = { [key: string]: unknown; _display: string }
+
+export type MappingReviewStatus = 'unreviewed' | 'accepted' | 'rejected'
+
+export type Profile360Mapping = {
+  id: number
+  profile360_id: string
+  mapping_basis: 'exact_match' | 'ai_suggested' | 'curator_asserted'
+  review_status: MappingReviewStatus
+  reviewed_at: string | null
+  created_at: string
+  extraction_run_id: number | null
+  concept_id: number
+  canonical_name: string
+  type_code: string
+  _display: string | null
+}
+
+export type MappingAttemptResult = {
+  status: 'ok' | 'failed'
+  extraction_run_id: number
+  mapped?: boolean
+  mapping_id?: number
+  concept_id?: number
+  error?: string
+}
+
+export type ComparisonStatus = 'evidenced' | 'partial' | 'user_asserted' | 'not_found'
+
+export type ComparisonItem = {
+  concept: { id: number; canonical_name: string; type_code: string }
+  status: ComparisonStatus
+  role_side: {
+    requirement_claim_id: number
+    requirement_type: string
+    basis: string
+    review_status: string
+    evidence_span: string | null
+    document: { id: number; title: string | null; provenance: string; url: string | null } | null
+  }
+  person_side: {
+    mappings: { id: number; profile360_id: string; review_status: string; mapping_basis: string; mapping_kind: string; display: string | null }[]
+    assertion: { id: number; note: string | null; created_at: string } | null
+  }
+}
+
+export type ComparisonResult = {
+  role: { id: number; title: string; kind: string }
+  items: ComparisonItem[]
+  counts: Record<ComparisonStatus, number>
+}
+
+export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
+
+export type PreferenceObservation = {
+  id: number
+  dimension_code: string
+  direction: 'toward' | 'away' | 'neutral'
+  strength: number
+  basis: 'observed_behavior' | 'user_stated' | 'repeated_episode_evidence' | 'validated_psychometric' | 'typology_hypothesis'
+  source_label: string | null
+  episode_id: number | null
+  confidence: 'low' | 'medium' | 'high'
+  occurred_at: string | null
+  recorded_at: string
+  note: string | null
+}
+
+export type PreferenceObservationInput = {
+  dimension_code: string
+  direction: 'toward' | 'away' | 'neutral'
+  strength: number
+  basis: PreferenceObservation['basis']
+  source_label?: string | null
+  confidence?: 'low' | 'medium' | 'high'
+  occurred_at?: string | null
+  note?: string | null
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -270,4 +379,64 @@ export const api = {
       '/concepts/proposals/resolve',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+
+  // --- Phase 2: source-aware ingestion + requirement claims -----------------
+  ingestText: (payload: { text: string; kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null }) =>
+    req<IngestResult>('/role-instances/ingest', { method: 'POST', body: JSON.stringify(payload) }),
+  ingestPdf: (file: File, params: { kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null } = {}) => {
+    const form = new FormData()
+    form.append('file', file)
+    const qs = new URLSearchParams()
+    if (params.kind) qs.set('kind', params.kind)
+    if (params.title) qs.set('title', params.title)
+    if (params.organisation) qs.set('organisation', params.organisation)
+    if (params.source_url) qs.set('source_url', params.source_url)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return fetch(`/api/role-instances/ingest/pdf${suffix}`, { method: 'POST', body: form }).then(async (r) => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+      return r.json() as Promise<IngestResult>
+    })
+  },
+  extractRequirements: (roleId: number) =>
+    req<ExtractionSummary>(`/role-instances/${roleId}/extract-requirements`, { method: 'POST' }),
+  listRequirements: (roleId: number) => req<RequirementClaim[]>(`/role-instances/${roleId}/requirements`),
+  reviewRequirement: (roleId: number, claimId: number, action: 'accept' | 'reject') =>
+    req<{ id: number; review_status: string }>(`/role-instances/${roleId}/requirements/${claimId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+
+  // --- Phase 2: profile360 mapping review -----------------------------------
+  listProfile360Claims: (limit = 50, offset = 0) =>
+    req<Profile360Row[]>(`/profile360/claims?limit=${limit}&offset=${offset}`),
+  listProfile360Capabilities: (limit = 50, offset = 0) =>
+    req<Profile360Row[]>(`/profile360/capabilities?limit=${limit}&offset=${offset}`),
+  mapProfile360Claim: (claimId: string) =>
+    req<MappingAttemptResult>(`/profile360/claims/${encodeURIComponent(claimId)}/map`, { method: 'POST' }),
+  mapProfile360Capability: (capabilityId: string) =>
+    req<MappingAttemptResult>(`/profile360/capabilities/${encodeURIComponent(capabilityId)}/map`, { method: 'POST' }),
+  listProfile360Mappings: (kind: 'claim' | 'capability', reviewStatus?: MappingReviewStatus) => {
+    const qs = new URLSearchParams({ kind })
+    if (reviewStatus) qs.set('review_status', reviewStatus)
+    return req<Profile360Mapping[]>(`/profile360/mappings?${qs}`)
+  },
+  reviewProfile360Mapping: (mappingId: number, kind: 'claim' | 'capability', action: 'accept' | 'reject') =>
+    req<{ id: number; review_status: string }>(`/profile360/mappings/${mappingId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ kind, action }),
+    }),
+
+  // --- Phase 2: comparison ---------------------------------------------------
+  compareRole: (roleId: number) => req<ComparisonResult>(`/comparison/role/${roleId}`),
+  assertCapability: (concept_id: number, note?: string) =>
+    req<{ id: number; status: string }>('/comparison/assert', { method: 'POST', body: JSON.stringify({ concept_id, note }) }),
+  retractAssertion: (conceptId: number) =>
+    req<{ status: string }>(`/comparison/assert/${conceptId}`, { method: 'DELETE' }),
+
+  // --- Phase 2: preferences ---------------------------------------------------
+  listPreferenceDimensions: () => req<PreferenceDimension[]>('/preferences/dimensions'),
+  listPreferenceObservations: (dimensionCode?: string) =>
+    req<PreferenceObservation[]>(`/preferences${dimensionCode ? `?dimension_code=${encodeURIComponent(dimensionCode)}` : ''}`),
+  createPreferenceObservation: (payload: PreferenceObservationInput) =>
+    req<{ id: number; status: string }>('/preferences', { method: 'POST', body: JSON.stringify(payload) }),
 }

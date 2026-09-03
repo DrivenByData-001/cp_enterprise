@@ -4,6 +4,79 @@ import { api } from '../lib/api'
 
 type Result = { ok: boolean; message: string }
 
+function SourceAwareIngest() {
+  const [text, setText] = useState('')
+  const [title, setTitle] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [result, setResult] = useState<Result | null>(null)
+  const [busy, setBusy] = useState(false)
+  const pdfInput = useRef<HTMLInputElement>(null)
+  const navigate = useNavigate()
+
+  const goToRequirements = (id: number) => setTimeout(() => navigate(`/role-instances/${id}/requirements`), 500)
+
+  const submitText = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const res = await api.ingestText({ text, title: title.trim() || null, source_url: sourceUrl.trim() || null })
+      setResult({ ok: true, message: `Captured as document #${res.document_id}, role instance #${res.id}.` })
+      setText('')
+      setTitle('')
+      setSourceUrl('')
+      goToRequirements(res.id)
+    } catch (e) {
+      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitPdf = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    setBusy(true)
+    setResult(null)
+    try {
+      const res = await api.ingestPdf(files[0], { title: title.trim() || null, source_url: sourceUrl.trim() || null })
+      setResult({ ok: true, message: `Captured as document #${res.document_id}, role instance #${res.id}.` })
+      goToRequirements(res.id)
+    } catch (e) {
+      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+      if (pdfInput.current) pdfInput.current.value = ''
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Source-aware ingest → requirement claims</h3>
+      <p className="secondary" style={{ marginTop: 0, fontSize: 13 }}>
+        Captures the raw text as an immutable source document first, then lets you extract reviewable requirement
+        claims against the canonical vocabulary — separately, on the next page. Nothing here is auto-accepted.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional — derived from the text if blank)" />
+        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="Source URL (optional)" />
+      </div>
+      <textarea rows={10} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste raw posting text…" />
+      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button className="primary" onClick={submitText} disabled={busy || !text.trim()}>
+          {busy ? 'Capturing…' : 'Capture text'}
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>or</span>
+        <input ref={pdfInput} type="file" accept="application/pdf" onChange={(e) => submitPdf(e.target.files)} disabled={busy} />
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 6, marginBottom: 0 }}>
+        Selectable-text PDFs only for now — image-only/scanned PDFs need OCR, not yet supported.
+      </p>
+      {result && (
+        <p style={{ marginTop: 12, color: result.ok ? 'var(--good)' : 'var(--critical)' }}>{result.message}</p>
+      )}
+    </div>
+  )
+}
+
 export default function Import() {
   const [text, setText] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
@@ -61,8 +134,10 @@ export default function Import() {
         Paste the posting text and let the app extract and analyse it. The structured result is validated and stored directly.
       </p>
 
+      <SourceAwareIngest />
+
       <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI extraction</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI extraction (legacy flat fields)</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8, marginBottom: 8 }}>
           <input
             value={sourceUrl}

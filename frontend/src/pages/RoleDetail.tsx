@@ -303,6 +303,12 @@ export default function RoleDetail() {
           <span />
         )}
         <div style={{ display: 'flex', gap: 8 }}>
+          <Link to={`/role-instances/${role.id}/requirements`}>
+            <button>Requirements</button>
+          </Link>
+          <Link to={`/comparison/${role.id}`}>
+            <button>Compare</button>
+          </Link>
           <Link to={`/roles/${role.id}/edit`}>
             <button>Edit</button>
           </Link>
