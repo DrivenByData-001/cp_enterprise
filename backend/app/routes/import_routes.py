@@ -12,7 +12,7 @@ from ..ai import (
     run_json_task,
 )
 from ..db import create_document, db_cursor, upsert_role_instance
-from ..embeddings import embed_text, set_embedding
+from ..embeddings import embed_text, role_embedding_text, set_embedding
 from ..models import JobPostingImport
 
 router = APIRouter(prefix="/api/import", tags=["import"])
@@ -25,14 +25,19 @@ class NativePostingImport(BaseModel):
 
 
 def compose_role_text(job, analysis) -> str:
-    parts = [
-        job.title,
-        job.description,
-        job.requirements,
-        job.responsibilities,
-        analysis.key_skills_summary if analysis else None,
-    ]
-    return "\n\n".join(p for p in parts if p)
+    """Thin wrapper around the canonical `embeddings.role_embedding_text` —
+    kept as its own named function since callers here work with the
+    not-yet-stored `Job`/`Analysis` payload objects, not a stored row."""
+    return role_embedding_text(
+        {
+            "node_type": "posting",
+            "title": job.title,
+            "description": job.description,
+            "requirements": job.requirements,
+            "responsibilities": job.responsibilities,
+            "key_skills_summary": analysis.key_skills_summary if analysis else None,
+        }
+    )
 
 
 def posting_columns(cur, payload: JobPostingImport) -> dict:

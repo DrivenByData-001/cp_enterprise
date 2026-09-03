@@ -1,10 +1,61 @@
 # 16 — Phase 3: Capability Engine, Compositional Coverage, Structural Role Fit
 
-**Status:** implemented
+**Status:** engineering implementation complete (engine, schema, APIs, UI,
+tests, embedding-backfill fix); **the analytical Phase 4 gate — a real
+curated catalogue and a real hand-labelled capability-agreement sample —
+has not been attempted and is not passed.** These are two different
+questions with two different answers. See §0.1 immediately below before
+citing any number in this document.
 **Related:** `docs/11-capability-model-design.md` (original design; §3.1/§5.4/§9/§12.6
 are what this phase actually builds), `docs/14-phase2-postgres-architecture.md`
 (confirmed schema this phase reads), `docs/15-security-and-rls.md` (unchanged
 by this phase)
+
+---
+
+## 0.1 Gate status — read this before citing any metric from this document
+
+Phase 3 has **two separate gates**, and finishing the first does not finish
+the second:
+
+### Engineering merge gate — **passed**
+
+- Migrations are additive and safe (§14, `test_migration_compatibility.py`).
+- The capability engine is implemented and deterministic (§§1-9).
+- The catalogue/coverage/comparison APIs and UI are implemented (§§11-12).
+- The migrated-role embedding backfill regression is fixed (§18).
+- The evaluation *machinery* is implemented and self-tested (§13).
+- Tests are green: 182 passed, 0 failed, run twice against real Postgres 16
+  + pgvector (§15).
+- Documentation states every deviation and limitation honestly.
+
+This gate is about whether the software is correct, safe, and ready to
+merge — and it is.
+
+### Analytical Phase 4 gate — **not attempted, not passed**
+
+- A real curated capability catalogue (~100-150 capabilities, brief target)
+  has **not** been populated. Production count: **0**.
+- A real component graph has **not** been curated. Production count: **0**.
+- A meaningful hand-labelled capability-agreement sample (~20 judgments,
+  brief target) does **not** exist. §13's `n=5` figure is five
+  **illustrative, hand-authored demo judgments** created by this build to
+  prove the evaluation machinery computes correctly — it is not, and must
+  never be read as, a measurement of engine quality against real evidence.
+- Likewise §13's concept-linking F1 (`n=2`) is a machinery smoke test, not a
+  measurement of the Phase 2 concept-linking quality gate.
+- **Neither the ≥0.80 capability-agreement gate nor the ≥0.75 concept-
+  linking-F1 gate has been evaluated at production scale. Do not describe
+  either as passed.**
+
+This gate is about whether the *model* — the curated catalogue plus the
+engine's judgment against real evidence — has been shown to work well
+enough to build Phase 4's economics on top of. It requires a human curation
+exercise this build environment cannot perform (no production credential,
+no real corpus — the same constraint recorded since Phase 0). **The
+software branch is mergeable now. Phase 4 should not begin — specifically,
+should not treat capability fit as a trustworthy input to economics — until
+that human exercise happens and the real gate is evaluated.** See §17.
 
 ---
 
@@ -376,6 +427,10 @@ this pathway not be touched absent a regression, and none was found.
 
 ## 13. Evaluation (brief §24-26)
 
+**Read §0.1 first.** Every number below is a machinery smoke test, not a
+production measurement — none of it should be quoted as evidence that a
+quality gate has passed.
+
 **Schema** (0006): `jobber.gold_document`/`gold_claim`/`eval_run` (UUID
 adaptation of doc 11 §9.2, scoped to `jobber.document` — see the honest
 scope note below) and `jobber.capability_gold_judgment` (Phase 3's own gate).
@@ -431,6 +486,24 @@ disagreement) — that is a test of the *machinery*, not a claim about
 production quality. See the Phase 3 completion report for the exact
 numbers this build could produce locally.
 
+**On the illustrative capability-agreement/concept-linking numbers
+specifically** (`backend/scripts/seed_phase3_eval_sample.py`): this script
+seeds 5 hand-authored capabilities, evidence, and gold judgments — clearly
+labelled illustrative/demo data in its own module docstring, never inserted
+by any migration, never marked `origin != 'curator'`-distinguishable from
+real curation in the schema (there is no such flag; the only guarantee
+against confusion is that this script is never run automatically and its
+output lives only in a throwaway/local database, never production). A
+`capability_agreement = 1.0, n=5` or `concept_linking_f1 = 0.667, n=2` result
+from running it proves the engine reasons correctly about a small, known-
+answer scenario. It does **not** establish, and must never be cited as
+establishing, the brief's actual gates (`capability agreement ≥ 0.80` on
+~20 real judgments; `concept-linking F1 ≥ 0.75` on real dev-split gold).
+Running this script against a database that will ever be treated as
+production, or that already holds real curated capabilities, would
+contaminate the catalogue with demo rows indistinguishable from real ones
+— do not do this; it exists for local demonstration only.
+
 ## 14. Known architectural adaptation from doc 11 (brief §41)
 
 Doc 11's original `d_capability_coverage`/`d_role_fit` DDL carried a
@@ -447,9 +520,12 @@ pre-empts it.
 
 ## 15. Validation
 
-- `pytest`: run twice, `166 passed, 0 failed` both times (backend, real
+- `pytest`: run twice, `182 passed, 0 failed` both times (backend, real
   Postgres 16 + pgvector, never SQLite/mocked DB) — see the Phase 3
-  completion report for the exact command and environment.
+  completion report for the exact command and environment. (166 at the
+  initial Phase 3 completion report; +2 from a bug-fix regression test found
+  during that same pass; +14 from this finalization pass's embedding-backfill
+  regression suite — see §18.)
 - `tsc -b`: clean.
 - `vite build`: clean (one pre-existing chunk-size advisory, not an error).
 - `oxlint src/`: clean.
@@ -461,6 +537,18 @@ pre-empts it.
 
 ## 16. Known limitations
 
+- **Capability catalogue status, stated explicitly (brief §11/§22, see
+  §0.1):**
+  ```text
+  Capability curation machinery:        implemented
+  Production curated capability catalogue: not yet populated (0 capabilities)
+  Production component graph:              not yet populated (0 edges)
+  ```
+  The decision not to fabricate 100-150 low-quality capabilities to hit a
+  count was correct in the original Phase 3 pass and is unchanged here. The
+  five capabilities used by `seed_phase3_eval_sample.py` are demo/test data
+  only (see §13's warning) and must never be treated as, or merged into, a
+  real accepted catalogue.
 - No real production gold/evaluation data exists in this build environment
   — see §13.
 - Compositional evidence only considers `profile360.claims` mapped via
@@ -490,3 +578,120 @@ estimates, adjacency judgment, prerequisite/adjacent/substitutable
 capability graphs, automatic profile360 authoring. `economic_salience` sits
 in the schema unused, ready for Phase 4 to start reading it — nothing here
 reads it first.
+
+**Scope boundary is not the same as readiness boundary.** Phase 4 code can
+be written against this branch — the schema, engine, and APIs are stable
+merge targets. What Phase 4 must **not** do is *trust* capability-fit output
+as an economics input (e.g. ranking which gap is "worth" the most) before
+the analytical gate in §0.1 has actually been run: a `d_gap_value` computed
+against an empty, uncurated catalogue would be economics built on top of
+`not_found` for everything, which is not a meaningful ranking of anything.
+Concretely, before Phase 4 economics depend on capability fit:
+
+1. A real capability catalogue must be curated against real captured
+   postings/evidence (§16's 0/0 counts above must no longer be 0/0).
+2. Real `component_of` edges must back that catalogue.
+3. A real ~20-judgment `capability_gold_judgment` hand-labelled set must
+   exist, split dev/test as brief §26 specifies.
+4. `GET /api/eval/report`'s `capability_agreement.value` must be ≥0.80 on
+   that real set — not on `seed_phase3_eval_sample.py`'s demo data.
+
+None of this blocks merging Phase 3, or starting Phase 4's own
+implementation work in parallel. It blocks *trusting Phase 4's output*.
+
+---
+
+## 18. Migrated-role embedding backfill (finalization pass)
+
+**Symptom:** the Space page reported "Need at least 2 embedded points to
+project" despite 10+ `role_instance` rows existing. **Cause:** Phase 2 moved
+role embeddings from a per-row column into `jobber.d_embedding`
+(`owner_kind='role_instance'`); roles that already existed at that point
+never got a matching row backfilled. Newly imported/edited roles were never
+affected — only pre-Phase-2 rows.
+
+**Fix, not a workaround:** no SQL migration runs model inference, no vector
+is fabricated, and no source row (`role_instance`/`document`) is ever
+touched — this is a pure, explicit, re-runnable derived-data backfill,
+consistent with `d_embedding` already being derived/rebuildable state (doc
+11 §4.6), the same principle the rest of Phase 3 already leans on for
+`d_capability_coverage`/`d_role_fit`.
+
+**Canonical embedding text** — `embeddings.role_embedding_text(role: dict)`:
+one function, dispatching on `node_type` (not on which fields happen to be
+populated — a target can also carry `description`, so field-presence
+dispatch would silently misclassify it and drop `summary`/`typical_tasks`/
+skills). A posting composes `title/description/requirements/
+responsibilities/key_skills_summary`; anything else (a target, real or
+imagined, or a synthetic reference) composes `title/summary/description/
+typical_tasks/skill & technical-subject names` — both exactly matching the
+pre-existing `compose_role_text`/`_compose_target_text` semantics, which are
+now thin wrappers around this one function (`routes/import_routes.py`,
+`routes/targets.py`) rather than a second implementation.
+`test_compose_role_text_matches_canonical_format`/
+`test_compose_target_text_matches_canonical_format` pin the exact output.
+
+**Document text takes priority when available.** Every current write path
+(legacy JSON import, source-aware raw ingest) already creates the role's
+linked `jobber.document` *from* this exact same text — so
+`rebuild_role_embeddings` prefers `document.content_text` over recomposing
+from the role's own stored columns whenever a document is linked and
+non-empty, and only falls back to `role_embedding_text` for a legacy row
+with no linked document.
+`test_document_content_text_preferred_over_recomposed_fields` proves the
+preference by deliberately making the two disagree;
+`test_import_and_rebuild_produce_the_same_embedding` proves the end-to-end
+invariant ("a migrated role rebuilt today and the same role saved/imported
+today produce the same embedding") by asserting vector equality between a
+freshly-imported role and the same role force-rebuilt afterwards.
+
+**`embeddings.rebuild_role_embeddings(cur, *, missing_only=True)`**: scans
+every `role_instance`, treats a role as "already embedded" only if it has a
+`d_embedding` row for the *current* `MODEL_NAME` (an older/retired model's
+row never satisfies this —
+`test_old_model_embedding_still_counts_as_missing_for_current_model`),
+embeds via the canonical text above, upserts through the existing
+`set_embedding`. `missing_only=True` (default) only computes roles with no
+current-model row — safe and idempotent to re-run
+(`test_missing_only_rebuild_is_idempotent`,
+`test_missing_only_rebuild_does_not_recompute_an_existing_current_model_embedding`).
+`missing_only=False` (force) recomputes every role's current-model
+embedding regardless
+(`test_force_rebuild_recomputes_existing_current_model_embedding`). A role
+with no embeddable text (no document, no populated fields) is skipped, never
+fed an empty/fabricated vector (`test_empty_role_text_is_skipped_safely`).
+Reads `role_instance`/`document`; writes only `d_embedding` rows with
+`owner_kind='role_instance'` — `concept`/`profile360_snapshot` embeddings
+are never touched
+(`test_concept_and_profile_snapshot_embeddings_untouched`).
+
+**Invocation** — two equivalent paths, neither automatic:
+
+- `backend/scripts/rebuild_embeddings.py --roles [--force]` — the
+  documented operational path, runnable against any `DATABASE_URL`
+  (production included; it only ever writes `d_embedding` rows).
+- `POST /api/space/rebuild-role-embeddings[?force=true]` — a trusted
+  maintenance endpoint for the same operation, consistent with the existing
+  `POST /api/capabilities/rebuild` precedent in this single-operator,
+  locally-trusted build (docs/15 §1). `Space.tsx` surfaces this as a
+  "Rebuild role embeddings" button exactly when its own diagnostics show a
+  mismatch (see below) — never called automatically by a page load.
+
+`GET /api/space` itself is **unchanged as a pure read/project operation** —
+it never recomputes anything, it only now reports richer diagnostics
+alongside its existing `points`/`profile`/`note`:
+`role_count`, `embedded_role_count`, `embedding_model` — present on every
+response, not only the too-few-points case, so the UI can always show an
+"X/Y roles embedded" picture rather than inferring it from an opaque note.
+`Space.tsx` uses these to distinguish "you only have one role captured"
+from "N roles are loaded but 0 are embedded for the active model — rebuild
+to restore Space", with an inline rebuild button in the latter case.
+
+**Other embedding consumers checked** (brief's own list: Dashboard/roles
+similarity, Targets similarity, role-comparison embedding similarity):
+`routes/roles.py`, `routes/targets.py`, `capability_engine.py`
+(`derive_role_fit`'s `embedding_similarity`) all already read
+`owner_kind='role_instance'` with no explicit `model=` argument, which
+defaults to the current `MODEL_NAME` inside `get_embedding`/`get_embeddings`
+— already consistent, no other genuine inconsistency found. `concept_linking.py`
+(`owner_kind='concept'`) is unrelated to this regression and untouched.

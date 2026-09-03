@@ -49,7 +49,11 @@ kept for reproducibility.
   from accepted claims — never extracted, never an AI judgment call, and
   compositional evidence (you've used the parts) alone can never become
   "evidenced" without something directly stating the whole capability. See
-  `docs/16-phase3-capability-engine.md`.
+  `docs/16-phase3-capability-engine.md`. **The engine and catalogue tooling
+  are implemented and tested; the production catalogue itself is not yet
+  populated (0 curated capabilities today) and the ≥0.80 capability-agreement
+  evaluation gate has not been run against real hand-labelled data** — see
+  that doc's §0.1 before treating any capability-fit output as validated.
 - **Preferences are structurally separate from capability.** Would-you-enjoy-it
   is tracked on its own dimensions, with its own source/basis/confidence.
   Personality/psychometric material can only ever enter as a low-authority
@@ -112,7 +116,12 @@ one from a missing key — is recorded, never silently swallowed.
 3. **Dashboard** — roles ranked by similarity to your current profile,
    filterable by career track.
 4. **Space** — a 3D PCA starfield of every captured role, target, and your
-   profile, positioned by embedding similarity.
+   profile, positioned by embedding similarity. If it reports too few
+   embedded points despite roles being loaded (typically a batch of roles
+   captured before an embedding-model change, or before Phase 2 moved
+   embeddings into their own table), it shows exactly how many roles are
+   loaded vs. embedded and offers a one-click rebuild — see "Maintenance
+   scripts" below for the equivalent command-line path.
 5. **Targets** — a role you're navigating towards, real or imagined. Give
    `prompts/decompose_target_role.md` (plus supporting material) to
    Claude/ChatGPT, paste the resulting JSON into the Add Target page.
@@ -224,6 +233,22 @@ reachable via `TEST_DATABASE_URL` (defaults to a local
 `postgresql://postgres:postgres@localhost:5432/postgres` if unset). Each test
 session creates and drops its own throwaway database; nothing here can touch
 production data. See `docs/14-phase2-postgres-architecture.md` §7.
+
+### Maintenance scripts
+
+- `backend/scripts/rebuild_embeddings.py --roles [--force]` — backfills/
+  rebuilds `role_instance` embeddings against `DATABASE_URL`. Safe against
+  production: it only ever writes `jobber.d_embedding` rows with
+  `owner_kind='role_instance'`, never touches `role_instance`/`document`
+  rows, and defaults to computing only roles missing a *current-model*
+  embedding. `POST /api/space/rebuild-role-embeddings` does the same thing
+  over HTTP (also surfaced as a button on the Space page when it detects a
+  mismatch). See `docs/16-phase3-capability-engine.md` §18.
+- `backend/scripts/seed_phase3_eval_sample.py` — **local demo/illustration
+  only, never run against production or a database whose capability
+  catalogue matters.** Seeds 5 hand-authored capabilities to prove the
+  Phase 3 evaluation machinery works end to end. See its own docstring and
+  `docs/16-phase3-capability-engine.md` §13.
 
 ```bash
 cd backend

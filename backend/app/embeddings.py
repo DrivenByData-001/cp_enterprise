@@ -165,6 +165,129 @@ def nearest_by_vector(
     return [(str(row["owner_id"]), row["similarity"]) for row in cur.fetchall()]
 
 
+def role_embedding_text(role: dict) -> str:
+    """The single canonical text representation of a `role_instance` used to
+    compute its embedding — the one function every write path (posting
+    import, target import, source-aware raw ingest) and the rebuild/backfill
+    path (`rebuild_role_embeddings` below) must agree on, so a migrated role
+    rebuilt today and the same role saved/imported today land on identical
+    text (this is the fix for the Space regression: migrated roles never got
+    a `d_embedding` row backfilled after Phase 2 moved embeddings off the
+    old per-row column).
+
+    `role` must be shaped like `db.flatten_role_instance`'s output (or an
+    equivalent dict built at import time, before the row exists — see
+    `routes/import_routes.py::compose_role_text` /
+    `routes/targets.py::_compose_target_text`, both now thin wrappers around
+    this): needs `node_type` plus whichever of `title`/`description`/
+    `requirements`/`responsibilities`/`key_skills_summary` (posting-shaped)
+    or `title`/`summary`/`description`/`typical_tasks`/`skill_decomposition`/
+    `technical_subjects` (target-shaped) are populated.
+
+    Dispatches on `node_type` rather than on which fields happen to be set —
+    a target can also carry `description`, so guessing from field presence
+    would silently drop `summary`/`typical_tasks`/skills for a described
+    target. This does not consult `jobber.document` at all; when a role has
+    a linked document whose content is the authoritative capture (true for
+    every current write path — the document is created from this exact same
+    text), preferring that verbatim text is the caller's job
+    (`rebuild_role_embeddings` does this) — this function is the pure,
+    DB-free fallback/reference composition.
+    """
+    if role.get("node_type") == "posting":
+        parts = [
+            role.get("title"),
+            role.get("description"),
+            role.get("requirements"),
+            role.get("responsibilities"),
+            role.get("key_skills_summary"),
+        ]
+        return "\n\n".join(p for p in parts if p)
+
+    skill_decomposition = role.get("skill_decomposition") or []
+    technical_subjects = role.get("technical_subjects") or []
+    skill_names = [s["skill"] for s in skill_decomposition if isinstance(s, dict) and s.get("skill")]
+    subject_names = [s["subject"] for s in technical_subjects if isinstance(s, dict) and s.get("subject")]
+    typical_tasks = role.get("typical_tasks") or []
+    parts = [
+        role.get("title"),
+        role.get("summary"),
+        role.get("description"),
+        "\n".join(typical_tasks) if typical_tasks else None,
+        ("Skills: " + ", ".join(skill_names)) if skill_names else None,
+        ("Technical subjects: " + ", ".join(subject_names)) if subject_names else None,
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
+def rebuild_role_embeddings(cur, *, missing_only: bool = True) -> dict:
+    """Backfill/rebuild `jobber.d_embedding` rows for `role_instance`, for
+    the *current* `MODEL_NAME` only (brief: "an embedding belonging to an
+    older/different model must not satisfy the current-model check").
+
+    `missing_only=True` (default): only roles with no current-model row are
+    (re)computed — safe and cheap to run repeatedly, and idempotent (a
+    second run against unchanged data creates/updates nothing further).
+    `missing_only=False` (force): every role's current-model embedding is
+    recomputed from its canonical text and upserted, even one that already
+    exists — for after a source-text correction, not routine use.
+
+    Text per role: the role's linked `jobber.document.content_text` when one
+    exists and is non-empty — every current write path already creates that
+    document *from* this exact text, so it is the authoritative capture, not
+    a guess — else `role_embedding_text` reconstructs it from the role's own
+    stored columns (the only option for a legacy row with no linked
+    document). A role with neither is skipped, never fed a fabricated or
+    empty vector.
+
+    Reads `jobber.role_instance` and `jobber.document`; writes only
+    `jobber.d_embedding` rows with `owner_kind='role_instance'` — no source
+    table is ever touched, and no other `owner_kind` (`concept`,
+    `profile360_snapshot`, `document`) is read or written.
+    """
+    from .db import flatten_role_instance  # lazy: keeps embeddings.py free of a module-load-time dependency on db.py
+
+    model = embedding_model_name()
+
+    cur.execute(
+        "SELECT ri.*, d.content_text AS document_content_text "
+        "FROM jobber.role_instance ri LEFT JOIN jobber.document d ON d.id = ri.document_id"
+    )
+    all_rows = [dict(r) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT owner_id FROM jobber.d_embedding WHERE owner_kind = 'role_instance' AND model = %s",
+        (model,),
+    )
+    has_current_model = {str(r["owner_id"]) for r in cur.fetchall()}
+
+    candidates = all_rows if not missing_only else [r for r in all_rows if str(r["id"]) not in has_current_model]
+
+    created = updated = skipped = 0
+    for row in candidates:
+        role_id = str(row["id"])
+        document_text = (row.pop("document_content_text", None) or "").strip()
+        role = flatten_role_instance(row)
+        text = document_text or role_embedding_text(role)
+        vector = embed_text(text) if text.strip() else []
+        if not vector:
+            skipped += 1
+            continue
+        set_embedding(cur, "role_instance", role_id, vector, model=model)
+        if role_id in has_current_model:
+            updated += 1
+        else:
+            created += 1
+
+    return {
+        "model": model,
+        "roles_scanned": len(all_rows),
+        "embeddings_created": created,
+        "embeddings_updated": updated,
+        "skipped": skipped,
+    }
+
+
 def ensure_profile_embedding(cur) -> tuple[str | None, list[float]]:
     """The "current profile vector" every similarity computation (Dashboard,
     Space, Targets) needs, sourced from profile360's current snapshot instead

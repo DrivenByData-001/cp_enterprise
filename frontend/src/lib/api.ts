@@ -95,6 +95,17 @@ export type SpaceResponse = {
   points: SpacePoint[]
   profile: { x: number; y: number; z: number } | null
   note?: string
+  role_count: number
+  embedded_role_count: number
+  embedding_model: string
+}
+
+export type RebuildEmbeddingsSummary = {
+  model: string
+  roles_scanned: number
+  embeddings_created: number
+  embeddings_updated: number
+  skipped: number
 }
 
 export type ConceptType = {
@@ -451,6 +462,8 @@ export const api = {
   getProfile: () => req<Profile>('/profile'),
   getProfileHistory: () => req<Profile360Row[]>('/profile/history'),
   getSpace: () => req<SpaceResponse>('/space'),
+  rebuildRoleEmbeddings: (force = false) =>
+    req<RebuildEmbeddingsSummary>(`/space/rebuild-role-embeddings${force ? '?force=true' : ''}`, { method: 'POST' }),
   listTargets: () => req<Role[]>('/targets'),
   importTarget: (payload: unknown) =>
     req<{ id: string; status: string }>('/targets', { method: 'POST', body: JSON.stringify(payload) }),

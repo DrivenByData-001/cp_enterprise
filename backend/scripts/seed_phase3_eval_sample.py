@@ -1,4 +1,10 @@
-"""Illustrative Phase 3 evaluation seed — NOT the real production gold set.
+"""DEMO/ILLUSTRATION ONLY — NOT the real production gold set, NOT real
+curated catalogue data. Never run this against the real Supabase project or
+any database whose capability catalogue is meant to be trusted — it inserts
+5 hand-authored, clearly-fictional capabilities indistinguishable in the
+schema from real curator work (there is no "demo" flag on
+`jobber.concept`/`capability_detail`). Run it only against a disposable/local
+database, per the usage note below.
 
 This build environment has no credential for the real Supabase project and
 no captured production corpus to hand-label (the same constraint every
@@ -10,6 +16,12 @@ reading the evidence *before* running the engine — so the capability-
 agreement number this produces is a real measurement of the deterministic
 engine against independently-authored expectations, not a number copied
 from the engine's own output.
+
+**This does not establish, and must never be cited as establishing, the
+brief's actual Phase 3 analytical gates** (capability agreement ≥0.80 on
+~20 real hand-labelled judgments; concept-linking F1 ≥0.75 on real dev-split
+gold). Those require a human curation exercise against the real corpus —
+see docs/16-phase3-capability-engine.md §0.1/§13.
 
 Usage (against a disposable/dev database only — never production):
 
