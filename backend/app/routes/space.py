@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from sklearn.decomposition import PCA
 
 from ..db import db_cursor
-from ..embeddings import loads_vec
+from ..embeddings import get_embedding, get_embeddings
 
 router = APIRouter(prefix="/api/space", tags=["space"])
 
@@ -12,20 +12,21 @@ router = APIRouter(prefix="/api/space", tags=["space"])
 def get_space():
     with db_cursor() as cur:
         cur.execute(
-            "SELECT id, title, organisation, career_track, node_type, is_plausible, embedding "
-            "FROM job_roles WHERE embedding IS NOT NULL"
+            "SELECT ri.id, ri.title, ri.organisation, ri.career_track, ri.kind, lra.is_plausible "
+            "FROM jobber.role_instance ri "
+            "LEFT JOIN jobber.legacy_role_analysis lra ON lra.role_instance_id = ri.id"
         )
-        roles = [dict(r) for r in cur.fetchall()]
+        all_roles = cur.fetchall()
+        vec_by_id = get_embeddings(cur, "role_instance", [r["id"] for r in all_roles])
+        roles = [r for r in all_roles if r["id"] in vec_by_id]
 
         cur.execute(
-            "SELECT embedding FROM profile_snapshots WHERE is_current = 1 "
-            "ORDER BY created_at DESC LIMIT 1"
+            "SELECT id FROM jobber.profile_snapshots WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1"
         )
         prow = cur.fetchone()
+        profile_vec = get_embedding(cur, "profile_snapshot", prow["id"]) if prow else []
 
-    profile_vec = loads_vec(prow["embedding"]) if prow else []
-
-    vectors = [loads_vec(r["embedding"]) for r in roles]
+    vectors = [vec_by_id[r["id"]] for r in roles]
     if profile_vec:
         vectors.append(profile_vec)
 
@@ -46,7 +47,7 @@ def get_space():
                 "title": role["title"],
                 "organisation": role["organisation"],
                 "career_track": role["career_track"],
-                "node_type": role["node_type"],
+                "node_type": role["kind"],
                 "is_plausible": bool(role["is_plausible"]) if role["is_plausible"] is not None else None,
                 "x": float(x),
                 "y": float(y),

@@ -1,6 +1,6 @@
-import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
+import psycopg
 from fastapi import APIRouter, HTTPException
 
 from ..db import db_cursor, get_or_create_person
@@ -13,9 +13,10 @@ router = APIRouter(prefix="/api/episodes", tags=["episodes"])
 #
 # docs/11-capability-model-design.md §5.4 derives "years of experience" and
 # "recency" per-concept, from episodes holding an accepted claim for that
-# concept. Claims don't exist until Phase 2, so Phase 0 applies the same
-# union-of-spans primitive one level up: across all episodes, with no concept
-# filter. Nothing here is stored — it's recomputed on every read.
+# concept. That per-concept version stays profile360's concern now (docs/14
+# §6) — this remains the same career-span-only version Phase 0 shipped:
+# applied across all of a person's episodes with no concept filter, recomputed
+# on every read, never stored.
 
 def _parse_partial_date(raw: str | None) -> date | None:
     """Parse an ISO date that may be YYYY, YYYY-MM, or YYYY-MM-DD."""
@@ -78,10 +79,10 @@ def list_episodes():
     with db_cursor() as cur:
         person_id = get_or_create_person(cur)
         cur.execute(
-            "SELECT * FROM episode WHERE person_id = ? ORDER BY start_date IS NULL, start_date",
+            "SELECT * FROM jobber.episode WHERE person_id = %s ORDER BY start_date IS NULL, start_date",
             (person_id,),
         )
-        episodes = [dict(r) for r in cur.fetchall()]
+        episodes = cur.fetchall()
     return _with_derived(episodes)
 
 
@@ -92,10 +93,10 @@ def get_timeline():
     with db_cursor() as cur:
         person_id = get_or_create_person(cur)
         cur.execute(
-            "SELECT * FROM episode WHERE person_id = ? ORDER BY start_date IS NULL, start_date",
+            "SELECT * FROM jobber.episode WHERE person_id = %s ORDER BY start_date IS NULL, start_date",
             (person_id,),
         )
-        episodes = [dict(r) for r in cur.fetchall()]
+        episodes = cur.fetchall()
 
     today = date.today()
     enriched = _with_derived(episodes)
@@ -112,11 +113,11 @@ def get_timeline():
 @router.get("/{episode_id}")
 def get_episode(episode_id: int):
     with db_cursor() as cur:
-        cur.execute("SELECT * FROM episode WHERE id = ?", (episode_id,))
+        cur.execute("SELECT * FROM jobber.episode WHERE id = %s", (episode_id,))
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "episode not found")
-    return _with_derived([dict(row)])[0]
+    return _with_derived([row])[0]
 
 
 def _validate_parent(cur, parent_id: int | None, person_id: int, self_id: int | None):
@@ -124,7 +125,7 @@ def _validate_parent(cur, parent_id: int | None, person_id: int, self_id: int | 
         return
     if parent_id == self_id:
         raise HTTPException(400, "an episode cannot be its own parent")
-    cur.execute("SELECT person_id FROM episode WHERE id = ?", (parent_id,))
+    cur.execute("SELECT person_id FROM jobber.episode WHERE id = %s", (parent_id,))
     row = cur.fetchone()
     if not row:
         raise HTTPException(400, "parent_episode_id does not exist")
@@ -139,10 +140,11 @@ def create_episode(payload: EpisodeCreate):
         _validate_parent(cur, payload.parent_episode_id, person_id, None)
         cur.execute(
             """
-            INSERT INTO episode
+            INSERT INTO jobber.episode
                 (person_id, kind, title, organisation, start_date, end_date,
                  date_precision, parent_episode_id, domain_hint, context_note, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 person_id,
@@ -155,17 +157,17 @@ def create_episode(payload: EpisodeCreate):
                 payload.parent_episode_id,
                 payload.domain_hint,
                 payload.context_note,
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc),
             ),
         )
-        episode_id = cur.lastrowid
+        episode_id = cur.fetchone()["id"]
     return {"id": episode_id, "status": "created"}
 
 
 @router.put("/{episode_id}")
 def update_episode(episode_id: int, payload: EpisodeUpdate):
     with db_cursor() as cur:
-        cur.execute("SELECT person_id FROM episode WHERE id = ?", (episode_id,))
+        cur.execute("SELECT person_id FROM jobber.episode WHERE id = %s", (episode_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, "episode not found")
@@ -173,10 +175,10 @@ def update_episode(episode_id: int, payload: EpisodeUpdate):
         _validate_parent(cur, payload.parent_episode_id, person_id, episode_id)
         cur.execute(
             """
-            UPDATE episode SET
-                kind = ?, title = ?, organisation = ?, start_date = ?, end_date = ?,
-                date_precision = ?, parent_episode_id = ?, domain_hint = ?, context_note = ?
-            WHERE id = ?
+            UPDATE jobber.episode SET
+                kind = %s, title = %s, organisation = %s, start_date = %s, end_date = %s,
+                date_precision = %s, parent_episode_id = %s, domain_hint = %s, context_note = %s
+            WHERE id = %s
             """,
             (
                 payload.kind,
@@ -198,8 +200,8 @@ def update_episode(episode_id: int, payload: EpisodeUpdate):
 def delete_episode(episode_id: int):
     with db_cursor() as cur:
         try:
-            cur.execute("DELETE FROM episode WHERE id = ?", (episode_id,))
-        except sqlite3.IntegrityError:
+            cur.execute("DELETE FROM jobber.episode WHERE id = %s", (episode_id,))
+        except psycopg.errors.ForeignKeyViolation:
             raise HTTPException(
                 400, "cannot delete an episode that has other episodes nested under it — reassign or delete those first"
             )

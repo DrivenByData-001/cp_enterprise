@@ -8,3 +8,6 @@ pydantic
 pytest
 httpx
 openai
+psycopg[binary]>=3.2
+psycopg_pool
+pypdf

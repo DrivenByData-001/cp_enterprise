@@ -1,34 +1,36 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from ..db import db_cursor, row_to_dict, upsert_job_role
-from ..embeddings import cosine_similarity, loads_vec
+from ..db import db_cursor, row_to_dict, upsert_role_instance
+from ..embeddings import cosine_similarity, get_embedding, get_embeddings
 from ..models import JobPostingImport
 from .import_routes import posting_columns
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
 
+_ROLE_JSON_COLUMNS = ("top_adjacent_roles", "typical_tasks", "skill_decomposition", "technical_subjects", "raw_json")
+
 
 def _current_profile_vector(cur) -> list[float]:
     cur.execute(
-        "SELECT embedding FROM profile_snapshots WHERE is_current = 1 "
-        "ORDER BY created_at DESC LIMIT 1"
+        "SELECT id FROM jobber.profile_snapshots WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1"
     )
     row = cur.fetchone()
-    return loads_vec(row["embedding"]) if row else []
+    return get_embedding(cur, "profile_snapshot", row["id"]) if row else []
 
 
 def _path_to_target(cur, target_id: int, target_vec: list[float], profile_vec: list[float]) -> dict:
     """Rank real postings as stepping-stones between the profile and a target's embedding."""
     cur.execute(
-        "SELECT id, title, organisation, career_track, embedding FROM job_roles "
-        "WHERE node_type = 'posting' AND embedding IS NOT NULL AND id != ?",
+        "SELECT id, title, organisation, career_track FROM jobber.role_instance "
+        "WHERE kind = 'posting' AND id != %s",
         (target_id,),
     )
-    candidates = [dict(r) for r in cur.fetchall()]
+    candidates = cur.fetchall()
+    vec_by_id = get_embeddings(cur, "role_instance", [c["id"] for c in candidates])
 
     stepping_stones = []
     for c in candidates:
-        sim_to_target = cosine_similarity(target_vec, loads_vec(c["embedding"]))
+        sim_to_target = cosine_similarity(target_vec, vec_by_id.get(c["id"], []))
         if sim_to_target is None:
             continue
         stepping_stones.append(
@@ -58,33 +60,29 @@ def list_roles(
     with db_cursor() as cur:
         profile_vec = _current_profile_vector(cur)
 
-        # concept_id facets the corpus by resolved job_role_skills (Phase 1 §11
-        # "Ships": filter/group postings by domain, regulation, tool, function,
-        # product). filters/params are shared between the two queries below so
-        # the embedding lookup stays aligned with the row set.
         filters = ""
-        params = []
+        params: list = []
         if career_track:
-            filters += " AND career_track = ?"
+            filters += " AND ri.career_track = %s"
             params.append(career_track)
         if concept_id is not None:
-            filters += " AND id IN (SELECT job_role_id FROM job_role_skills WHERE resolved_concept_id = ?)"
+            filters += " AND ri.id IN (SELECT role_instance_id FROM jobber.role_skill_observation WHERE resolved_concept_id = %s)"
             params.append(concept_id)
 
-        cur.execute("SELECT * FROM job_roles WHERE node_type = 'posting'" + filters, params)
-        rows = [row_to_dict(r) for r in cur.fetchall()]
-
-        # embedding column was stripped by row_to_dict; re-fetch raw vectors separately
         cur.execute(
-            "SELECT id, embedding FROM job_roles WHERE node_type = 'posting'" + filters,
+            "SELECT ri.*, lra.* FROM jobber.role_instance ri "
+            "LEFT JOIN jobber.legacy_role_analysis lra ON lra.role_instance_id = ri.id "
+            "WHERE ri.kind = 'posting'" + filters,
             params,
         )
-        vec_by_id = {r["id"]: loads_vec(r["embedding"]) for r in cur.fetchall()}
+        rows = [row_to_dict(r, _ROLE_JSON_COLUMNS) for r in cur.fetchall()]
+        for r in rows:
+            r["node_type"] = r["kind"]
+
+        vec_by_id = get_embeddings(cur, "role_instance", [r["id"] for r in rows])
 
     for r in rows:
-        r["similarity"] = (
-            cosine_similarity(profile_vec, vec_by_id.get(r["id"], [])) if profile_vec else None
-        )
+        r["similarity"] = cosine_similarity(profile_vec, vec_by_id.get(r["id"], [])) if profile_vec else None
 
     if min_similarity is not None:
         rows = [r for r in rows if r["similarity"] is not None and r["similarity"] >= min_similarity]
@@ -100,24 +98,29 @@ def list_roles(
 @router.get("/{role_id}")
 def get_role(role_id: int):
     with db_cursor() as cur:
-        cur.execute("SELECT * FROM job_roles WHERE id = ?", (role_id,))
+        cur.execute(
+            "SELECT ri.*, lra.* FROM jobber.role_instance ri "
+            "LEFT JOIN jobber.legacy_role_analysis lra ON lra.role_instance_id = ri.id "
+            "WHERE ri.id = %s",
+            (role_id,),
+        )
         row = cur.fetchone()
         if not row:
             raise HTTPException(404, "role not found")
-        role = row_to_dict(row)
+        role = row_to_dict(row, _ROLE_JSON_COLUMNS)
+        role["node_type"] = role["kind"]
 
         cur.execute(
             "SELECT name, category, importance, requirement_type, resolved_concept_id "
-            "FROM job_role_skills WHERE job_role_id = ?",
+            "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
             (role_id,),
         )
-        role["skills"] = [dict(s) for s in cur.fetchall()]
+        role["skills"] = cur.fetchall()
 
         profile_vec = _current_profile_vector(cur)
-        cur.execute("SELECT embedding FROM job_roles WHERE id = ?", (role_id,))
-        role_vec = loads_vec(cur.fetchone()["embedding"])
+        role_vec = get_embedding(cur, "role_instance", role_id)
 
-        if role["node_type"] != "posting" and role_vec:
+        if role["kind"] != "posting" and role_vec:
             role["path"] = _path_to_target(cur, role_id, role_vec, profile_vec)
 
     role["similarity"] = cosine_similarity(profile_vec, role_vec) if profile_vec else None
@@ -127,22 +130,35 @@ def get_role(role_id: int):
 @router.put("/{role_id}")
 def update_role(role_id: int, payload: JobPostingImport):
     with db_cursor() as cur:
-        cur.execute("SELECT node_type FROM job_roles WHERE id = ?", (role_id,))
+        cur.execute("SELECT kind FROM jobber.role_instance WHERE id = %s", (role_id,))
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "role not found")
-    if row["node_type"] != "posting":
+    if row["kind"] != "posting":
         raise HTTPException(400, "this is a target role — edit it via PUT /api/targets/{id}")
 
     skills = [s.model_dump() for s in payload.skills]
-    upsert_job_role(role_id, posting_columns(payload), skills)
+    with db_cursor() as cur:
+        columns = posting_columns(cur, payload)
+        embedding_text = columns.pop("_embedding_text")
+        upsert_role_instance(cur, role_id, columns, skills)
+        if embedding_text:
+            from ..embeddings import embed_text, set_embedding
+
+            vector = embed_text(embedding_text)
+            if vector:
+                set_embedding(cur, "role_instance", role_id, vector)
     return {"id": role_id, "status": "updated"}
 
 
 @router.delete("/{role_id}")
 def delete_role(role_id: int):
     with db_cursor() as cur:
-        cur.execute("DELETE FROM job_roles WHERE id = ?", (role_id,))
+        cur.execute("DELETE FROM jobber.role_instance WHERE id = %s", (role_id,))
         if cur.rowcount == 0:
             raise HTTPException(404, "role not found")
+        cur.execute(
+            "DELETE FROM jobber.d_embedding WHERE owner_kind = 'role_instance' AND owner_id = %s",
+            (role_id,),
+        )
     return {"status": "deleted"}

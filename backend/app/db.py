@@ -1,483 +1,300 @@
+"""Postgres persistence layer.
+
+Phase 2 replaces SQLite with Postgres (Supabase in production) as the only
+runtime persistence mechanism — see docs/14-phase2-postgres-architecture.md.
+This module deliberately stays a thin wrapper (a connection pool + a
+dict-row cursor context manager + a small file-based migration runner), not an
+ORM: every route still writes its own SQL, schema-qualified against `jobber`.
+
+The historical SQLite schema/scripts (`backend/scripts/migrate_phase0.py`,
+`migrate_phase1.py`) are kept, untouched, for reproducibility (per the Phase 2
+brief §3) — they operate on a standalone `.db` file and are irrelevant to the
+running app from Phase 2 onward.
+"""
+
+import hashlib
 import json
-import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "career_nav.db"
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+from psycopg_pool import ConnectionPool
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS job_roles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+from .config import database_url
 
-    node_type TEXT NOT NULL DEFAULT 'posting',
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
-    title TEXT NOT NULL,
-    organisation TEXT,
-    location TEXT,
-    country TEXT,
-    remote_type TEXT,
-    employment_type TEXT,
-    seniority_level TEXT,
-
-    posting_date TEXT,
-    captured_at TEXT,
-    source TEXT,
-    url TEXT,
-
-    salary_min REAL,
-    salary_max REAL,
-    salary_estimate_min REAL,
-    salary_estimate_max REAL,
-    currency TEXT,
-
-    description TEXT,
-    requirements TEXT,
-    responsibilities TEXT,
-    summary TEXT,
-    key_skills_summary TEXT,
-    notes TEXT,
-
-    career_track TEXT,
-    seniority_score REAL,
-    complexity_score REAL,
-    specialisation_score REAL,
-    transferability_score REAL,
-    market_demand_score REAL,
-    rarity_score REAL,
-    automation_risk_score REAL,
-    top_adjacent_roles TEXT,
-
-    extraction_status TEXT,
-    extraction_notes TEXT,
-    raw_json TEXT NOT NULL,
-
-    embedding TEXT,
-    embedding_model TEXT,
-    embedded_at TEXT,
-
-    -- target-role fields (node_type = 'target_real' | 'target_imagined')
-    typical_tasks TEXT,
-    skill_decomposition TEXT,
-    technical_subjects TEXT,
-    grounding_note TEXT,
-    feasibility_note TEXT,
-    is_plausible INTEGER,
-
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS job_role_skills (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_role_id INTEGER NOT NULL REFERENCES job_roles(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    category TEXT,
-    importance INTEGER,
-    requirement_type TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_job_role_skills_role ON job_role_skills(job_role_id);
-CREATE INDEX IF NOT EXISTS idx_job_role_skills_name ON job_role_skills(name);
-
-CREATE TABLE IF NOT EXISTS profile_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    narrative_text TEXT NOT NULL,
-    embedding TEXT,
-    embedding_model TEXT,
-    is_current INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Phase 0 (docs/11-capability-model-design.md §11) — episodes and documents.
--- Additive only: nothing above this line is altered or dropped by Phase 0.
-
-CREATE TABLE IF NOT EXISTS document (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    title TEXT,
-    body TEXT NOT NULL,
-    body_sha256 TEXT NOT NULL UNIQUE,
-    source TEXT,
-    url TEXT,
-    document_date TEXT,
-    ingested_at TEXT NOT NULL,
-    superseded_by INTEGER REFERENCES document(id),
-    notes TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_document_kind ON document(kind);
-
-CREATE TABLE IF NOT EXISTS person (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    display_name TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS episode (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id INTEGER NOT NULL REFERENCES person(id),
-    kind TEXT NOT NULL,
-    title TEXT NOT NULL,
-    organisation TEXT,
-    start_date TEXT,
-    end_date TEXT,
-    date_precision TEXT NOT NULL DEFAULT 'month',
-    parent_episode_id INTEGER REFERENCES episode(id),
-    domain_hint TEXT,
-    context_note TEXT,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_episode_person ON episode(person_id, start_date);
-
-CREATE TABLE IF NOT EXISTS episode_document (
-    episode_id INTEGER NOT NULL REFERENCES episode(id) ON DELETE CASCADE,
-    document_id INTEGER NOT NULL REFERENCES document(id),
-    PRIMARY KEY (episode_id, document_id)
-);
-
--- Not used by any Phase 0 logic; created now (dormant) so Phase 1's extraction
--- pipeline needs no further schema migration. See docs/11 §11 Phase 0 build list.
-CREATE TABLE IF NOT EXISTS vocabulary_version (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    concept_count INTEGER NOT NULL,
-    note TEXT
-);
-
-CREATE TABLE IF NOT EXISTS extraction_run (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id INTEGER NOT NULL REFERENCES document(id),
-    task TEXT NOT NULL,
-    model TEXT NOT NULL,
-    prompt_version TEXT NOT NULL,
-    vocabulary_version_id INTEGER NOT NULL REFERENCES vocabulary_version(id),
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    status TEXT NOT NULL,
-    notes TEXT
-);
-
--- Phase 1 (docs/11-capability-model-design.md §11) — vocabulary.
--- Additive only: nothing above this line is altered or dropped by Phase 1.
-
-CREATE TABLE IF NOT EXISTS concept_type (
-    code       TEXT PRIMARY KEY,
-    label      TEXT NOT NULL,
-    definition TEXT NOT NULL,
-    is_atom    INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS concept (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    type_code      TEXT NOT NULL REFERENCES concept_type(code),
-    canonical_name TEXT NOT NULL,
-    definition     TEXT,
-    status         TEXT NOT NULL DEFAULT 'proposed',
-    merged_into    INTEGER REFERENCES concept(id),
-    origin         TEXT NOT NULL,
-    created_at     TEXT NOT NULL,
-    reviewed_at    TEXT,
-    UNIQUE (type_code, canonical_name)
-);
-CREATE INDEX IF NOT EXISTS idx_concept_type ON concept(type_code, status);
-
-CREATE TABLE IF NOT EXISTS concept_alias (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    concept_id INTEGER NOT NULL REFERENCES concept(id) ON DELETE CASCADE,
-    alias      TEXT NOT NULL,
-    origin     TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE (alias, concept_id)
-);
-CREATE INDEX IF NOT EXISTS idx_concept_alias_alias ON concept_alias(alias);
-
-CREATE TABLE IF NOT EXISTS concept_xref (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    concept_id INTEGER NOT NULL REFERENCES concept(id) ON DELETE CASCADE,
-    scheme     TEXT NOT NULL,
-    code       TEXT NOT NULL,
-    label      TEXT,
-    UNIQUE (concept_id, scheme, code)
-);
-
-CREATE TABLE IF NOT EXISTS concept_edge (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_concept_id INTEGER NOT NULL REFERENCES concept(id) ON DELETE CASCADE,
-    to_concept_id   INTEGER NOT NULL REFERENCES concept(id) ON DELETE CASCADE,
-    relation        TEXT NOT NULL,
-    necessity       TEXT,
-    weight          REAL,
-    note            TEXT,
-    origin          TEXT NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'proposed',
-    created_at      TEXT NOT NULL,
-    UNIQUE (from_concept_id, to_concept_id, relation)
-);
-
-CREATE TABLE IF NOT EXISTS concept_edge_rule (
-    relation  TEXT NOT NULL,
-    from_type TEXT NOT NULL REFERENCES concept_type(code),
-    to_type   TEXT NOT NULL REFERENCES concept_type(code),
-    PRIMARY KEY (relation, from_type, to_type)
-);
-
--- status: pending | accepted_new | accepted_alias | rejected | deferred
--- ('deferred' added beyond docs/11 §8.1's DDL comment, which omitted it despite
--- the prose requiring a fourth "defer" action — see Phase 1 build notes in §11.)
-CREATE TABLE IF NOT EXISTS concept_proposal (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    surface_form         TEXT NOT NULL,
-    suggested_type       TEXT REFERENCES concept_type(code),
-    suggested_definition TEXT,
-    nearest_concept_id   INTEGER REFERENCES concept(id),
-    nearest_similarity   REAL,
-    occurrence_count     INTEGER NOT NULL DEFAULT 1,
-    document_id          INTEGER REFERENCES document(id),
-    evidence_span        TEXT,
-    extraction_run_id    INTEGER REFERENCES extraction_run(id),
-    status               TEXT NOT NULL DEFAULT 'pending',
-    resolved_concept_id  INTEGER REFERENCES concept(id),
-    resolved_at          TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_concept_proposal_surface ON concept_proposal(surface_form, status);
-
-CREATE TABLE IF NOT EXISTS d_embedding (
-    owner_kind  TEXT NOT NULL,
-    owner_id    INTEGER NOT NULL,
-    model       TEXT NOT NULL,
-    dim         INTEGER NOT NULL,
-    vector      TEXT NOT NULL,
-    computed_at TEXT NOT NULL,
-    PRIMARY KEY (owner_kind, owner_id, model)
-);
-
--- Gold-set scaffolding (§9.2) — dormant in Phase 1, same precedent as
--- vocabulary_version/extraction_run in Phase 0 (no labelling UI yet; this just
--- means Phase 2 needs no further schema migration for evaluation).
-CREATE TABLE IF NOT EXISTS gold_document (
-    document_id INTEGER PRIMARY KEY REFERENCES document(id),
-    split       TEXT NOT NULL,
-    stratum     TEXT NOT NULL,
-    labelled_at TEXT NOT NULL,
-    notes       TEXT
-);
-
-CREATE TABLE IF NOT EXISTS gold_claim (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id      INTEGER NOT NULL REFERENCES gold_document(document_id),
-    subject_hint     TEXT,
-    concept_id       INTEGER NOT NULL REFERENCES concept(id),
-    relation         TEXT NOT NULL,
-    depth            TEXT,
-    autonomy         TEXT,
-    requirement_type TEXT,
-    evidence_span    TEXT NOT NULL,
-    is_core          INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS eval_run (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    split                 TEXT NOT NULL,
-    task                  TEXT NOT NULL,
-    model                 TEXT NOT NULL,
-    prompt_version        TEXT NOT NULL,
-    vocabulary_version_id INTEGER NOT NULL REFERENCES vocabulary_version(id),
-    precision_micro       REAL,
-    recall_micro          REAL,
-    f1_micro              REAL,
-    span_validity         REAL,
-    proposals_per_doc     REAL,
-    modifier_accuracy     REAL,
-    run_at                TEXT NOT NULL,
-    notes                 TEXT
-);
-"""
+_pool: ConnectionPool | None = None
 
 
-def get_conn():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def get_pool() -> ConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = ConnectionPool(
+            conninfo=database_url(),
+            min_size=1,
+            max_size=10,
+            kwargs={"row_factory": dict_row, "autocommit": False},
+            open=True,
+        )
+    return _pool
+
+
+def reset_pool() -> None:
+    """Close and drop the pool so the next get_pool() rebuilds it against
+    whatever DATABASE_URL currently resolves to. Used by tests, which point
+    DATABASE_URL at a fresh throwaway database per session."""
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        _pool = None
 
 
 @contextmanager
 def db_cursor():
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        yield cur
-        conn.commit()
-    finally:
-        conn.close()
+    """Checkout a pooled connection, yield a dict-row cursor, commit on
+    success / rollback on exception, return the connection to the pool."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            yield cur
 
 
-# Columns added after the initial v1 schema. init_db() adds any that are missing
-# from an existing database on disk, so upgrading doesn't require deleting local data.
-_MIGRATIONS = {
-    "job_roles": {
-        "node_type": "TEXT NOT NULL DEFAULT 'posting'",
-        "typical_tasks": "TEXT",
-        "skill_decomposition": "TEXT",
-        "technical_subjects": "TEXT",
-        "grounding_note": "TEXT",
-        "feasibility_note": "TEXT",
-        "is_plausible": "INTEGER",
-    },
-    "job_role_skills": {
-        "resolved_concept_id": "INTEGER REFERENCES concept(id)",
-    },
-}
+def run_migrations() -> list[str]:
+    """Apply every backend/migrations/*.sql file not yet recorded in
+    jobber.migration_history, in filename order. Each file is a plain SQL
+    script (DDL, no bind parameters) executed as a single statement batch —
+    Postgres runs semicolon-separated statements, including PL/pgSQL DO
+    blocks, in one round trip when psycopg sends them as a simple query
+    (i.e. with no parameters), so no manual statement-splitting is needed.
+    `migrations/manual/` is NOT scanned — see its own file headers for why.
 
-
-def _migrate(conn: sqlite3.Connection) -> None:
-    for table, columns in _MIGRATIONS.items():
-        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        for name, ddl in columns.items():
-            if name not in existing:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-
-
-# Phase 1 seed vocabulary (docs/11 §2.3 concept types, §4.2.4 edge grammar). Both
-# tables use natural keys (concept_type.code, the concept_edge_rule triple), so
-# seeding is a plain INSERT OR IGNORE — no SELECT-then-INSERT dance like
-# get_or_create_person needs for a surrogate-keyed singleton.
-_CONCEPT_TYPES = [
-    ("knowledge", "Knowledge", "A body of theory one can know", 1, 1),
-    ("method", "Method", "A named technique one can apply", 1, 2),
-    ("tool", "Tool", "A named artefact one operates", 1, 3),
-    ("function", "Function", "A business activity", 1, 4),
-    ("domain", "Domain", "A sector or market context", 1, 5),
-    ("product", "Product", "A thing sold or managed", 1, 6),
-    ("regulation", "Regulation", "A named regulatory or reporting regime", 1, 7),
-    ("credential", "Credential", "An externally-issued, verifiable qualification", 1, 8),
-    ("capability", "Capability", "Something a person can do, at economic scale", 0, 9),
-    ("role_archetype", "Role archetype", "A recurring role shape across many postings", 0, 10),
-]
-
-_ATOMIC_TYPES = [t[0] for t in _CONCEPT_TYPES if t[3] == 1]
-
-# docs/11 §4.2.4 "Seed grammar (Phase 1-3 subset)". broader_than is seeded within
-# each atomic type only — not applied to the two composite types, which are
-# differentiated by their edges rather than a taxonomy of their own.
-_CONCEPT_EDGE_RULES = (
-    [("component_of", t, "capability") for t in _ATOMIC_TYPES]
-    + [("demands", "role_archetype", "capability")]
-    + [("broader_than", t, t) for t in _ATOMIC_TYPES]
-    + [("governs", "regulation", "function")]
-    + [("applies_in", "method", "domain"), ("applies_in", "method", "product")]
-    + [("senior_to", "role_archetype", "role_archetype")]
-)
-
-
-def seed_vocabulary(conn: sqlite3.Connection) -> None:
-    conn.executemany(
-        "INSERT OR IGNORE INTO concept_type (code, label, definition, is_atom, sort_order) "
-        "VALUES (?, ?, ?, ?, ?)",
-        _CONCEPT_TYPES,
-    )
-    conn.executemany(
-        "INSERT OR IGNORE INTO concept_edge_rule (relation, from_type, to_type) VALUES (?, ?, ?)",
-        _CONCEPT_EDGE_RULES,
-    )
-
-
-def init_db():
-    conn = get_conn()
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    seed_vocabulary(conn)
-    conn.commit()
-    conn.close()
-
-
-def upsert_job_role(role_id: int | None, columns: dict, skills: list[dict]) -> int:
-    """Insert a new job_roles row, or overwrite an existing one's columns + skills.
-
-    Shared by postings and targets (same table, different column subsets) and by
-    both import (role_id=None) and edit (role_id set) — editing an existing
-    posting/target with a fresh paste is a full overwrite of these columns, not a
-    merge, so re-pasting a more complete extraction always wins.
+    Returns the list of filenames actually applied (empty if the database was
+    already up to date) — callers/tests use this to confirm migrations ran.
     """
-    with db_cursor() as cur:
-        if role_id is None:
-            cols = list(columns.keys())
-            placeholders = ", ".join(["?"] * len(cols))
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS jobber")
             cur.execute(
-                f"INSERT INTO job_roles ({', '.join(cols)}) VALUES ({placeholders})",
-                [columns[c] for c in cols],
+                "CREATE TABLE IF NOT EXISTS jobber.migration_history "
+                "(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
             )
-            role_id = cur.lastrowid
-        else:
-            cur.execute("SELECT id FROM job_roles WHERE id = ?", (role_id,))
-            if not cur.fetchone():
-                raise ValueError("role not found")
-            set_clause = ", ".join(f"{c} = ?" for c in columns)
-            cur.execute(
-                f"UPDATE job_roles SET {set_clause} WHERE id = ?",
-                [*columns.values(), role_id],
-            )
-            cur.execute("DELETE FROM job_role_skills WHERE job_role_id = ?", (role_id,))
+            cur.execute("SELECT filename FROM jobber.migration_history")
+            applied = {row["filename"] for row in cur.fetchall()}
 
-        # Lazy import: keeps db.py free of a module-load-time dependency on
-        # embeddings.py (see concept_linking.py's docstring). Exact-match only —
-        # cheap enough to run inline on every skill insert. Without this, editing
-        # a posting (which deletes+reinserts job_role_skills, above) would
-        # silently revert already-resolved skills back to unresolved.
-        from .concept_linking import exact_match_concept_id, normalize_name
-
-        for skill in skills:
-            resolved_concept_id = exact_match_concept_id(cur, normalize_name(skill["name"]))
-            cur.execute(
-                "INSERT INTO job_role_skills (job_role_id, name, category, importance, requirement_type, resolved_concept_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    role_id,
-                    skill["name"],
-                    skill.get("category"),
-                    skill.get("importance"),
-                    skill.get("requirement_type"),
-                    resolved_concept_id,
-                ),
-            )
-    return role_id
+        pending = sorted(
+            p for p in MIGRATIONS_DIR.glob("*.sql") if p.is_file() and p.name not in applied
+        )
+        newly_applied = []
+        for path in pending:
+            sql_text = path.read_text(encoding="utf-8")
+            with conn.cursor() as cur:
+                cur.execute(sql_text)
+                cur.execute(
+                    "INSERT INTO jobber.migration_history (filename) VALUES (%s)",
+                    (path.name,),
+                )
+            conn.commit()
+            newly_applied.append(path.name)
+        return newly_applied
 
 
-_JSON_COLUMNS = ("top_adjacent_roles", "typical_tasks", "skill_decomposition", "technical_subjects")
-
-
-def row_to_dict(row: sqlite3.Row) -> dict:
+def row_to_dict(row: dict, json_columns: tuple[str, ...] = ()) -> dict:
+    """dict_row already returns a plain dict; this exists for the handful of
+    columns still round-tripped as JSON text at the app boundary rather than
+    relying on driver-level jsonb auto-adaptation (kept explicit and
+    predictable — see docs/14). `embedding` is never present here: embeddings
+    live only in jobber.d_embedding (see app/embeddings.py), never on the
+    primary row, so there is nothing to strip."""
     d = dict(row)
-    for key in _JSON_COLUMNS:
-        if d.get(key):
+    for key in json_columns:
+        if isinstance(d.get(key), str):
             try:
                 d[key] = json.loads(d[key])
-            except (TypeError, json.JSONDecodeError):
+            except (TypeError, ValueError):
                 pass
-    if "raw_json" in d and d["raw_json"]:
-        try:
-            d["raw_json"] = json.loads(d["raw_json"])
-        except (TypeError, json.JSONDecodeError):
-            pass
-    if "is_plausible" in d and d["is_plausible"] is not None:
-        d["is_plausible"] = bool(d["is_plausible"])
-    if "embedding" in d:
-        d.pop("embedding", None)  # never ship raw vectors to the client
     return d
 
 
-# Phase 0 is single-person: docs/11 §4.3 models `person` for a future multi-subject
-# extension, but nothing today creates more than one row. This is the one seam
-# both the migration script and the episodes routes use to find/seed it.
+def to_json_param(value) -> Json | None:
+    """Wrap a Python value for a jsonb column parameter. None stays None
+    (NULL), not the JSON literal "null"."""
+    return None if value is None else Json(value)
+
+
+# --- document ---------------------------------------------------------------
+#
+# jobber.document is immutable once written (doc 11 §4.1) — `body_sha256` makes
+# re-ingesting the same text idempotent. `provenance` must always be passed
+# explicitly (docs/14 §4: the column's ADD COLUMN default was dropped on
+# purpose) so every caller states, in code, whether this is a genuine capture
+# or a reconstruction.
+
+_VALID_PROVENANCE = {"original_capture", "legacy_extracted", "user_paste", "unspecified"}
+
+
+def get_or_create_document(
+    cur,
+    *,
+    kind: str,
+    body: str,
+    provenance: str,
+    title: str | None = None,
+    source: str | None = None,
+    url: str | None = None,
+    document_date: str | None = None,
+    notes: str | None = None,
+) -> tuple[int, bool]:
+    """Returns (document_id, created). created=False means a document with
+    this exact body already existed (re-ingestion of identical text) — the
+    existing row's id is returned rather than a duplicate being made."""
+    if provenance not in _VALID_PROVENANCE:
+        raise ValueError(f"invalid provenance {provenance!r}, must be one of {_VALID_PROVENANCE}")
+    body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    cur.execute("SELECT id FROM jobber.document WHERE body_sha256 = %s", (body_sha256,))
+    existing = cur.fetchone()
+    if existing:
+        return existing["id"], False
+
+    cur.execute(
+        """
+        INSERT INTO jobber.document (kind, title, body, body_sha256, source, url, document_date, provenance, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (body_sha256) DO NOTHING
+        RETURNING id
+        """,
+        (kind, title, body, body_sha256, source, url, document_date, provenance, notes),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"], True
+
+    # Lost a race with a concurrent insert of the same content — fetch what won.
+    cur.execute("SELECT id FROM jobber.document WHERE body_sha256 = %s", (body_sha256,))
+    return cur.fetchone()["id"], False
+
+
+# --- role_instance / role_skill_observation --------------------------------
+#
+# jobber.role_instance carries only canonical/provenance fields (doc 11 §4.3).
+# Model-judgment scores and target-only decomposition fields that predate the
+# capability model live in the sibling jobber.legacy_role_analysis (doc 11
+# §10.2) — kept for compatibility, wired into nothing new. Callers still pass
+# one flat dict (as the pre-Phase-2 app did); this function routes each key to
+# its table so route code doesn't need to know about the split.
+
+_ROLE_INSTANCE_COLUMNS = {
+    "kind", "document_id", "archetype_concept_id", "title", "organisation", "location",
+    "country", "remote_type", "employment_type", "seniority_level", "posting_date",
+    "captured_at", "url", "summary", "career_track",
+}
+_LEGACY_ANALYSIS_JSON_COLUMNS = (
+    "top_adjacent_roles", "typical_tasks", "skill_decomposition", "technical_subjects", "raw_json",
+)
+_LEGACY_ANALYSIS_COLUMNS = {
+    "seniority_score", "complexity_score", "specialisation_score", "transferability_score",
+    "market_demand_score", "rarity_score", "automation_risk_score", "top_adjacent_roles",
+    "salary_min", "salary_max", "salary_estimate_min", "salary_estimate_max", "currency",
+    "key_skills_summary", "description", "requirements", "responsibilities", "notes",
+    "extraction_status", "extraction_notes", "raw_json",
+    "typical_tasks", "skill_decomposition", "technical_subjects", "grounding_note",
+    "feasibility_note", "is_plausible",
+}
+
+
+def upsert_role_instance(cur, role_id: int | None, columns: dict, skills: list[dict]) -> int:
+    """Insert a new role_instance (+ legacy_role_analysis) row, or overwrite an
+    existing one's columns + skill observations. `columns` is a flat dict
+    covering both tables — see the split above. Skill observations are a full
+    delete+reinsert on edit, same as the pre-Phase-2 behaviour: they are
+    explicitly the legacy flat model (jobber.role_skill_observation), not the
+    append-only requirement_claim model, so this is not the doc 11 §3.4
+    violation that append-only claims must avoid.
+
+    Takes a cursor rather than opening its own — callers that also create the
+    role's document (get_or_create_document) or set its embedding need that
+    write visible in the *same* transaction, not a separate pooled connection
+    that can't see the other's uncommitted rows.
+    """
+    role_cols = {k: v for k, v in columns.items() if k in _ROLE_INSTANCE_COLUMNS}
+    legacy_cols = {k: v for k, v in columns.items() if k in _LEGACY_ANALYSIS_COLUMNS}
+    for key in _LEGACY_ANALYSIS_JSON_COLUMNS:
+        if key in legacy_cols:
+            legacy_cols[key] = to_json_param(legacy_cols[key])
+
+    if role_id is None:
+        cols = list(role_cols.keys())
+        placeholders = ", ".join(["%s"] * len(cols))
+        cur.execute(
+            f"INSERT INTO jobber.role_instance ({', '.join(cols)}) VALUES ({placeholders}) RETURNING id",
+            [role_cols[c] for c in cols],
+        )
+        role_id = cur.fetchone()["id"]
+    else:
+        cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_id,))
+        if not cur.fetchone():
+            raise ValueError("role not found")
+        if role_cols:
+            set_clause = ", ".join(f"{c} = %s" for c in role_cols)
+            cur.execute(
+                f"UPDATE jobber.role_instance SET {set_clause} WHERE id = %s",
+                [*role_cols.values(), role_id],
+            )
+        cur.execute("DELETE FROM jobber.role_skill_observation WHERE role_instance_id = %s", (role_id,))
+
+    if legacy_cols:
+        cols = list(legacy_cols.keys())
+        insert_placeholders = ", ".join(["%s"] * len(cols))
+        update_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
+        cur.execute(
+            f"""
+            INSERT INTO jobber.legacy_role_analysis (role_instance_id, {', '.join(cols)})
+            VALUES (%s, {insert_placeholders})
+            ON CONFLICT (role_instance_id) DO UPDATE SET {update_clause}
+            """,
+            [role_id, *legacy_cols.values()],
+        )
+
+    # Lazy import: keeps db.py free of a module-load-time dependency on
+    # embeddings.py, same reasoning as the pre-Phase-2 module.
+    from .concept_linking import exact_match_concept_id, normalize_name
+
+    for skill in skills:
+        resolved_concept_id = exact_match_concept_id(cur, normalize_name(skill["name"]))
+        cur.execute(
+            "INSERT INTO jobber.role_skill_observation "
+            "(role_instance_id, name, category, importance, requirement_type, resolved_concept_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                role_id,
+                skill["name"],
+                skill.get("category"),
+                skill.get("importance"),
+                skill.get("requirement_type"),
+                resolved_concept_id,
+            ),
+        )
+    return role_id
+
+
+# Phase 0 is (still) single-person: docs/11 §4.3 models `person` for a future
+# multi-subject extension; nothing creates more than one row. See docs/14 §6
+# for why this table is not extended with a claims layer in Phase 2 — that is
+# profile360's role now.
 DEFAULT_PERSON_DISPLAY_NAME = "Ranga"
 
 
-def get_or_create_person(cur: sqlite3.Cursor, display_name: str = DEFAULT_PERSON_DISPLAY_NAME) -> int:
-    cur.execute("SELECT id FROM person ORDER BY id LIMIT 1")
+def get_or_create_person(cur, display_name: str = DEFAULT_PERSON_DISPLAY_NAME) -> int:
+    cur.execute("SELECT id FROM jobber.person ORDER BY id LIMIT 1")
     row = cur.fetchone()
     if row:
         return row["id"]
     cur.execute(
-        "INSERT INTO person (display_name, created_at) VALUES (?, datetime('now'))",
+        "INSERT INTO jobber.person (display_name) VALUES (%s) RETURNING id",
         (display_name,),
     )
-    return cur.lastrowid
+    return cur.fetchone()["id"]
