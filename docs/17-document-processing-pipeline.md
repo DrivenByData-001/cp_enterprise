@@ -135,6 +135,13 @@ gives `partial` real meaning: "a role was created, but the model itself
 flagged the extraction as incomplete or uncertain" — exactly the case §5's
 `PARTIAL / NEEDS ATTENTION` state exists to surface.
 
+As a deterministic extraction-quality guardrail, the pipeline also marks a
+response `partial` when its validated `skills` list is empty while any parsed
+`job.description`, `job.requirements`, or `job.responsibilities` is non-blank.
+It preserves the role and complete output payload for review, does not infer
+or fabricate skills, and does not affect the historical-extraction policy or
+the existing handling of minimal parsed output.
+
 ## 7. Duplicate-processing and concurrency protection
 
 Before starting a new attempt, the pipeline checks (brief §14, literally):

@@ -365,6 +365,18 @@ def _apply_known_metadata(payload: JobPostingImport, document: dict) -> None:
         payload.metadata.url = document["url"]
 
 
+def _has_substantive_job_content(payload: JobPostingImport) -> bool:
+    """Whether the validated extraction contains content that warrants skills."""
+    return any(
+        (value or "").strip()
+        for value in (
+            payload.job.description,
+            payload.job.requirements,
+            payload.job.responsibilities,
+        )
+    )
+
+
 # --- persistence (brief §11/§12) --------------------------------------------
 
 
@@ -537,6 +549,8 @@ def process_job_posting_document(document_id: str) -> dict:
     _apply_known_metadata(payload, document)
     _enforce_historical_extraction_policy(payload, document)
     run_status = "ok" if (payload.metadata.extraction_status or "ok") == "ok" else "partial"
+    if not payload.skills and _has_substantive_job_content(payload):
+        run_status = "partial"
 
     try:
         role_id = _persist_success(document_id, run_id, run_status, payload, ai_result.run)

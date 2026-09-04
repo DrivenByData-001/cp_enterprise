@@ -169,6 +169,109 @@ def test_running_to_ok_lifecycle(client, monkeypatch):
     assert run["finished_at"] is not None
 
 
+def test_substantive_zero_skill_extraction_is_partial_with_preserved_provenance(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Substantive posting with no extracted skills.")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={
+                "description": "Lead actuarial work across Solvency II technical provisions.",
+                "requirements": "Strong analytical competence and stakeholder management.",
+                "responsibilities": "Own the ORSA and asset-liability management reporting.",
+            },
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    assert result["status"] == "partial"
+    assert result["role_instance_id"] is not None
+    assert result["output_payload"]["skills"] == []
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT status, output_payload, result_role_instance_id FROM jobber.extraction_run WHERE id = %s",
+            (result["extraction_run_id"],),
+        )
+        run = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.role_skill_observation WHERE role_instance_id = %s",
+            (result["role_instance_id"],),
+        )
+        skill_count = cur.fetchone()["n"]
+
+    assert run["status"] == "partial"
+    assert str(run["result_role_instance_id"]) == result["role_instance_id"]
+    assert run["output_payload"] == result["output_payload"]
+    assert skill_count == 0
+    assert document_processing.process_job_posting_document(document_id)["status"] == "already_analysed"
+
+
+def test_substantive_extraction_with_skills_remains_ok(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Substantive posting with extracted skills.")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={"requirements": "Experience with Solvency II technical provisions."},
+            skills=[Skill(name="Solvency II", category="technical", importance=5, requirement_type="required")],
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    assert result["status"] == "ok"
+    assert result["output_payload"]["skills"][0]["name"] == "Solvency II"
+
+
+def test_zero_skills_without_substantive_parsed_content_remains_ok(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Minimal but processable raw posting text.")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={"description": " ", "requirements": "", "responsibilities": None},
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    assert result["status"] == "ok"
+    assert result["output_payload"]["skills"] == []
+
+
+def test_zero_skill_guardrail_does_not_change_historical_policy(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(
+            cur,
+            "Historical substantive posting with no extracted skills.",
+            source_date="2017-02-01",
+        )
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={"description": "Manage historical actuarial technical provisions."},
+            analysis_overrides={
+                "market_demand_score": 0.9,
+                "automation_risk_score": 0.2,
+                "top_adjacent_roles": ["Actuary"],
+            },
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    assert result["status"] == "partial"
+    analysis = result["output_payload"]["analysis"]
+    assert analysis["market_demand_score"] is None
+    assert analysis["automation_risk_score"] is None
+    assert analysis["top_adjacent_roles"] is None
+
+
 def test_provider_failure_produces_running_to_failed(client, monkeypatch):
     with db.db_cursor() as cur:
         document_id = _seed_document(cur, "Provider failure posting.")
