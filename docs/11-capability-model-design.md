@@ -1416,10 +1416,14 @@ Supabase/Postgres before this phase started):**
    sibling subject columns (`role_instance_id`, `profile360_claim_id`,
    `profile360_capability_id`) discriminated by a new `subject_type` column,
    with a CHECK enforcing exactly one is set — never a fabricated FK to
-   satisfy the original NOT NULL. `vocabulary_version_id` stayed NOT NULL, and
-   is now real: `concept_linking.get_or_create_current_vocabulary_version`
+   satisfy the original NOT NULL. `vocabulary_version_id` stayed NOT NULL in
+   Phase 2, and is real: `concept_linking.get_or_create_current_vocabulary_version`
    versions by a genuine change in active concept count rather than
-   inventing one per run. Both successful and failed runs are recorded
+   inventing one per run. (Phase 3B later made the column nullable — guarded
+   by a CHECK requiring a real value for every task except `job_posting_extract`,
+   which has no vocabulary dependency to report — see
+   `docs/17-document-processing-pipeline.md` §4; every vocabulary-dependent
+   task listed here still must supply one.) Both successful and failed runs are recorded
    (`status='failed'` carries `error_type`/`error_message`), satisfying the
    Phase 2 brief's provenance requirements beyond what this section
    originally asked for.

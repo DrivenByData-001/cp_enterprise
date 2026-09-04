@@ -94,7 +94,8 @@ See the README for local setup.
   prompt/contract predates the capability model and stays as-is here — see
   §5.
 - **No `document`/`extraction_run` rows written yet** for native posting
-  extraction. See §4.
+  extraction at the time this section was originally written. See §4 — this
+  gap was closed in Phase 3B (`docs/17-document-processing-pipeline.md` §10).
 
 ## 4. Relationship to `extraction_run` — done in Phase 2
 
@@ -112,15 +113,21 @@ in `docs/11-capability-model-design.md`'s Phase 2 build notes (§11):
   subject columns discriminated by a new `subject_type` — a profile360 claim/
   capability mapping task has no jobber document to point at, and the
   original `NOT NULL` had no way to express that honestly.
-- **`import_posting_native` itself still does not write an `extraction_run`
-  row** — it predates the capability model's `JobPostingImport` shape (§5
-  below) and stays a legacy-scores/legacy-analysis-only path (packed into
-  `role_instance.legacy_scores`/`legacy_analysis` JSONB — docs/14 §3, not a
-  separate table), matching §14 of the Phase 2 brief ("old flat fields... are
-  not authoritative Phase 2
-  outputs"). The four tasks that *do* write `extraction_run` are the new
-  closed-vocabulary ones — see §7 below — reached via the separate
-  "source-aware ingest" path (`POST /api/role-instances/ingest`) plus
+- **`import_posting_native` itself did not write an `extraction_run` row**
+  through Phase 2 — it predated the capability model's `JobPostingImport`
+  shape (§5 below) and stayed a legacy-scores/legacy-analysis-only path
+  (packed into `role_instance.legacy_scores`/`legacy_analysis` JSONB —
+  docs/14 §3, not a separate table), matching §14 of the Phase 2 brief ("old
+  flat fields... are not authoritative Phase 2 outputs"). **As of Phase 3B
+  this is no longer true**: `import_posting_native` now creates the
+  `jobber.document` first and routes through
+  `app.document_processing.process_job_posting_document` (the same service
+  the historical-corpus pipeline uses), so it writes a real `job_posting_extract`
+  `extraction_run` row like every other task below — see
+  `docs/17-document-processing-pipeline.md` §10. Through Phase 2, the four
+  tasks that *did* write `extraction_run` were the closed-vocabulary ones —
+  see §7 below — reached via the separate "source-aware ingest" path
+  (`POST /api/role-instances/ingest`) plus
   `POST /api/role-instances/{id}/extract-requirements`, not via
   `/api/import/native`.
 

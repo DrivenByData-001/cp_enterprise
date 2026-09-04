@@ -24,6 +24,7 @@ EXPECTED_MIGRATIONS = {
     "0004_profile360_mapping.sql",
     "0005_preferences.sql",
     "0006_phase3_capability_derivations.sql",
+    "0007_document_processing_lifecycle.sql",
 }
 
 
@@ -230,6 +231,84 @@ def test_concept_edge_necessity_and_status_constrained(client):
                 "INSERT INTO jobber.concept_edge (from_concept_id, to_concept_id, relation, necessity, origin) "
                 "VALUES (%s, %s, 'component_of', 'not_a_real_necessity', 'curator')",
                 (tool_id, cap_id),
+            )
+
+
+def test_extraction_run_gained_result_linkage_columns(client):
+    """docs/17 §3: extraction_run.result_role_instance_id/output_payload,
+    added by 0007, are what a job_posting_extract run's outcome links
+    through — confirm both exist with the right shape post-migration."""
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'jobber' AND table_name = 'extraction_run' "
+            "AND column_name IN ('result_role_instance_id', 'output_payload')"
+        )
+        found = {row["column_name"]: row["data_type"] for row in cur.fetchall()}
+    assert found == {"result_role_instance_id": "uuid", "output_payload": "jsonb"}
+
+
+def test_extraction_run_status_check_now_permits_running(client):
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.document (source_key, kind, content_text, provenance_quality) "
+            "VALUES ('test-running-status', 'job_posting', 'x', 'original') RETURNING id"
+        )
+        document_id = cur.fetchone()["id"]
+        cur.execute(
+            """
+            INSERT INTO jobber.extraction_run
+                (task, subject_type, document_id, model, prompt_name, prompt_version, vocabulary_version_id, started_at, status)
+            VALUES ('job_posting_extract', 'document', %s, 'test-model', 'p', 'v', NULL, now(), 'running')
+            RETURNING id
+            """,
+            (document_id,),
+        )
+        assert cur.fetchone() is not None
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute(
+                """
+                INSERT INTO jobber.extraction_run
+                    (task, subject_type, document_id, model, prompt_name, prompt_version, vocabulary_version_id, started_at, status)
+                VALUES ('job_posting_extract', 'document', %s, 'test-model', 'p', 'v', NULL, now(), 'not_a_real_status')
+                """,
+                (document_id,),
+            )
+
+
+def test_vocabulary_version_id_nullable_only_for_job_posting_extract(client):
+    """docs/17 §4: vocabulary_version_id is nullable at the column level now,
+    but a guarded CHECK still requires a real one for every vocabulary-
+    dependent task — only job_posting_extract may omit it."""
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.document (source_key, kind, content_text, provenance_quality) "
+            "VALUES ('test-vocab-null', 'job_posting', 'x', 'original') RETURNING id"
+        )
+        document_id = cur.fetchone()["id"]
+
+        # job_posting_extract: NULL vocabulary_version_id is fine.
+        cur.execute(
+            """
+            INSERT INTO jobber.extraction_run
+                (task, subject_type, document_id, model, prompt_name, prompt_version, vocabulary_version_id, started_at, status)
+            VALUES ('job_posting_extract', 'document', %s, 'test-model', 'p', 'v', NULL, now(), 'ok')
+            """,
+            (document_id,),
+        )
+
+        # requirement_extract (a real vocabulary-dependent task): NULL must
+        # still be rejected — the relaxation is scoped to job_posting_extract
+        # only, never a blanket removal of the guarantee.
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute(
+                """
+                INSERT INTO jobber.extraction_run
+                    (task, subject_type, document_id, model, prompt_name, prompt_version, vocabulary_version_id, started_at, status)
+                VALUES ('requirement_extract', 'document', %s, 'test-model', 'p', 'v', NULL, now(), 'ok')
+                """,
+                (document_id,),
             )
 
 

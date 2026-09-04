@@ -1,19 +1,13 @@
 import json
-from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ..ai import (
-    AIConfigError,
-    AIProviderError,
-    AIResponseFormatError,
-    AISchemaValidationError,
-    run_json_task,
-)
 from ..db import create_document, db_cursor, upsert_role_instance
+from ..document_processing import DocumentNotProcessableError, process_job_posting_document
 from ..embeddings import embed_text, role_embedding_text, set_embedding
 from ..models import JobPostingImport
+from ..posting_persistence import posting_role_columns
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
@@ -67,50 +61,9 @@ def posting_columns(cur, payload: JobPostingImport) -> dict:
             source_date=job.posting_date,
         )
 
-    legacy_scores = {
-        "seniority_score": analysis.seniority_score,
-        "complexity_score": analysis.complexity_score,
-        "specialisation_score": analysis.specialisation_score,
-        "transferability_score": analysis.transferability_score,
-        "market_demand_score": analysis.market_demand_score,
-        "rarity_score": analysis.rarity_score,
-        "automation_risk_score": analysis.automation_risk_score,
-    }
-    legacy_analysis = {
-        "top_adjacent_roles": analysis.top_adjacent_roles,
-        "key_skills_summary": analysis.key_skills_summary,
-        "notes": analysis.notes,
-        "raw_json": json.loads(payload.model_dump_json()),
-    }
-
-    return {
-        "instance_type": "observed_posting",
-        "target_basis": None,
-        "document_id": document_id,
-        "title": job.title,
-        "organisation": job.organisation,
-        "location": job.location,
-        "country": job.country,
-        "remote_type": job.remote_type,
-        "employment_type": job.employment_type,
-        "seniority_level": job.seniority_level,
-        "posting_date": job.posting_date,
-        "salary_min": job.salary_min,
-        "salary_max": job.salary_max,
-        "salary_estimate_min": analysis.salary_estimate_min,
-        "salary_estimate_max": analysis.salary_estimate_max,
-        "currency": job.currency,
-        "description": job.description,
-        "requirements": job.requirements,
-        "responsibilities": job.responsibilities,
-        "summary": analysis.summary,
-        "career_track": analysis.career_track,
-        "legacy_scores": legacy_scores,
-        "legacy_analysis": legacy_analysis,
-        "extraction_status": meta.extraction_status,
-        "extraction_notes": meta.notes_for_user,
-        "_embedding_text": text,
-    }
+    columns = posting_role_columns(payload, document_id)
+    columns["_embedding_text"] = text
+    return columns
 
 
 def _insert_posting(payload: JobPostingImport) -> str:
@@ -131,47 +84,60 @@ def import_posting(payload: JobPostingImport):
     return {"id": role_id, "status": "imported"}
 
 
+_NATIVE_ERROR_STATUS = {
+    "AIConfigError": 503,
+    "AIProviderError": 502,
+    "AIResponseFormatError": 422,
+    "AISchemaValidationError": 422,
+}
+
+
 @router.post("/native")
 def import_posting_native(payload: NativePostingImport):
-    """Raw posting text -> native AI extraction -> typed validation -> existing import path.
-
-    The AI task layer (`app.ai`) never touches storage directly: it returns a
-    validated `JobPostingImport`, which is then handed to the same
-    `_insert_posting` used by the legacy JSON/bulk paths below.
+    """Raw-first (docs/17 §10/§20): the actual pasted text becomes the
+    immutable `jobber.document.content_text` *before* any AI call, and the
+    same document-processing service the historical corpus uses
+    (`app.document_processing.process_job_posting_document`) turns that
+    document into a role — rather than the previous flow, which ran
+    extraction first and only ever captured the model's *composed* summary
+    text as the document. No insertion or extraction-run-recording logic is
+    duplicated between this path and that service.
     """
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Posting text is required")
-    context = [f"Posting text:\n{payload.text.strip()}"]
-    if payload.source_url:
-        context.append(f"Source URL: {payload.source_url}")
-    if payload.known_posting_date:
-        context.append(f"Known posting date: {payload.known_posting_date}")
+
+    with db_cursor() as cur:
+        document_id, _duplicate_of = create_document(
+            cur,
+            kind="job_posting",
+            content_text=payload.text.strip(),
+            provenance_quality="original",
+            source="user_paste",
+            url=payload.source_url,
+            source_date=payload.known_posting_date,
+        )
 
     try:
-        result = run_json_task(
-            task="job_posting_extract",
-            prompt_name="extract_job_posting.md",
-            user_input="\n\n".join(context),
-            output_model=JobPostingImport,
-        )
-    except AIConfigError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except AIProviderError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    except (AIResponseFormatError, AISchemaValidationError) as e:
+        result = process_job_posting_document(document_id)
+    except DocumentNotProcessableError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    if payload.source_url and not result.output.metadata.url:
-        result.output.metadata.url = payload.source_url
-    if payload.known_posting_date and not result.output.job.posting_date:
-        result.output.job.posting_date = payload.known_posting_date
+    if result["status"] == "failed":
+        code = _NATIVE_ERROR_STATUS.get(result["error_type"], 502)
+        raise HTTPException(status_code=code, detail=result["error"]) from None
 
-    role_id = _insert_posting(result.output)
     return {
-        "id": role_id,
+        "id": result["role_instance_id"],
         "status": "imported",
-        "extraction": result.output,
-        "run": asdict(result.run),
+        "extraction_run_id": result["extraction_run_id"],
+        "extraction": result["output_payload"],
+        "run": {
+            "task": "job_posting_extract",
+            "model": result["model"],
+            "prompt_name": result["prompt_name"],
+            "prompt_version": result["prompt_version"],
+            "status": result["status"],
+        },
     }
 
 

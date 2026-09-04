@@ -179,6 +179,7 @@ def _stub_embeddings(monkeypatch):
         "app.routes.import_routes.embed_text",
         "app.routes.targets.embed_text",
         "app.routes.role_instances.embed_text",
+        "app.document_processing.embed_text",
     ):
         monkeypatch.setattr(target, _fake_embed_text)
 
