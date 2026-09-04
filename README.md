@@ -26,6 +26,14 @@ kept for reproducibility.
   "AI extraction (legacy flat fields)" flow still works unchanged for the
   original flat posting shape (title/org/salary/skills[]), and "Legacy JSON
   import" remains for migration/recovery. See `docs/13-ai-task-layer.md`.
+- **Raw documents are processed, never re-captured.** `jobber.document` is
+  immutable source evidence; turning an existing raw posting into a role
+  (`job_posting_extract`) always reuses that same document — it never creates
+  a second one. Historical postings are analysed in the professional/
+  labour-market context of their *original* posting date, not today's.
+  Duplicate/concurrent processing of the same document is protected at the
+  database level, and every attempt (success or failure) is recorded in
+  `jobber.extraction_run`. See `docs/17-document-processing-pipeline.md`.
 - **Requirement extraction is closed-vocabulary.** Every requirement is either
   mapped onto an existing canonical concept (with a verbatim quote from the
   source, when the source document's provenance supports one) or filed as an

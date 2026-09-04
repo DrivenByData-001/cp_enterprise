@@ -6,6 +6,7 @@ from .routes import (
     capabilities,
     comparison,
     concepts,
+    documents,
     episodes,
     evaluation,
     import_routes,
@@ -46,6 +47,7 @@ app.include_router(preferences.router)
 app.include_router(comparison.router)
 app.include_router(capabilities.router)
 app.include_router(evaluation.router)
+app.include_router(documents.router)
 
 
 @app.get("/api/health")

@@ -108,9 +108,57 @@ Your task:
 
 ---
 
+## HISTORICAL CONTEXT
+
+This is a deliberate, deterministic rule, not a suggestion: **analyse the role
+substantially in the professional and labour-market context of its original
+posting date — never as if it were posted today (see the real "today" in the
+system context) — unless the input gives you no date information at all, in
+which case use whatever era the text itself implies.**
+
+If the input gives you a "Known original posting date" (or the posting text
+itself states/implies one), that date is authoritative for `job.posting_date`
+and is the era every judgment below must be made in:
+
+* **Salary is a fact of the original advert, not a modern one.** `salary_min`/
+  `salary_max`/`currency` are exactly what the advert states — copy them
+  verbatim, never inflate, convert, or "modernise" them.
+* **Do not invent a historical salary estimate you have no credible basis
+  for.** If you cannot ground `salary_estimate_min`/`salary_estimate_max` in
+  something in the text or well-established knowledge of that era's market,
+  set them `null` rather than guessing a plausible-looking number.
+* **`market_demand_score`, `automation_risk_score`, `top_adjacent_roles`, and
+  every other forward-looking judgment in `analysis` must reflect the
+  labour market *at the original posting date*, not the present day.** A
+  skill that is scarce now may have been common then, or vice versa — do not
+  silently substitute today's market for the historical one.
+* **Prefer `null` over false precision.** If an analytical value cannot be
+  meaningfully determined in the role's original historical context, use
+  `null` — a confident-looking number you are not actually grounding in
+  anything is worse than an honest gap.
+* **`metadata.captured_at` is still always the real present moment** (this
+  extraction is happening now, regardless of how old the posting is) —
+  historical context changes how you *judge* the role, never when you record
+  yourself as having done the judging.
+* Do not apply inflation adjustment or any other modern compensation
+  normalisation here — that is a separate, later analytical step, not part of
+  this extraction.
+
+If no date information is available at all (no stated date, nothing supplied
+below), analyse the posting at face value from its own content and say so via
+`extraction_status`/`notes_for_user` if that materially limits confidence —
+do not default to assuming the posting is current.
+
+---
+
 ## INPUT
 
-Pick whichever applies:
+Pick whichever applies. Either the free-form fields below, or a structured
+block of `Known original posting date` / `Known source` / `Original listing
+title` / `Known source URL` lines followed by a `Historical analysis
+instruction` note and the advert text under `Original advert text:` — both
+shapes carry the same information; apply the HISTORICAL CONTEXT rule above to
+either.
 
 URL: {paste URL here, or leave blank}
 
