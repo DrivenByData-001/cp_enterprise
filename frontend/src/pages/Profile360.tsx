@@ -18,8 +18,16 @@ function RowCard({ row, kind, onMapped }: { row: Profile360Row; kind: Kind; onMa
       } else if (result.mapped) {
         setMessage('Mapped — see the review queue below.')
         await onMapped()
+      } else if (result.reason === 'no_candidates_available') {
+        setMessage(
+          'No canonical vocabulary candidates exist yet to map this against — the catalogue isn’t populated enough ' +
+            'for capability mapping yet. This says nothing about the strength of this evidence; map manually if appropriate.',
+        )
       } else {
-        setMessage('No confident match found among candidates — map manually if appropriate.')
+        const n = result.candidates_considered
+        setMessage(
+          `No confident match among ${n ?? 'the'} existing candidate${n === 1 ? '' : 's'} — map manually if appropriate.`,
+        )
       }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e))

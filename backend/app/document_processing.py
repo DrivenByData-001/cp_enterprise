@@ -160,6 +160,63 @@ def document_processing_state(cur, document_id: str) -> str:
     return "failed"
 
 
+def role_extraction_quality(cur, role_id: str) -> dict | None:
+    """The authoritative extraction-quality signal for one role (docs/18 §5),
+    distinct from — and more trustworthy than — the role's own
+    `extraction_status` column (`role_instance.extraction_status`, sourced
+    from `posting_persistence.posting_role_columns` = the model's own
+    self-reported `metadata.extraction_status`). The two can genuinely
+    diverge: `_enforce_historical_extraction_policy` and the empty-skills
+    guardrail above (`_has_substantive_job_content`) can force a run's own
+    *status* to 'partial' even when the model self-reported 'ok' — that
+    run-level verdict is the one that actually matters for "should this be
+    reviewed", so this looks it up directly from `jobber.extraction_run`
+    rather than trusting the self-report alone.
+
+    Returns None when no `job_posting_extract` run produced this role (a
+    legacy JSON import, bulk import, or hand-edited role never went through
+    this pipeline) — the caller falls back to the role's own
+    `extraction_status` column in that case, since that is the only signal
+    available for such a role. Never mutates anything — a read-only lookup,
+    safe to call on every role-detail/list request (brief: "Do not mutate or
+    reanalyse a partial merely by viewing it")."""
+    cur.execute(
+        """
+        SELECT status, finished_at, output_payload->'metadata'->>'notes_for_user' AS notes_for_user
+        FROM jobber.extraction_run
+        WHERE task = %s AND result_role_instance_id = %s
+        ORDER BY started_at DESC LIMIT 1
+        """,
+        (TASK, role_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {"status": row["status"], "finished_at": row["finished_at"], "notes": row["notes_for_user"]}
+
+
+def role_extraction_quality_bulk(cur, role_ids: list[str]) -> dict[str, dict]:
+    """Same signal as `role_extraction_quality`, batched for a role list —
+    one query instead of N (brief: pagination/list views must not incur an
+    N+1)."""
+    if not role_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT DISTINCT ON (result_role_instance_id)
+            result_role_instance_id, status, finished_at, output_payload->'metadata'->>'notes_for_user' AS notes_for_user
+        FROM jobber.extraction_run
+        WHERE task = %s AND result_role_instance_id = ANY(%s::uuid[])
+        ORDER BY result_role_instance_id, started_at DESC
+        """,
+        (TASK, role_ids),
+    )
+    return {
+        str(row["result_role_instance_id"]): {"status": row["status"], "finished_at": row["finished_at"], "notes": row["notes_for_user"]}
+        for row in cur.fetchall()
+    }
+
+
 def job_posting_processing_counts(cur, *, source_prefix: str | None = None) -> dict:
     """raw/running/analysed/partial/failed counts over jobber.document
     (kind='job_posting'), optionally scoped by source_key prefix (brief §19

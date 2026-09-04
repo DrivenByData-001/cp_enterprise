@@ -9,12 +9,37 @@ router = APIRouter(prefix="/api/space", tags=["space"])
 
 
 @router.get("")
-def get_space():
+def get_space(year: int | None = None, date_from: str | None = None, date_to: str | None = None):
+    """Temporal filtering (docs/18 §2): unlike Dashboard, Space defaults to
+    **all-time** — the historical cloud's shape is itself analytically
+    useful, so nothing is hidden unless the caller asks. `year` /
+    `date_from`/`date_to` scope which *postings* are selected before the PCA
+    fit runs; targets/synthetic references never carry a posting_date and
+    are never excluded by a temporal filter (the WHERE clause below).
+    Deliberately the same param names/semantics as GET /api/roles, so a
+    future client-side "time travel"/animation step can re-request this
+    endpoint across a year range with no server-side redesign — see
+    Space.tsx's TemporalControls."""
+    filters = ""
+    params: list = []
+    if year is not None:
+        filters += " AND EXTRACT(YEAR FROM posting_date) = %s"
+        params.append(year)
+    else:
+        if date_from:
+            filters += " AND posting_date >= %s"
+            params.append(date_from)
+        if date_to:
+            filters += " AND posting_date <= %s"
+            params.append(date_to)
+
     with db_cursor() as cur:
         cur.execute(
-            "SELECT id, title, organisation, career_track, instance_type, target_basis, "
+            "SELECT id, title, organisation, career_track, instance_type, target_basis, posting_date, "
             "(legacy_analysis->>'is_plausible')::boolean AS is_plausible "
-            "FROM jobber.role_instance"
+            "FROM jobber.role_instance "
+            "WHERE instance_type != 'observed_posting' OR posting_date IS NULL OR (TRUE" + filters + ")",
+            params,
         )
         all_roles = [dict(r, id=str(r["id"])) for r in cur.fetchall()]
         vec_by_id = get_embeddings(cur, "role_instance", [r["id"] for r in all_roles])
@@ -22,14 +47,27 @@ def get_space():
 
         _, profile_vec = ensure_profile_embedding(cur)
 
+        cur.execute(
+            "SELECT MIN(EXTRACT(YEAR FROM posting_date)) AS min_year, MAX(EXTRACT(YEAR FROM posting_date)) AS max_year "
+            "FROM jobber.role_instance WHERE instance_type = 'observed_posting' AND posting_date IS NOT NULL"
+        )
+        year_bounds = cur.fetchone()
+
     # Diagnostics (brief: distinguish "23 roles loaded, 0 embedded for the
     # current model" from "only one role exists") — included on every
     # response, not only the too-few-points case, so the UI can always show
-    # an embedded/total count.
+    # an embedded/total count. year_range reflects the *whole* corpus
+    # (unfiltered) regardless of the active filter, so the UI can build a
+    # year picker without a second request.
     diagnostics = {
         "role_count": len(all_roles),
         "embedded_role_count": len(roles),
         "embedding_model": embedding_model_name(),
+        "year_range": (
+            {"min": int(year_bounds["min_year"]), "max": int(year_bounds["max_year"])}
+            if year_bounds and year_bounds["min_year"] is not None
+            else None
+        ),
     }
 
     vectors = [vec_by_id[r["id"]] for r in roles]
@@ -55,6 +93,7 @@ def get_space():
                 "career_track": role["career_track"],
                 "node_type": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
                 "is_plausible": role["is_plausible"],
+                "posting_date": str(role["posting_date"]) if role["posting_date"] else None,
                 "x": float(x),
                 "y": float(y),
                 "z": float(z),

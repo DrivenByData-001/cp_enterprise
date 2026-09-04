@@ -127,3 +127,126 @@ def test_rebuild_endpoint(client):
     assert body["engine_version"] == "capability-engine-v1"
     assert body["capability_coverage"]["computed"] >= 1
     assert "role_fit" in body
+
+
+# --- docs/18 §10: proposed-capability / proposed-component-edge review -----
+
+def _proposed_edge(cur, atomic_id, capability_id, necessity="core", origin="bootstrap"):
+    cur.execute(
+        "INSERT INTO jobber.concept_edge (from_concept_id, to_concept_id, relation, necessity, origin, status) "
+        "VALUES (%s, %s, 'component_of', %s, %s, 'proposed') RETURNING id",
+        (atomic_id, capability_id, necessity, origin),
+    )
+    return str(cur.fetchone()["id"])
+
+
+def test_proposed_capability_is_listed_only_under_its_own_status_filter(client):
+    with db.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+            "VALUES ('capability', 'Proposed cap', 'proposed', 'bootstrap', now()) RETURNING id"
+        )
+        cap_id = str(cur.fetchone()["id"])
+        cur.execute(
+            "INSERT INTO jobber.capability_detail (concept_id, demonstration_standard, min_depth) "
+            "VALUES (%s, 'placeholder', 'exposed')",
+            (cap_id,),
+        )
+
+    active_list = client.get("/api/capabilities?status=active").json()
+    assert not any(c["id"] == cap_id for c in active_list)
+
+    proposed_list = client.get("/api/capabilities?status=proposed").json()
+    assert any(c["id"] == cap_id for c in proposed_list)
+
+    detail = client.get(f"/api/capabilities/{cap_id}").json()
+    assert detail["status"] == "proposed"
+    assert detail["components_proposed"] == {"core": [], "supporting": [], "contextual": []}
+
+
+def test_review_component_accept_moves_edge_from_proposed_to_accepted(client):
+    cap = client.post("/api/capabilities", json={"canonical_name": "Cap review accept", "demonstration_standard": "x"}).json()
+    with db.db_cursor() as cur:
+        tool_id = _tool_concept(cur, "ReviewedTool")
+        edge_id = _proposed_edge(cur, tool_id, cap["id"])
+
+    detail = client.get(f"/api/capabilities/{cap['id']}").json()
+    assert len(detail["components_proposed"]["core"]) == 1
+    assert detail["components"] == {"core": [], "supporting": [], "contextual": []}
+
+    resp = client.post(f"/api/capabilities/{cap['id']}/components/{edge_id}/review", json={"action": "accept"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "accepted"
+
+    detail = client.get(f"/api/capabilities/{cap['id']}").json()
+    assert detail["components_proposed"] == {"core": [], "supporting": [], "contextual": []}
+    assert len(detail["components"]["core"]) == 1
+
+
+def test_review_component_reject_never_becomes_accepted(client):
+    cap = client.post("/api/capabilities", json={"canonical_name": "Cap review reject", "demonstration_standard": "x"}).json()
+    with db.db_cursor() as cur:
+        tool_id = _tool_concept(cur, "RejectedTool")
+        edge_id = _proposed_edge(cur, tool_id, cap["id"])
+
+    resp = client.post(f"/api/capabilities/{cap['id']}/components/{edge_id}/review", json={"action": "reject"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected"
+
+    detail = client.get(f"/api/capabilities/{cap['id']}").json()
+    assert detail["components_proposed"] == {"core": [], "supporting": [], "contextual": []}
+    assert detail["components"] == {"core": [], "supporting": [], "contextual": []}
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT status FROM jobber.concept_edge WHERE id = %s", (edge_id,))
+        assert cur.fetchone()["status"] == "rejected"
+
+
+def test_review_component_rejects_edge_not_belonging_to_capability(client):
+    cap_a = client.post("/api/capabilities", json={"canonical_name": "Cap A review", "demonstration_standard": "x"}).json()
+    cap_b = client.post("/api/capabilities", json={"canonical_name": "Cap B review", "demonstration_standard": "x"}).json()
+    with db.db_cursor() as cur:
+        tool_id = _tool_concept(cur, "CrossCapTool")
+        edge_id = _proposed_edge(cur, tool_id, cap_a["id"])
+
+    resp = client.post(f"/api/capabilities/{cap_b['id']}/components/{edge_id}/review", json={"action": "accept"})
+    assert resp.status_code == 404
+
+
+def test_merge_capability_rewires_component_edges_and_marks_source_merged(client):
+    source = client.post("/api/capabilities", json={"canonical_name": "Duplicate cap A", "demonstration_standard": "x"}).json()
+    target = client.post("/api/capabilities", json={"canonical_name": "Duplicate cap B", "demonstration_standard": "x"}).json()
+    with db.db_cursor() as cur:
+        tool_id = _tool_concept(cur, "MergedTool")
+        _proposed_edge(cur, tool_id, source["id"])
+
+    resp = client.post(f"/api/capabilities/{source['id']}/merge", json={"merge_into_id": target["id"]})
+    assert resp.status_code == 200
+    assert resp.json() == {"id": source["id"], "status": "merged", "merged_into": target["id"]}
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT status, merged_into FROM jobber.concept WHERE id = %s", (source["id"],))
+        row = cur.fetchone()
+        assert row["status"] == "merged"
+        assert str(row["merged_into"]) == target["id"]
+
+        cur.execute(
+            "SELECT necessity, status FROM jobber.concept_edge WHERE from_concept_id = %s AND to_concept_id = %s",
+            (tool_id, target["id"]),
+        )
+        rewired = cur.fetchone()
+        assert rewired is not None and rewired["status"] == "proposed"
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.concept_edge WHERE to_concept_id = %s", (source["id"],)
+        )
+        assert cur.fetchone()["n"] == 0
+
+
+def test_merge_capability_rejects_self_merge_and_missing_target(client):
+    cap = client.post("/api/capabilities", json={"canonical_name": "Self merge cap", "demonstration_standard": "x"}).json()
+    self_merge = client.post(f"/api/capabilities/{cap['id']}/merge", json={"merge_into_id": cap["id"]})
+    assert self_merge.status_code == 400
+
+    bad_target = client.post(f"/api/capabilities/{cap['id']}/merge", json={"merge_into_id": "00000000-0000-0000-0000-000000000000"})
+    assert bad_target.status_code == 400

@@ -223,6 +223,35 @@ def _components(cur, capability_concept_id: str) -> dict[str, list[dict]]:
 load_components = _components  # public alias — routes/capabilities.py reuses this rather than re-querying edges itself
 
 
+def load_proposed_components(cur, capability_concept_id: str) -> dict[str, list[dict]]:
+    """The curation-review counterpart of `load_components`: 'proposed'
+    component_of edges only (from app/vocabulary_bootstrap.py, or any future
+    proposer) — kept in a fully separate function, never merged with
+    `_components`/`load_components`, so there is no code path by which a
+    'proposed' edge could be mistaken for an 'accepted' one anywhere the
+    engine computes coverage/fit (brief §6's invariant, unchanged: only
+    accepted edges are ever read by the engine). Used only by
+    routes/capabilities.py's review endpoints."""
+    cur.execute(
+        """
+        SELECT ce.id AS edge_id, ce.necessity, ce.origin, c.id AS concept_id, c.canonical_name, c.type_code
+        FROM jobber.concept_edge ce
+        JOIN jobber.concept c ON c.id = ce.from_concept_id
+        WHERE ce.to_concept_id = %s AND ce.relation = 'component_of' AND ce.status = 'proposed'
+        ORDER BY c.canonical_name
+        """,
+        (capability_concept_id,),
+    )
+    out: dict[str, list[dict]] = {"core": [], "supporting": [], "contextual": []}
+    for row in cur.fetchall():
+        row = dict(row)
+        row["edge_id"] = str(row["edge_id"])
+        row["concept_id"] = str(row["concept_id"])
+        necessity = row.get("necessity") or "supporting"
+        out.setdefault(necessity, []).append(row)
+    return out
+
+
 def is_valid_edge(cur, relation: str, from_type: str, to_type: str) -> bool:
     """Server-side grammar check against jobber.concept_edge_rule (brief §6:
     "Do not rely only on frontend validation. Reject invalid relation/type

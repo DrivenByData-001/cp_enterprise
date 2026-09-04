@@ -15,6 +15,7 @@ import Episodes from './pages/Episodes'
 import Vocabulary from './pages/Vocabulary'
 import Capabilities from './pages/Capabilities'
 import CapabilityCoverage from './pages/CapabilityCoverage'
+import Trends from './pages/Trends'
 
 function App() {
   return (
@@ -25,6 +26,9 @@ function App() {
         </NavLink>
         <NavLink to="/space" className={({ isActive }) => (isActive ? 'active' : '')}>
           Space
+        </NavLink>
+        <NavLink to="/trends" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Trends
         </NavLink>
         <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
           Targets
@@ -57,6 +61,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/space" element={<Space />} />
+        <Route path="/trends" element={<Trends />} />
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
         <Route path="/episodes" element={<Episodes />} />

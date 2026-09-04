@@ -9,7 +9,13 @@ evidence about you, traceable in both directions. Since Phase 3, a
 deterministic capability-coverage/role-fit engine turns curated capabilities
 (economically meaningful units of "what you can do", composed from atomic
 concepts) into four honest evidence states — see
-`docs/16-phase3-capability-engine.md`.
+`docs/16-phase3-capability-engine.md`. Since the historical-corpus
+consolidation pass, a deterministic vocabulary/capability bootstrap proposes
+that catalogue from the captured corpus for curator review, and a corpus
+trend-analytics layer (Trends) answers "what has this corpus historically
+required, and how has that changed" with sample sizes and a documented,
+non-predictive trend classification — see
+`docs/18-consolidation-and-analytical-foundation.md`.
 
 **Persistence is Postgres** (a Supabase project in production; any Postgres —
 including a disposable local one — for development and tests). SQLite is no
@@ -122,14 +128,24 @@ one from a missing key — is recorded, never silently swallowed.
    - *Legacy JSON import* remains for migration/recovery, or drop multiple
      `.json` files at once to bulk-import a folder you've already captured.
 3. **Dashboard** — roles ranked by similarity to your current profile,
-   filterable by career track.
+   filterable by career track, server-side paginated, and temporally
+   filtered (defaults to recent/current roles — see "All years"/a specific
+   year to browse the full 2008–2025 historical corpus; docs/18 §3).
 4. **Space** — a 3D PCA starfield of every captured role, target, and your
-   profile, positioned by embedding similarity. If it reports too few
-   embedded points despite roles being loaded (typically a batch of roles
-   captured before an embedding-model change, or before Phase 2 moved
-   embeddings into their own table), it shows exactly how many roles are
-   loaded vs. embedded and offers a one-click rebuild — see "Maintenance
-   scripts" below for the equivalent command-line path.
+   profile, positioned by embedding similarity, with screen-space-sized
+   markers (they don't balloon as you zoom in — docs/18 §1) and a temporal
+   filter (defaults to all-time, unlike Dashboard — docs/18 §2). If it
+   reports too few embedded points despite roles being loaded (typically a
+   batch of roles captured before an embedding-model change, or before
+   Phase 2 moved embeddings into their own table), it shows exactly how many
+   roles are loaded vs. embedded and offers a one-click rebuild — see
+   "Maintenance scripts" below for the equivalent command-line path.
+4a. **Trends** — descriptive statistics over your captured role corpus:
+    what requirements are most common, how they trend over time
+    (emerging/increasing/persistent/declining/sparse — a deterministic,
+    documented classification, never a forecast), how they compare by
+    country/seniority/track, and what co-occurs together. Every number
+    carries its own sample size. See docs/18 §7/§8/§9.
 5. **Targets** — a role you're navigating towards, real or imagined. Give
    `prompts/decompose_target_role.md` (plus supporting material) to
    Claude/ChatGPT, paste the resulting JSON into the Add Target page.
@@ -145,11 +161,20 @@ one from a missing key — is recorded, never silently swallowed.
 9. **profile360** — browse read-only person-side claims/capabilities and
    request an AI-suggested mapping onto the canonical vocabulary — including,
    for claims, a capability-level attribution attempt ("Pass C") — every
-   suggestion lands unreviewed until you accept or reject it.
+   suggestion lands unreviewed until you accept or reject it. If the
+   canonical vocabulary has no candidates to even consider yet, the app says
+   so explicitly rather than implying your evidence is weak (docs/18 §11).
 9a. **Capabilities** — curate the capability catalogue: create/edit a
     capability's demonstration standard and depth/autonomy thresholds, and
     manage its core/supporting/contextual component edges to atomic concepts.
-9b. **Coverage** — your personal capability coverage, grouped Evidenced /
+    A "Proposed" filter surfaces candidate capabilities/component edges from
+    the vocabulary bootstrap (docs/18 §6/§10) for accept/reject/merge review
+    — nothing bootstrap-proposed ever affects matching or coverage until
+    accepted.
+9b. **Vocabulary** — the proposal queue groups lexical duplicates ("Solvency
+    II"/"SII") into one review card (docs/18 §6.1); resolving it resolves
+    every variant at once.
+9c. **Coverage** — your personal capability coverage, grouped Evidenced /
     Partial / User asserted / No evidence found, each expandable into its
     full evidence trace back to profile360.
 10. **Preferences** — record what you'd enjoy, separately from what you can
@@ -186,38 +211,19 @@ security model.
   §12) — ingestion is paste/upload only.
 - Any cloud sync beyond the shared Postgres database itself.
 
-### Note for future devs: temporal filtering / "time travel" (deferred)
+### Temporal filtering — implemented (`docs/18-consolidation-and-analytical-foundation.md`)
 
-`role_instance.posting_date` and `.captured_at` are tracked and shown
-everywhere, and historic postings (paste-from-file, no URL) are a first-class
-capture path — the historical corpus (`docs/17-document-processing-pipeline.md`)
-will substantially increase the role corpus once bulk-processed beyond the
-initial pilot, spanning roughly 2008–2025. What's *not* built yet is doing
-anything with that time dimension in the UI, and **Dashboard and Space should
-not treat it the same way**:
-
-- **Dashboard** should not indiscriminately list 2008–2025 by default —
-  once the historical corpus is bulk-processed, that would drown out
-  recent/current roles in the view people actually check day to day. Add a
-  year/date-range filter to the Dashboard; default the view to prioritise
-  recent/current roles, while still letting a user deliberately opt into
-  browsing historical years.
-- **Space is different — do not apply the same default-hide treatment.**
-  The historical role cloud is itself potentially useful to see there
-  (structurally, as a shape in the embedding space), so Space should not
-  default to hiding older roles the way Dashboard's default view should.
-  Retain the previously-intended **"time travel"** concept here instead: a
-  date-range filter under the scatter in `frontend/src/pages/Space.tsx`,
-  defaulting to all-time, that re-requests `GET /api/space` scoped to that
-  window (backend side, `backend/app/routes/space.py` would need optional
-  `from`/`to` query params filtering the roles selected before the PCA fit)
-  — and, later, genuine temporal slicing/animation through time, not just a
-  static filter.
-
-Held off until there's enough historic data loaded in to actually make
-either view meaningful. This is UI/navigation work, recorded here for
-later — out of scope for the extraction-policy work in
-`docs/17-document-processing-pipeline.md` §8a.
+The historical corpus (`docs/17-document-processing-pipeline.md`) is
+ingested (~307 roles, 2008–2025) and Dashboard/Space both now have temporal
+filtering, on the asymmetric defaults this note originally called for:
+Dashboard defaults to recent/current roles (with "all years"/a specific year
+one click away, docs/18 §3); Space defaults to all-time, since the
+historical cloud's shape is itself analytically useful there (docs/18 §2).
+An animated year-by-year "time travel" progression through Space is not yet
+built — the temporal state/API is deliberately shaped so it can be added
+without a redesign (docs/18 §2) — and corpus trend analytics/classification
+over the same temporal dimension is now its own page, **Trends** (docs/18
+§7/§8/§9).
 
 ## First-time setup
 
@@ -278,6 +284,14 @@ production data. See `docs/14-phase2-postgres-architecture.md` §7.
   catalogue matters.** Seeds 5 hand-authored capabilities to prove the
   Phase 3 evaluation machinery works end to end. See its own docstring and
   `docs/16-phase3-capability-engine.md` §13.
+- `backend/scripts/bootstrap_vocabulary.py [--dry-run]` — the vocabulary/
+  capability bootstrap (docs/18 §6): proposes canonical-concept clusters and
+  candidate capabilities/component edges from the captured corpus. Safe
+  against production in the sense that everything it writes is
+  `status='proposed'`, invisible to matching/coverage until a curator
+  reviews it in Vocabulary/Capabilities — but it is a real write, so run
+  `--dry-run` first and only run it for real against production with
+  explicit sign-off. Never invoked automatically or from any API route.
 
 ```bash
 cd backend

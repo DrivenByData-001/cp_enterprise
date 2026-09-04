@@ -186,17 +186,23 @@ def seed(cur):
 
 def main():
     run_migrations()
-    with db_cursor() as cur:
-        seed(cur)
-        rebuild = engine.rebuild_phase3_derivations(cur)
-        report = {
-            "rebuild": rebuild,
-            "span_validity": evaluation.span_validity(cur),
-            "concept_linking_f1": evaluation.concept_linking_f1(cur),
-            "modifier_accuracy": evaluation.modifier_accuracy(cur),
-            "proposals_per_document": evaluation.proposals_per_document(cur),
-            "capability_agreement": evaluation.capability_agreement(cur),
-        }
+    # Close the connection pool explicitly before exit (db.reset_pool's
+    # docstring) instead of leaving it to psycopg_pool's __del__ at
+    # interpreter shutdown, which logs a spurious thread-join warning.
+    try:
+        with db_cursor() as cur:
+            seed(cur)
+            rebuild = engine.rebuild_phase3_derivations(cur)
+            report = {
+                "rebuild": rebuild,
+                "span_validity": evaluation.span_validity(cur),
+                "concept_linking_f1": evaluation.concept_linking_f1(cur),
+                "modifier_accuracy": evaluation.modifier_accuracy(cur),
+                "proposals_per_document": evaluation.proposals_per_document(cur),
+                "capability_agreement": evaluation.capability_agreement(cur),
+            }
+    finally:
+        db.reset_pool()
     print(json.dumps(report, indent=2, default=str))
 
 

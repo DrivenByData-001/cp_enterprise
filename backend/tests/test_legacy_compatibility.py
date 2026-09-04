@@ -57,7 +57,7 @@ def test_legacy_json_import_and_role_listing(client):
     assert resp.status_code == 200
     role_id = resp.json()["id"]
 
-    roles = client.get("/api/roles").json()
+    roles = client.get("/api/roles").json()["items"]
     assert any(r["id"] == role_id for r in roles)
 
     role = client.get(f"/api/roles/{role_id}").json()
@@ -72,9 +72,9 @@ def test_role_filtering_by_career_track_and_min_similarity(client):
     client.post("/api/import", json=LEGACY_POSTING)
     _seed_profile_snapshot("An actuary with reserving experience.")
 
-    by_track = client.get("/api/roles", params={"career_track": "actuarial"}).json()
+    by_track = client.get("/api/roles", params={"career_track": "actuarial"}).json()["items"]
     assert len(by_track) == 1
-    by_wrong_track = client.get("/api/roles", params={"career_track": "quant"}).json()
+    by_wrong_track = client.get("/api/roles", params={"career_track": "quant"}).json()["items"]
     assert by_wrong_track == []
 
 

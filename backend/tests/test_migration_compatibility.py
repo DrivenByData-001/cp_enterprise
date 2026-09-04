@@ -25,6 +25,8 @@ EXPECTED_MIGRATIONS = {
     "0005_preferences.sql",
     "0006_phase3_capability_derivations.sql",
     "0007_document_processing_lifecycle.sql",
+    "0008_role_skill_observation_basis_check.sql",
+    "0009_consolidation_indexes_and_bootstrap.sql",
 }
 
 

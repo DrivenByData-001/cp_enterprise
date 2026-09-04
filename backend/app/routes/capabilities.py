@@ -14,17 +14,27 @@ from fastapi import APIRouter, HTTPException
 
 from .. import capability_engine as engine
 from ..db import db_cursor
-from ..models import CapabilityCreate, CapabilityUpdate, ComponentEdgeCreate, ComponentEdgeUpdate
+from ..models import (
+    CapabilityCreate,
+    CapabilityMerge,
+    CapabilityUpdate,
+    ComponentEdgeCreate,
+    ComponentEdgeReview,
+    ComponentEdgeUpdate,
+)
 
 router = APIRouter(prefix="/api/capabilities", tags=["capabilities"])
 
 
 def _component_summary(cur, capability_id: str) -> dict:
     components = engine.load_components(cur, capability_id)
+    proposed = engine.load_proposed_components(cur, capability_id)
+    proposed_count = sum(len(v) for v in proposed.values())
     return {
         "core_component_count": len(components["core"]),
         "supporting_component_count": len(components["supporting"]),
         "contextual_component_count": len(components["contextual"]),
+        "proposed_component_count": proposed_count,
     }
 
 
@@ -120,6 +130,11 @@ def get_capability(capability_id: str):
         capability = _row_to_capability(row)
         components = engine.load_components(cur, capability_id)
         capability["components"] = components
+        # 'proposed' component_of edges (docs/18 §3/§10 — bootstrap or any
+        # future proposer) — a separate, clearly-labelled field, never
+        # merged with the accepted `components` above; the engine itself
+        # never reads this (engine.load_components stays accepted-only).
+        capability["components_proposed"] = engine.load_proposed_components(cur, capability_id)
 
         try:
             coverage = engine.derive_capability_coverage(cur, capability_id)
@@ -250,6 +265,97 @@ def remove_component(capability_id: str, edge_id: str):
         if cur.rowcount == 0:
             raise HTTPException(404, "component edge not found on this capability")
     return {"status": "deleted"}
+
+
+# --- proposed component_of edge review (docs/18 §10 — bootstrap proposals) --
+
+@router.post("/{capability_id}/components/{edge_id}/review")
+def review_component(capability_id: str, edge_id: str, payload: ComponentEdgeReview):
+    """Accept or reject one *proposed* component edge (never touches an
+    already-accepted one — the WHERE clause below only ever matches
+    status='proposed'). Accepting re-runs the same grammar/active-concept
+    checks `add_component` applies to a curator-authored edge (defense in
+    depth: the underlying atomic concept could have been deprecated in the
+    time since the edge was proposed) — an edge that no longer validates is
+    rejected outright rather than silently accepted."""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT ce.from_concept_id, c.type_code, c.status AS concept_status
+            FROM jobber.concept_edge ce JOIN jobber.concept c ON c.id = ce.from_concept_id
+            WHERE ce.id = %s AND ce.to_concept_id = %s AND ce.relation = 'component_of' AND ce.status = 'proposed'
+            """,
+            (edge_id, capability_id),
+        )
+        edge = cur.fetchone()
+        if not edge:
+            raise HTTPException(404, "proposed component edge not found on this capability")
+
+        if payload.action == "reject":
+            cur.execute("UPDATE jobber.concept_edge SET status = 'rejected' WHERE id = %s", (edge_id,))
+            return {"id": edge_id, "status": "rejected"}
+
+        if edge["concept_status"] != "active" or not engine.is_valid_edge(cur, "component_of", edge["type_code"], "capability"):
+            cur.execute("UPDATE jobber.concept_edge SET status = 'rejected' WHERE id = %s", (edge_id,))
+            raise HTTPException(
+                400,
+                "component concept is no longer active or no longer a valid component_of source — edge rejected automatically",
+            )
+
+        cur.execute("UPDATE jobber.concept_edge SET status = 'accepted', origin = 'curator' WHERE id = %s", (edge_id,))
+    return {"id": edge_id, "status": "accepted"}
+
+
+# --- capability merge (docs/18 §10 — "merge where supported by the existing model") --
+
+@router.post("/{capability_id}/merge")
+def merge_capability(capability_id: str, payload: CapabilityMerge):
+    """Merges `capability_id` into `payload.merge_into_id`: the source
+    concept is marked `status='merged'`/`merged_into=<target>` (both
+    existing columns/values — jobber.concept.merged_into has existed since
+    Phase 1, docs/11 §7.3), and every one of the source's own component_of
+    edges (proposed or accepted) is re-parented onto the target, duplicate
+    edges dropped rather than erroring. The source's `d_capability_coverage`/
+    `d_role_fit` rows, if any, are left for the next rebuild to clean up
+    (rebuild_phase3_derivations already removes derived rows for a
+    concept that no longer qualifies as an active capability)."""
+    if capability_id == payload.merge_into_id:
+        raise HTTPException(400, "cannot merge a capability into itself")
+
+    with db_cursor() as cur:
+        cur.execute("SELECT id, status FROM jobber.concept WHERE id = %s AND type_code = 'capability'", (capability_id,))
+        source = cur.fetchone()
+        if not source:
+            raise HTTPException(404, "capability not found")
+        cur.execute("SELECT id, status FROM jobber.concept WHERE id = %s AND type_code = 'capability'", (payload.merge_into_id,))
+        target = cur.fetchone()
+        if not target:
+            raise HTTPException(400, "merge_into_id is not an existing capability")
+        if target["status"] == "merged":
+            raise HTTPException(400, "cannot merge into a capability that has itself been merged elsewhere")
+
+        cur.execute(
+            "SELECT id, from_concept_id, necessity, status FROM jobber.concept_edge "
+            "WHERE to_concept_id = %s AND relation = 'component_of'",
+            (capability_id,),
+        )
+        source_edges = cur.fetchall()
+        for edge in source_edges:
+            cur.execute(
+                """
+                INSERT INTO jobber.concept_edge (from_concept_id, to_concept_id, relation, necessity, origin, status)
+                VALUES (%s, %s, 'component_of', %s, 'curator', %s)
+                ON CONFLICT (from_concept_id, to_concept_id, relation) DO NOTHING
+                """,
+                (edge["from_concept_id"], payload.merge_into_id, edge["necessity"], edge["status"]),
+            )
+            cur.execute("DELETE FROM jobber.concept_edge WHERE id = %s", (edge["id"],))
+
+        cur.execute(
+            "UPDATE jobber.concept SET status = 'merged', merged_into = %s, reviewed_at = now() WHERE id = %s",
+            (payload.merge_into_id, capability_id),
+        )
+    return {"id": capability_id, "status": "merged", "merged_into": payload.merge_into_id}
 
 
 # --- rebuild (brief §20/§27) -------------------------------------------------

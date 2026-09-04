@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import db as db_module  # noqa: E402
 from app.db import db_cursor  # noqa: E402
 from app.document_processing import list_eligible_documents, process_job_posting_document  # noqa: E402
 
@@ -39,6 +40,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List what would be processed; make no changes.")
     args = parser.parse_args()
 
+    # The whole batch shares one pool; close it explicitly before exit
+    # (db.reset_pool's docstring) instead of leaving it to psycopg_pool's
+    # __del__ at interpreter shutdown, which logs a spurious thread-join
+    # warning once the (possibly long) batch above has already finished.
+    try:
+        return _run(args)
+    finally:
+        db_module.reset_pool()
+
+
+def _run(args: argparse.Namespace) -> int:
     with db_cursor() as cur:
         eligible = list_eligible_documents(
             cur,
