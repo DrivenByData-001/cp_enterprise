@@ -37,6 +37,16 @@ export type TargetPath = {
   stepping_stones: SteppingStone[]
 }
 
+// The authoritative ok/partial signal (docs/18 §5) for a role produced by
+// the document-processing pipeline — the *run's* own verdict, which can
+// diverge from the role's self-reported `extraction_status` column (a
+// deterministic guardrail can force a run to 'partial' even when the model
+// itself claimed 'ok'; see backend/app/document_processing.py::
+// role_extraction_quality). null for a role never processed through that
+// pipeline (legacy/bulk import, hand-entered) — callers fall back to
+// `Role.extraction_status` in that case, the only signal such a role has.
+export type ExtractionQuality = { status: 'ok' | 'partial' | 'failed'; finished_at: string | null; notes: string | null }
+
 export type Role = {
   id: string
   node_type: NodeType
@@ -59,6 +69,7 @@ export type Role = {
   top_adjacent_roles: string[] | null
   extraction_status: string | null
   extraction_notes: string | null
+  extraction_quality?: ExtractionQuality | null
   similarity: number | null
   skills?: RoleSkill[]
   url: string | null
@@ -70,6 +81,17 @@ export type Role = {
   feasibility_note?: string | null
   is_plausible?: boolean | null
   path?: TargetPath
+}
+
+export type YearRange = { min: number; max: number } | null
+
+export type RoleListResponse = {
+  items: Role[]
+  total: number
+  limit: number
+  offset: number
+  period: 'recent' | 'all' | 'year' | 'range'
+  year_range: YearRange
 }
 
 // profile360 rows have no fixed shape known to this app (docs/14 §5/§9) — the
@@ -86,6 +108,7 @@ export type SpacePoint = {
   career_track: string | null
   node_type: NodeType
   is_plausible: boolean | null
+  posting_date: string | null
   x: number
   y: number
   z: number
@@ -98,7 +121,10 @@ export type SpaceResponse = {
   role_count: number
   embedded_role_count: number
   embedding_model: string
+  year_range: YearRange
 }
+
+export type SpaceFilter = { year?: number; date_from?: string; date_to?: string }
 
 export type RebuildEmbeddingsSummary = {
   model: string
@@ -143,7 +169,9 @@ export type Facet = {
 }
 
 export type ProposalGroup = {
-  surface_form: string
+  cluster_key: string
+  surface_form: string // the first/representative exact form — kept for back-compat
+  surface_forms: string[] // every exact surface form this cluster covers (docs/18 §3) — usually length 1
   proposal_ids: string[]
   suggested_type: string | null
   nearest_concept_id: string | null
@@ -155,6 +183,15 @@ export type ProposalAction = 'accept_new' | 'accept_alias' | 'reject' | 'defer'
 
 export type ProposalResolveInput = {
   surface_form: string
+  action: ProposalAction
+  type_code?: string
+  canonical_name?: string
+  definition?: string
+  concept_id?: string
+}
+
+export type ClusterProposalResolveInput = {
+  cluster_key: string
   action: ProposalAction
   type_code?: string
   canonical_name?: string
@@ -221,6 +258,14 @@ export type MappingAttemptResult = {
   mapping_id?: string
   concept_id?: string
   error?: string
+  // Present whenever status === 'ok': how many canonical-vocabulary
+  // candidates the mapping attempt actually had to consider. Until the
+  // vocabulary bootstrap (docs/18 §3/§6) is reviewed and accepted, this is
+  // routinely 0 — 'no_candidates_available' — which is a statement about
+  // the vocabulary, not about the person's evidence. 'declined_all_candidates'
+  // means real candidates existed and none were confident enough.
+  candidates_considered?: number
+  reason?: 'no_candidates_available' | 'declined_all_candidates'
 }
 
 export type ComparisonStatus = 'evidenced' | 'partial' | 'user_asserted' | 'not_found'
@@ -260,6 +305,7 @@ export type CapabilitySummary = {
   core_component_count: number
   supporting_component_count: number
   contextual_component_count: number
+  proposed_component_count: number
 }
 
 export type CoverageEpisodeSummary = {
@@ -319,7 +365,14 @@ export type CapabilityCoverage = {
   trace: CapabilityCoverageTrace
 }
 
-export type Capability = CapabilitySummary & { components: CapabilityComponents; coverage: CapabilityCoverage | null }
+export type Capability = CapabilitySummary & {
+  components: CapabilityComponents
+  // 'proposed' component_of edges only (docs/18 §10, bootstrap or any future
+  // proposer) — never merged with `components` above, and never read by the
+  // coverage engine; a separate review affordance in the curation UI.
+  components_proposed: CapabilityComponents
+  coverage: CapabilityCoverage | null
+}
 
 export type CapabilityInput = {
   canonical_name: string
@@ -411,6 +464,95 @@ export type PreferenceObservationInput = {
   note?: string | null
 }
 
+// --- Trends (docs/18 §7/§8/§9) — descriptive statistics over the captured
+// role corpus, never a labour-market forecast; every result carries its own
+// sample size. -------------------------------------------------------------
+
+export type TrendFilterInput = {
+  year_from?: number
+  year_to?: number
+  country?: string
+  seniority_level?: string
+  career_track?: string
+}
+
+export type Bucket = { value: string | number | null; role_count: number }
+
+export type CorpusOverview = {
+  sample_size: number
+  by_year: Bucket[]
+  by_country: Bucket[]
+  by_region: Bucket[]
+  by_seniority: Bucket[]
+  by_career_track: Bucket[]
+}
+
+export type RequirementFrequencyItem = {
+  concept_id: string | null
+  label: string
+  type_code: string | null
+  is_canonical: boolean
+  role_count: number
+  proportion: number | null
+  by_requirement_type: { required: number; preferred: number; inferred: number }
+}
+
+export type TopRequirements = {
+  sample_size: number
+  insufficient_sample: boolean
+  min_sample_size: number
+  items: RequirementFrequencyItem[]
+}
+
+export type RequirementKey = { concept_id: string } | { surface_form: string }
+
+export type TrendPeriodPoint = { period: number; role_count: number; total_roles: number; proportion: number | null; sample_size: number }
+
+export type TrendLabel = 'emerging' | 'increasing' | 'persistent' | 'declining' | 'sparse_insufficient_evidence'
+
+export type TrendClassification = {
+  label: TrendLabel
+  rationale: string
+  usable_periods: number
+  total_periods: number
+  early_mean_proportion?: number
+  late_mean_proportion?: number
+}
+
+export type RequirementTrend = { granularity: 'year' | '5year'; series: TrendPeriodPoint[]; classification: TrendClassification }
+
+export type CooccurrenceItem = { concept_id: string; canonical_name: string; type_code: string; co_count: number; proportion_of_roles: number }
+export type Cooccurrence = { sample_size: number; items: CooccurrenceItem[] }
+
+export type DimensionCompareItem = {
+  value: string | number | null
+  role_count: number
+  sample_size: number
+  proportion: number | null
+  insufficient_sample: boolean
+}
+export type DimensionCompare = { dimension: string; items: DimensionCompareItem[] }
+
+export type TrendMethodology = {
+  text: string
+  sparse_min_sample: number
+  emerging_early_max_proportion: number
+  change_relative_threshold: number
+}
+
+function trendQuery(filters: TrendFilterInput, extra: Record<string, string | number | undefined> = {}): string {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries({ ...filters, ...extra })) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+  }
+  const s = qs.toString()
+  return s ? `?${s}` : ''
+}
+
+function requirementKeyParams(key: RequirementKey): Record<string, string> {
+  return 'concept_id' in key ? { concept_id: key.concept_id } : { surface_form: key.surface_form }
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -425,15 +567,32 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 
 export const api = {
   listRoles: (
-    params: { career_track?: string; concept_id?: string; min_similarity?: number; sort?: string } = {},
+    params: {
+      career_track?: string
+      concept_id?: string
+      min_similarity?: number
+      sort?: string
+      period?: 'recent' | 'all'
+      year?: number
+      date_from?: string
+      date_to?: string
+      limit?: number
+      offset?: number
+    } = {},
   ) => {
     const qs = new URLSearchParams()
     if (params.career_track) qs.set('career_track', params.career_track)
     if (params.concept_id !== undefined) qs.set('concept_id', params.concept_id)
     if (params.min_similarity !== undefined) qs.set('min_similarity', String(params.min_similarity))
     if (params.sort) qs.set('sort', params.sort)
+    if (params.period) qs.set('period', params.period)
+    if (params.year !== undefined) qs.set('year', String(params.year))
+    if (params.date_from) qs.set('date_from', params.date_from)
+    if (params.date_to) qs.set('date_to', params.date_to)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    if (params.offset !== undefined) qs.set('offset', String(params.offset))
     const suffix = qs.toString() ? `?${qs}` : ''
-    return req<Role[]>(`/roles${suffix}`)
+    return req<RoleListResponse>(`/roles${suffix}`)
   },
   getRole: (id: string) => req<Role>(`/roles/${id}`),
   updateRole: (id: string, payload: unknown) =>
@@ -461,7 +620,14 @@ export const api = {
   // own tool.
   getProfile: () => req<Profile>('/profile'),
   getProfileHistory: () => req<Profile360Row[]>('/profile/history'),
-  getSpace: () => req<SpaceResponse>('/space'),
+  getSpace: (filter: SpaceFilter = {}) => {
+    const qs = new URLSearchParams()
+    if (filter.year !== undefined) qs.set('year', String(filter.year))
+    if (filter.date_from) qs.set('date_from', filter.date_from)
+    if (filter.date_to) qs.set('date_to', filter.date_to)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<SpaceResponse>(`/space${suffix}`)
+  },
   rebuildRoleEmbeddings: (force = false) =>
     req<RebuildEmbeddingsSummary>(`/space/rebuild-role-embeddings${force ? '?force=true' : ''}`, { method: 'POST' }),
   listTargets: () => req<Role[]>('/targets'),
@@ -490,6 +656,11 @@ export const api = {
   resolveProposal: (payload: ProposalResolveInput) =>
     req<{ surface_form: string; status: string; resolved_concept_id: string | null }>(
       '/concepts/proposals/resolve',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  resolveProposalCluster: (payload: ClusterProposalResolveInput) =>
+    req<{ cluster_key: string; surface_forms: string[]; status: string; resolved_concept_id: string | null }>(
+      '/concepts/proposals/resolve-cluster',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
 
@@ -579,6 +750,16 @@ export const api = {
     }),
   removeComponent: (capabilityId: string, edgeId: string) =>
     req<{ status: string }>(`/capabilities/${capabilityId}/components/${edgeId}`, { method: 'DELETE' }),
+  reviewComponent: (capabilityId: string, edgeId: string, action: 'accept' | 'reject') =>
+    req<{ id: string; status: string }>(`/capabilities/${capabilityId}/components/${edgeId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  mergeCapability: (capabilityId: string, mergeIntoId: string) =>
+    req<{ id: string; status: string; merged_into: string }>(`/capabilities/${capabilityId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ merge_into_id: mergeIntoId }),
+    }),
   rebuildCapabilities: () => req<RebuildSummary>('/capabilities/rebuild', { method: 'POST' }),
 
   mapClaimToCapability: (claimId: string) =>
@@ -589,4 +770,19 @@ export const api = {
     }),
 
   getEvalReport: (split?: 'dev' | 'test') => req<EvalReport>(`/eval/report${split ? `?split=${split}` : ''}`),
+
+  // --- Trends (docs/18 §7/§8/§9) ---------------------------------------------
+  getTrendOverview: (filters: TrendFilterInput = {}) => req<CorpusOverview>(`/trends/overview${trendQuery(filters)}`),
+  getTopRequirements: (filters: TrendFilterInput = {}, opts: { min_sample_size?: number; limit?: number } = {}) =>
+    req<TopRequirements>(`/trends/top-requirements${trendQuery(filters, opts)}`),
+  getRequirementTrend: (key: RequirementKey, filters: TrendFilterInput = {}, granularity: 'year' | '5year' = 'year') =>
+    req<RequirementTrend>(`/trends/requirement-trend${trendQuery(filters, { ...requirementKeyParams(key), granularity })}`),
+  getCooccurrence: (key: RequirementKey, filters: TrendFilterInput = {}) =>
+    req<Cooccurrence>(`/trends/cooccurrence${trendQuery(filters, requirementKeyParams(key))}`),
+  compareDimension: (
+    key: RequirementKey,
+    dimension: 'country' | 'seniority_level' | 'career_track',
+    filters: TrendFilterInput = {},
+  ) => req<DimensionCompare>(`/trends/compare${trendQuery(filters, { ...requirementKeyParams(key), dimension })}`),
+  getTrendMethodology: () => req<TrendMethodology>('/trends/methodology'),
 }

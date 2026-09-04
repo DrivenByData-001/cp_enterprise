@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
   api,
+  type ClusterProposalResolveInput,
   type Concept,
   type ConceptInput,
   type ConceptType,
   type ProposalGroup,
-  type ProposalResolveInput,
   type ProposalStats,
 } from '../lib/api'
 
@@ -22,17 +22,20 @@ function ProposalCard({
 }) {
   const [mode, setMode] = useState<'idle' | 'new' | 'alias'>('idle')
   const [typeCode, setTypeCode] = useState(group.suggested_type ?? conceptTypes[0]?.code ?? '')
-  const [name, setName] = useState(group.surface_form)
+  // Default the suggested name to the longest exact surface form in the
+  // cluster (e.g. "Solvency II" over "SII") — just a starting point, freely
+  // editable before resolving.
+  const [name, setName] = useState([...group.surface_forms].sort((a, b) => b.length - a.length)[0] ?? group.surface_form)
   const [definition, setDefinition] = useState('')
   const [aliasConceptId, setAliasConceptId] = useState<string>(group.nearest_concept_id ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const run = async (payload: ProposalResolveInput) => {
+  const run = async (payload: Omit<ClusterProposalResolveInput, 'cluster_key'>) => {
     setBusy(true)
     setError(null)
     try {
-      await api.resolveProposal(payload)
+      await api.resolveProposalCluster({ cluster_key: group.cluster_key, ...payload })
       await onResolved()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -41,14 +44,16 @@ function ProposalCard({
   }
 
   const nearest = group.nearest_concept_id !== null ? concepts.find((c) => c.id === group.nearest_concept_id) : null
+  const isCluster = group.surface_forms.length > 1
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <div>
-          <div style={{ fontWeight: 600 }}>{group.surface_form}</div>
+          <div style={{ fontWeight: 600 }}>{group.surface_forms.join(' / ')}</div>
           <div className="muted" style={{ fontSize: 12 }}>
             seen in {group.occurrence_count} skill{group.occurrence_count === 1 ? '' : 's'}
+            {isCluster ? ` · ${group.surface_forms.length} lexical variants grouped for review` : ''}
             {nearest && group.nearest_similarity !== null
               ? ` · nearest match: ${nearest.canonical_name} (${Math.round(group.nearest_similarity * 100)}%)`
               : ''}
@@ -62,10 +67,10 @@ function ProposalCard({
             <button onClick={() => setMode('alias')} disabled={busy}>
               Alias of…
             </button>
-            <button onClick={() => run({ surface_form: group.surface_form, action: 'reject' })} disabled={busy}>
+            <button onClick={() => run({ action: 'reject' })} disabled={busy}>
               Reject
             </button>
-            <button onClick={() => run({ surface_form: group.surface_form, action: 'defer' })} disabled={busy}>
+            <button onClick={() => run({ action: 'defer' })} disabled={busy}>
               Defer
             </button>
           </div>
@@ -101,7 +106,6 @@ function ProposalCard({
               disabled={busy || !name.trim() || !typeCode}
               onClick={() =>
                 run({
-                  surface_form: group.surface_form,
                   action: 'accept_new',
                   type_code: typeCode,
                   canonical_name: name.trim(),
@@ -141,7 +145,6 @@ function ProposalCard({
               disabled={busy || aliasConceptId === ''}
               onClick={() =>
                 run({
-                  surface_form: group.surface_form,
                   action: 'accept_alias',
                   concept_id: aliasConceptId,
                 })
@@ -257,8 +260,9 @@ export default function Vocabulary() {
         <h1 style={{ fontSize: 22, margin: 0 }}>Vocabulary</h1>
         <p className="secondary" style={{ marginTop: 4 }}>
           The curated concept taxonomy every posting resolves against — domain, regulation, tool, function, product,
-          and the rest of docs/11 §2.3's ten types. Resolving a proposal here links every posting that used that
-          surface form, immediately.
+          and the rest of docs/11 §2.3's ten types. Resolving a proposal here links every matching posting
+          immediately. Lexical duplicates (e.g. "Solvency II" / "SII") are grouped into one card by the vocabulary
+          bootstrap pass — resolving it resolves every variant in the group at once.
         </p>
       </div>
 

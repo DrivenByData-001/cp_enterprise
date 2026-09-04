@@ -331,7 +331,20 @@ def _map_profile360_row(
             notes="no embedding candidates retrieved — nothing to adjudicate",
             **subject_kwargs,
         )
-        return {"status": "ok", "extraction_run_id": run_id, "mapped": False}
+        # Brief (docs/18 §11): until a real canonical vocabulary is curated,
+        # `mapped: False` alone is ambiguous — it means the same thing
+        # whether zero candidates existed to even consider, or several
+        # existed and the model declined all of them. Those are different
+        # claims about the evidence: the first says nothing about this
+        # person's evidence at all (the *vocabulary* is the gap), the second
+        # is a real "not confident" judgment against real candidates.
+        # `candidates_considered`/`reason` make the distinction explicit and
+        # machine-readable rather than leaving it to be inferred (or,
+        # worse, conflated) from a free-text note.
+        return {
+            "status": "ok", "extraction_run_id": run_id, "mapped": False,
+            "candidates_considered": 0, "reason": "no_candidates_available",
+        }
 
     record_json = json.dumps(dict(row), indent=2, default=str)
     candidates_json = json.dumps(candidates, indent=2, default=str)
@@ -365,7 +378,10 @@ def _map_profile360_row(
     )
 
     if not match:
-        return {"status": "ok", "extraction_run_id": run_id, "mapped": False}
+        return {
+            "status": "ok", "extraction_run_id": run_id, "mapped": False,
+            "candidates_considered": len(candidates), "reason": "declined_all_candidates",
+        }
 
     cur.execute(
         f"""
@@ -378,7 +394,10 @@ def _map_profile360_row(
         (row_id, match["id"], run_id),
     )
     mapping_id = cur.fetchone()["id"]
-    return {"status": "ok", "extraction_run_id": run_id, "mapped": True, "mapping_id": mapping_id, "concept_id": match["id"]}
+    return {
+        "status": "ok", "extraction_run_id": run_id, "mapped": True, "mapping_id": mapping_id, "concept_id": match["id"],
+        "candidates_considered": len(candidates),
+    }
 
 
 def map_profile360_claim(cur, claim_id: str) -> dict:

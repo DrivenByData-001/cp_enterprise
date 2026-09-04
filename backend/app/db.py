@@ -48,7 +48,20 @@ def get_pool() -> ConnectionPool:
 def reset_pool() -> None:
     """Close and drop the pool so the next get_pool() rebuilds it against
     whatever DATABASE_URL currently resolves to. Used by tests, which point
-    DATABASE_URL at a fresh throwaway database per session."""
+    DATABASE_URL at a fresh throwaway database per session — and also the
+    explicit shutdown call every long-lived entrypoint (the FastAPI app's
+    `shutdown` event in app/main.py, and every backend/scripts/*.py CLI that
+    touches the database) makes before exiting.
+
+    Closing explicitly here is what avoids psycopg_pool's own
+    `ConnectionPool.__del__` finalizer path: left to run at interpreter
+    shutdown (a bare process exit with no explicit close), it tries to join
+    the pool's worker/scheduler threads within a 5s timeout and logs
+    `couldn't stop thread 'pool-N-worker-*'/'pool-N-scheduler' within 5.0
+    seconds` when that join doesn't land in time — harmless (the pool's
+    connections are already done being used) but noisy. Calling this while
+    the interpreter is still fully alive lets `ConnectionPool.close()` join
+    those threads under normal scheduling instead."""
     global _pool
     if _pool is not None:
         _pool.close()

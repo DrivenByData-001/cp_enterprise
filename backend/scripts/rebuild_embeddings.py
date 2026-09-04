@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import db as db_module  # noqa: E402
 from app.db import db_cursor  # noqa: E402
 from app.embeddings import rebuild_role_embeddings  # noqa: E402
 
@@ -41,8 +42,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with db_cursor() as cur:
-        result = rebuild_role_embeddings(cur, missing_only=not args.force)
+    # Close the connection pool explicitly before exit (db.reset_pool's
+    # docstring) instead of leaving it to psycopg_pool's __del__ at
+    # interpreter shutdown, which logs a spurious thread-join warning.
+    try:
+        with db_cursor() as cur:
+            result = rebuild_role_embeddings(cur, missing_only=not args.force)
+    finally:
+        db_module.reset_pool()
 
     print(
         f"model={result['model']} roles_scanned={result['roles_scanned']} "

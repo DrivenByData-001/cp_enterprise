@@ -3,6 +3,49 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type Role } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 
+// docs/18 §5: `partial` means a usable extraction with known/model-declared
+// incompleteness — not failure, and never mutated/reanalysed merely by
+// viewing it here. `role.extraction_quality` (the run's own verdict) is
+// authoritative when present; it can diverge from the role's self-reported
+// `extraction_status` column (see backend/app/document_processing.py::
+// role_extraction_quality's docstring for why), so it's preferred whenever
+// available. A role with no extraction_quality at all (legacy/bulk import,
+// hand-entered — never went through the document-processing pipeline) falls
+// back to the older self-reported field, the only signal such a role has.
+function ExtractionQualityNotice({ role }: { role: Role }) {
+  const quality = role.extraction_quality
+  const isPartial = quality ? quality.status === 'partial' : role.extraction_status != null && role.extraction_status !== 'ok'
+  if (!isPartial) return null
+
+  const notes = quality ? quality.notes : role.extraction_notes
+
+  return (
+    <div className="card" style={{ marginTop: 16, borderColor: 'var(--warning)', background: 'rgba(250,178,25,0.08)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <strong>Partial extraction</strong>
+          <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
+            The source for this role may be incomplete or uncertain — this is a usable extraction, not a failure, and
+            it's eligible for later review.
+          </p>
+          {notes && (
+            <p className="secondary" style={{ margin: '6px 0 0', fontSize: 13 }}>
+              {notes}
+            </p>
+          )}
+        </div>
+        <button
+          disabled
+          title="Controlled review/reanalysis workflow — not yet available. Viewing this page never re-analyses the source."
+          style={{ flexShrink: 0 }}
+        >
+          Review / reanalyse extraction
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function RoleDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -87,15 +130,7 @@ export default function RoleDetail() {
         </div>
       )}
 
-      {role.extraction_status && role.extraction_status !== 'ok' && (
-        <div
-          className="card"
-          style={{ marginTop: 16, borderColor: 'var(--warning)', background: 'rgba(250,178,25,0.08)' }}
-        >
-          <strong>Extraction {role.extraction_status}</strong>
-          {role.extraction_notes && <p style={{ margin: '4px 0 0' }}>{role.extraction_notes}</p>}
-        </div>
-      )}
+      <ExtractionQualityNotice role={role} />
 
       {!isTarget && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>

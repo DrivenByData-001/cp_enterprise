@@ -779,3 +779,58 @@ def test_list_eligible_documents_skips_successful_includes_raw_and_retries_faile
     assert ids_default == {raw_id}
     assert ids_retry == {raw_id, failed_id}
     assert analysed_id not in ids_default and analysed_id not in ids_retry
+
+
+# --- docs/18 §5: role-level extraction quality is the *run's* verdict, not just the model's self-report ---
+
+
+def test_role_extraction_quality_reflects_the_run_status_even_when_it_diverges_from_self_reported_status(client, monkeypatch):
+    """The empty-skills deterministic guardrail (§process_job_posting_document)
+    can force run_status='partial' even when the model itself self-reported
+    metadata.extraction_status='ok'. role_instance.extraction_status stores
+    the model's self-report verbatim (posting_persistence.py) and is
+    therefore NOT trustworthy alone — role_extraction_quality must report the
+    run's own, more authoritative 'partial' verdict."""
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "A posting with prose but no parsed skills list.")
+
+    monkeypatch.setattr(
+        document_processing, "run_json_task",
+        lambda **kw: _fake_result(
+            extraction_status="ok",
+            skills=[],
+            job_overrides={"description": "A full role description with real substantive content."},
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+    assert result["status"] == "partial"
+    role_id = result["role_instance_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT extraction_status FROM jobber.role_instance WHERE id = %s", (role_id,))
+        self_reported = cur.fetchone()["extraction_status"]
+        quality = document_processing.role_extraction_quality(cur, role_id)
+
+    assert self_reported == "ok"  # the model's own claim, preserved verbatim
+    assert quality["status"] == "partial"  # the actually-authoritative signal
+
+
+def test_role_extraction_quality_is_none_for_a_role_never_processed_through_this_pipeline(client):
+    with db.db_cursor() as cur:
+        role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "Hand-entered role"}, skills=[])
+        quality = document_processing.role_extraction_quality(cur, role_id)
+    assert quality is None
+
+
+def test_role_extraction_quality_bulk_matches_single_lookup_for_a_mixed_set(client, monkeypatch):
+    monkeypatch.setattr(document_processing, "run_json_task", lambda **kw: _fake_result())
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Bulk-quality posting.")
+    pipeline_role_id = document_processing.process_job_posting_document(document_id)["role_instance_id"]
+
+    with db.db_cursor() as cur:
+        manual_role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "Manual role"}, skills=[])
+        bulk = document_processing.role_extraction_quality_bulk(cur, [pipeline_role_id, manual_role_id])
+
+    assert bulk[pipeline_role_id]["status"] == "ok"
+    assert manual_role_id not in bulk

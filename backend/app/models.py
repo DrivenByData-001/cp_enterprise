@@ -118,6 +118,30 @@ class ProposalResolve(BaseModel):
         return self
 
 
+class ClusterProposalResolve(BaseModel):
+    """Same shape/semantics as ProposalResolve, keyed by cluster_key instead
+    of one exact surface_form — resolves every pending proposal sharing that
+    cluster (docs/18 §3) in one action, e.g. accepting "Solvency II" also
+    resolves the "SII" proposal in the same cluster to the same concept."""
+
+    cluster_key: str
+    action: str
+    type_code: Optional[str] = None
+    canonical_name: Optional[str] = None
+    definition: Optional[str] = None
+    concept_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_action_fields(self):
+        if self.action == "accept_new" and not (self.type_code and self.canonical_name):
+            raise ValueError("accept_new requires type_code and canonical_name")
+        if self.action == "accept_alias" and not self.concept_id:
+            raise ValueError("accept_alias requires concept_id")
+        if self.action not in ("accept_new", "accept_alias", "reject", "defer"):
+            raise ValueError("action must be one of accept_new, accept_alias, reject, defer")
+        return self
+
+
 # --- Phase 2: AI extraction task schemas (backend/app/extraction.py) --------
 #
 # These are output_model schemas for app.ai.run_json_task, not API
@@ -178,8 +202,8 @@ class CapabilityCreate(BaseModel):
             raise ValueError(f"min_autonomy must be one of {_AUTONOMY_LEVELS}")
         if self.economic_salience is not None and self.economic_salience not in ("low", "medium", "high"):
             raise ValueError("economic_salience must be one of low, medium, high")
-        if self.status not in ("proposed", "active", "deprecated"):
-            raise ValueError("status must be one of proposed, active, deprecated")
+        if self.status not in ("proposed", "active", "deprecated", "rejected"):
+            raise ValueError("status must be one of proposed, active, deprecated, rejected")
         return self
 
 
@@ -203,9 +227,13 @@ class CapabilityUpdate(BaseModel):
             raise ValueError(f"min_autonomy must be one of {_AUTONOMY_LEVELS}")
         if self.economic_salience is not None and self.economic_salience not in ("low", "medium", "high"):
             raise ValueError("economic_salience must be one of low, medium, high")
-        if self.status is not None and self.status not in ("proposed", "active", "deprecated"):
-            raise ValueError("status must be one of proposed, active, deprecated")
+        if self.status is not None and self.status not in ("proposed", "active", "deprecated", "rejected"):
+            raise ValueError("status must be one of proposed, active, deprecated, rejected")
         return self
+
+
+class CapabilityMerge(BaseModel):
+    merge_into_id: str
 
 
 class ComponentEdgeCreate(BaseModel):
@@ -226,4 +254,14 @@ class ComponentEdgeUpdate(BaseModel):
     def _check(self):
         if self.necessity not in _NECESSITY_LEVELS:
             raise ValueError(f"necessity must be one of {_NECESSITY_LEVELS}")
+        return self
+
+
+class ComponentEdgeReview(BaseModel):
+    action: str  # accept | reject
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.action not in ("accept", "reject"):
+            raise ValueError("action must be one of accept, reject")
         return self

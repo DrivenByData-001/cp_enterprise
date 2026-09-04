@@ -125,6 +125,33 @@ def test_map_profile360_claim_declines_without_creating_a_mapping(client, monkey
         count = cur.fetchone()["n"]
 
     assert count == 0
+    # docs/18 §11: real candidates existed and were considered — this is a
+    # genuine "not confident" judgment, distinguishable from an empty
+    # vocabulary (see the next test).
+    assert result["reason"] == "declined_all_candidates"
+    assert result["candidates_considered"] == 1
+
+
+def test_map_profile360_claim_with_no_active_concepts_reports_empty_vocabulary_not_weak_evidence(client, monkeypatch):
+    """docs/18 §11: until the canonical vocabulary is curated, this is the
+    routine production state (0 active capabilities/concepts of many types).
+    run_json_task must never even be called — there is nothing to adjudicate,
+    exactly as the existing 'no embedding candidates retrieved' short-circuit
+    already behaved; this test pins the machine-readable reason code that
+    lets the UI say so honestly instead of implying weak person-side evidence."""
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        raise AssertionError("must not call the model when there are no candidates to adjudicate")
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        claim_id = _insert_fake_claim(cur, "Built reserving models in Python.")
+        result = extraction.map_profile360_claim(cur, claim_id)
+
+    assert result["mapped"] is False
+    assert result["reason"] == "no_candidates_available"
+    assert result["candidates_considered"] == 0
 
 
 def test_map_profile360_capability_only_offers_capability_type_candidates(client, monkeypatch):
