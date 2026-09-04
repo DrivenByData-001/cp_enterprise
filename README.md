@@ -186,17 +186,38 @@ security model.
   §12) — ingestion is paste/upload only.
 - Any cloud sync beyond the shared Postgres database itself.
 
-### Note for future devs: time-evolution view (deferred)
+### Note for future devs: temporal filtering / "time travel" (deferred)
 
 `role_instance.posting_date` and `.captured_at` are tracked and shown
 everywhere, and historic postings (paste-from-file, no URL) are a first-class
-capture path. What's *not* built yet is doing anything with that time
-dimension on the **Space** view — a date-range filter under the scatter in
-`frontend/src/pages/Space.tsx`, defaulting to all-time, that re-requests
-`GET /api/space` scoped to that window. Backend side, `backend/app/routes/space.py`
-would need optional `from`/`to` query params filtering the roles selected
-before the PCA fit. Held off until there's enough historic data loaded in to
-actually make the view meaningful.
+capture path — the historical corpus (`docs/17-document-processing-pipeline.md`)
+will substantially increase the role corpus once bulk-processed beyond the
+initial pilot, spanning roughly 2008–2025. What's *not* built yet is doing
+anything with that time dimension in the UI, and **Dashboard and Space should
+not treat it the same way**:
+
+- **Dashboard** should not indiscriminately list 2008–2025 by default —
+  once the historical corpus is bulk-processed, that would drown out
+  recent/current roles in the view people actually check day to day. Add a
+  year/date-range filter to the Dashboard; default the view to prioritise
+  recent/current roles, while still letting a user deliberately opt into
+  browsing historical years.
+- **Space is different — do not apply the same default-hide treatment.**
+  The historical role cloud is itself potentially useful to see there
+  (structurally, as a shape in the embedding space), so Space should not
+  default to hiding older roles the way Dashboard's default view should.
+  Retain the previously-intended **"time travel"** concept here instead: a
+  date-range filter under the scatter in `frontend/src/pages/Space.tsx`,
+  defaulting to all-time, that re-requests `GET /api/space` scoped to that
+  window (backend side, `backend/app/routes/space.py` would need optional
+  `from`/`to` query params filtering the roles selected before the PCA fit)
+  — and, later, genuine temporal slicing/animation through time, not just a
+  static filter.
+
+Held off until there's enough historic data loaded in to actually make
+either view meaningful. This is UI/navigation work, recorded here for
+later — out of scope for the extraction-policy work in
+`docs/17-document-processing-pipeline.md` §8a.
 
 ## First-time setup
 

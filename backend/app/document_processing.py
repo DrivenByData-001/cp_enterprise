@@ -308,6 +308,47 @@ def _build_input_text(document: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _enforce_historical_extraction_policy(payload: JobPostingImport, document: dict) -> None:
+    """Deterministic backstop for the historical-extraction policy (CP Ent
+    Phase 3B 0.2, docs/17 §8): the prompt's HISTORICAL CONTEXT section
+    already instructs the model to defer these fields for a historical
+    posting, but a model response is never a guarantee — this clamps the
+    contract regardless of what actually came back, so a non-compliant
+    response can never leak present-day market judgment, or a
+    stated-salary-copied-as-an-estimate, into historical data.
+
+    Fires only when the *document* itself carries a known historical
+    original posting date (`document['source_date']`) — the same signal
+    `_build_input_text` uses to tell the model it is dealing with dated
+    historical text in the first place. An ordinary current-posting
+    extraction has no known `source_date` and is never touched by this
+    function.
+
+    Structural judgments (seniority/complexity/specialisation/
+    transferability/rarity) are deliberately left untouched — they describe
+    the role's own documented shape, not the external labour market, and
+    remain valid historical judgments (brief step 4)."""
+    if not (document.get("source_date") or ""):
+        return
+
+    analysis = payload.analysis
+    analysis.market_demand_score = None
+    analysis.automation_risk_score = None
+    analysis.top_adjacent_roles = None
+
+    # A "salary estimate" that just restates the advert's own stated salary
+    # is not an estimate at all — collapse that specific failure mode
+    # deterministically. Once a stated figure is a known fact, any
+    # "estimate" of the same figure is redundant, so the estimate field is
+    # always null wherever its factual counterpart is known; an estimate
+    # grounded in text where no salary is stated is left as the model
+    # judged it, per the prompt's narrow carve-out.
+    if payload.job.salary_min is not None:
+        analysis.salary_estimate_min = None
+    if payload.job.salary_max is not None:
+        analysis.salary_estimate_max = None
+
+
 def _apply_known_metadata(payload: JobPostingImport, document: dict) -> None:
     """Fill fields the model left blank with what the source document itself
     already establishes — never overwrites a value the model actually
@@ -494,6 +535,7 @@ def process_job_posting_document(document_id: str) -> dict:
 
     payload = ai_result.output
     _apply_known_metadata(payload, document)
+    _enforce_historical_extraction_policy(payload, document)
     run_status = "ok" if (payload.metadata.extraction_status or "ok") == "ok" else "partial"
 
     try:
