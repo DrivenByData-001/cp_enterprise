@@ -65,9 +65,9 @@ def main() -> int:
     cluster = result["atomic_concept_clustering"]
     print(
         f"{'[dry-run] ' if args.dry_run else ''}atomic concepts: "
-        f"auto_resolved={cluster['auto_resolved']} proposals_created={cluster['proposals_created']} "
-        f"proposals_updated={cluster['proposals_updated']} proposals_keyed={cluster.get('proposals_keyed', 0)} "
-        f"pending_clusters={cluster.get('pending_clusters', 0)}"
+        f"auto_resolved={cluster['auto_resolved']} proposals_created={cluster.get('proposals_created', cluster.get('proposals_would_create', 0))} "
+        f"proposals_updated={cluster.get('proposals_updated', 0)} proposals_keyed={cluster.get('proposals_keyed', 0)} "
+        f"pending_clusters={cluster.get('pending_clusters', cluster.get('distinct_clusters', 0))}"
     )
     print(
         f"candidate capabilities: found={result['candidate_capabilities_found']} "
@@ -75,6 +75,13 @@ def main() -> int:
         f"skipped_existing_name={result['persisted']['capabilities_skipped_existing_name']} "
         f"component_edges_proposed={result['persisted']['component_edges_proposed']}"
     )
+    
+    if args.dry_run and cluster.get("sample_clusters"):
+        print("\nLexical cluster analysis (sample, up to 50 clusters):")
+        for c in cluster["sample_clusters"]:
+            surface_forms_str = ", ".join(f'"{f}"' for f in c["surface_forms"])
+            print(f"  [{c['occurrence_count']:3d} occurrences, {c['form_count']} forms] cluster: {c['cluster_key']:30s} -> {surface_forms_str}")
+    
     if args.dry_run:
         print("\ncandidate capabilities (most-evidenced first):")
         for c in result["candidate_capabilities"]:

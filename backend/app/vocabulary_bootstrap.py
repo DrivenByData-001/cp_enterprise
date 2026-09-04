@@ -145,6 +145,58 @@ def cluster_key_for(surface_form: str) -> str:
     return _strip_trailing_plural(spelled)
 
 
+def analyze_cluster_keys_dryrun(cur) -> dict:
+    """Diagnostic dry-run of clustering analysis: what WOULD be clustered if
+    we ran the full bootstrap. Computes without writing anything. Used by
+    dry-run mode to report what the full clustering pass would generate."""
+    # Get all unresolved role_skill_observations
+    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    unresolved = cur.fetchall()
+    
+    if not unresolved:
+        return {
+            "auto_resolved": 0,
+            "proposals_would_create": 0,
+            "distinct_surface_forms": 0,
+            "distinct_clusters": 0,
+            "sample_clusters": [],
+        }
+    
+    # Group by normalized surface form (what run_pass_b would do)
+    from .concept_linking import normalize_name
+    
+    surface_forms: dict[str, list[str]] = {}
+    for row in unresolved:
+        normalized = normalize_name(row["surface_form"])
+        if normalized:
+            surface_forms.setdefault(normalized, []).append(str(row["id"]))
+    
+    # Now apply clustering to each unique normalized form
+    clusters: dict[str, list[str]] = {}  # cluster_key -> [surface_forms]
+    for normalized_form in sorted(surface_forms.keys()):
+        key = cluster_key_for(normalized_form)
+        clusters.setdefault(key, []).append(normalized_form)
+    
+    # Build sample output
+    sample_clusters = []
+    for cluster_key in sorted(clusters.keys())[:50]:  # First 50 clusters
+        forms = clusters[cluster_key]
+        sample_clusters.append({
+            "cluster_key": cluster_key,
+            "surface_forms": forms,
+            "form_count": len(forms),
+            "occurrence_count": sum(len(surface_forms[f]) for f in forms),
+        })
+    
+    return {
+        "auto_resolved": 0,  # None would auto-resolve (0 active concepts)
+        "proposals_would_create": len(surface_forms),
+        "distinct_surface_forms": len(surface_forms),
+        "distinct_clusters": len(clusters),
+        "sample_clusters": sample_clusters,
+    }
+
+
 def compute_cluster_keys(cur) -> dict:
     """Runs Pass B (idempotent, existing/tested — concept_linking.run_pass_b)
     to make sure every currently-unresolved role_skill_observation has a
@@ -471,12 +523,15 @@ def run_bootstrap(
     """Orchestrates both steps. `dry_run=True` computes and reports without
     writing anything (used by `--dry-run` on the CLI, and by tests that only
     want to assert on the *shape* of proposals)."""
-    cluster_result = {"auto_resolved": 0, "proposals_created": 0, "proposals_updated": 0, "proposals_keyed": 0, "pending_clusters": 0}
+    cluster_result: dict = {"auto_resolved": 0, "proposals_created": 0, "proposals_updated": 0, "proposals_keyed": 0, "pending_clusters": 0}
     candidates: list[CandidateCapability] = []
     persist_result = {"capabilities_created": 0, "capabilities_skipped_existing_name": 0, "component_edges_proposed": 0}
 
-    if not dry_run:
+    if dry_run:
+        cluster_result = analyze_cluster_keys_dryrun(cur)
+    else:
         cluster_result = compute_cluster_keys(cur)
+    
     candidates = compute_candidate_capabilities(
         cur, min_concept_support=min_concept_support, min_pair_support=min_pair_support, max_candidates=max_candidates
     )
