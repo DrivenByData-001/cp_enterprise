@@ -111,3 +111,46 @@ def test_document_provenance_quality_check_constraint_enforced(client):
                 "INSERT INTO jobber.document (source_key, kind, content_text, provenance_quality) VALUES (%s, %s, %s, %s)",
                 ("test-bad-provenance", "job_posting", "x", "not_a_real_value"),
             )
+
+
+def test_role_skill_observation_app_capture_basis_persists(client):
+    """Regression test (2026-09-04 schema mismatch fix): application-created
+    roles write observation_basis='app_capture' via upsert_role_instance, which
+    must be allowed by the CHECK constraint on jobber.role_skill_observation.
+    This test proves the complete data flow: role_instance + skills persist
+    with app_capture observation_basis without violating the constraint."""
+    with db.db_cursor() as cur:
+        role_id = db.upsert_role_instance(
+            cur,
+            None,
+            {"instance_type": "observed_posting", "title": "Test Role", "description": "desc"},
+            skills=[{"name": "Python"}, {"name": "SQL"}],
+        )
+        cur.execute(
+            "SELECT surface_form, observation_basis FROM jobber.role_skill_observation WHERE role_instance_id = %s ORDER BY surface_form",
+            (role_id,),
+        )
+        skills = cur.fetchall()
+
+    assert len(skills) == 2
+    assert skills[0]["surface_form"] == "Python"
+    assert skills[0]["observation_basis"] == "app_capture"
+    assert skills[1]["surface_form"] == "SQL"
+    assert skills[1]["observation_basis"] == "app_capture"
+
+
+def test_role_skill_observation_observation_basis_check_constraint_enforced(client):
+    """Verify that only valid observation_basis values are accepted by the
+    CHECK constraint on jobber.role_skill_observation. This guards against
+    typos or API misuse that might try to set an unsupported basis value."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with db.db_cursor() as cur:
+            # Create a dummy role to attach the bad observation to.
+            role_id = db.upsert_role_instance(
+                cur, None, {"instance_type": "observed_posting", "title": "Dummy"}, skills=[]
+            )
+            # Try to insert with an invalid observation_basis value.
+            cur.execute(
+                "INSERT INTO jobber.role_skill_observation (role_instance_id, surface_form, observation_basis) VALUES (%s, %s, %s)",
+                (role_id, "BadSkill", "invalid_basis"),
+            )

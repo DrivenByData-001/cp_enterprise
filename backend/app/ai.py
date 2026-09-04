@@ -154,7 +154,7 @@ def run_json_task(
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=max_tokens,
+            max_completion_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": _DEFAULT_SYSTEM_PROMPT},
                 {

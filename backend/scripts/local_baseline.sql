@@ -214,7 +214,9 @@ CREATE TABLE IF NOT EXISTS jobber.role_skill_observation (
     requirement_type     TEXT,
     observation_basis    TEXT,
     canonical_concept_id UUID REFERENCES jobber.concept(id),
-    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT role_skill_observation_observation_basis_check
+        CHECK (observation_basis IN ('legacy_extraction', 'app_capture', 'phase2_requirement_claim', 'manual'))
 );
 CREATE INDEX IF NOT EXISTS idx_rso_role_local ON jobber.role_skill_observation(role_instance_id);
 CREATE INDEX IF NOT EXISTS idx_rso_surface_local ON jobber.role_skill_observation(surface_form);
