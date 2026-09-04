@@ -205,6 +205,121 @@ export type ProposalStats = {
   proposals_per_document: number | null
 }
 
+// --- Vocabulary curation (Vocabulary Proposal Prioritisation and Curation
+// UX) — the prioritised, evidence-rich cluster review queue. Distinct from
+// the legacy ProposalGroup/resolveProposalCluster pair above, which remains
+// unchanged for backward compatibility. -------------------------------------
+
+export type PriorityBand = 'high' | 'medium' | 'low' | 'sparse'
+
+export type ClusterExampleRole = { id: string; title: string | null }
+
+// Fields beyond cluster_key/status/surface_forms/suggested_canonical_label
+// are only populated for `status: 'pending'` rows — an accepted/rejected
+// row is audit history (what happened, onto what concept), not a re-scored
+// evidence card. See vocabulary_curation.py's `_resolved_cluster_rows`.
+export type VocabClusterSummary = {
+  cluster_key: string
+  status: string
+  suggested_canonical_label: string
+  surface_forms: string[]
+  proposal_ids: string[] | null
+  suggested_type: string | null
+  nearest_concept_id: string | null
+  nearest_similarity: number | null
+  role_count: number | null
+  observation_count: number | null
+  distinct_years?: number[]
+  first_observed: string | null
+  last_observed: string | null
+  countries?: string[]
+  seniority_levels?: string[]
+  career_tracks?: string[]
+  example_roles?: ClusterExampleRole[]
+  priority_score: number | null
+  priority_band: PriorityBand | null
+  flags: string[]
+  resolved_concept_id?: string | null
+  resolved_canonical_name?: string | null
+  resolved_at?: string | null
+}
+
+export type VocabClusterListResponse = {
+  items: VocabClusterSummary[]
+  total: number
+  limit: number
+  offset: number
+  status: string
+  sort: string
+}
+
+export type VocabClusterFilters = {
+  status?: 'pending' | 'accepted' | 'rejected' | 'all'
+  q?: string
+  min_role_count?: number
+  min_observation_count?: number
+  observed_from?: string
+  observed_to?: string
+  country?: string
+  seniority?: string
+  type_code?: string
+  band?: PriorityBand
+  sort?: 'priority' | 'occurrence' | 'role_count' | 'recent' | 'alphabetical'
+  limit?: number
+  offset?: number
+}
+
+export type VocabProgress = {
+  total_clusters: number
+  pending_clusters: number
+  accepted_clusters: number
+  rejected_clusters: number
+  other_status_clusters: number
+  high_priority_pending_clusters: number
+  accepted_concepts: number
+  observations_mapped: number
+  observations_unresolved: number
+  // The brief §10 signal: distinguishes "canonical vocabulary is not yet
+  // curated" from "no match found" everywhere in the app that depends on
+  // accepted concepts.
+  canonical_vocabulary_curated: boolean
+}
+
+export type VocabMethodology = {
+  text: string
+  bands: string[]
+  weights: Record<string, number>
+  recency_half_life_years: number
+  band_thresholds: Record<string, number>
+}
+
+export type ClusterActionResult = {
+  cluster_key: string
+  status: string
+  resolved_concept_id: string | null
+  surface_forms?: string[]
+  aliases_created?: number
+  idempotent_replay: boolean
+}
+
+export type BatchAcceptItemInput = { cluster_key: string; canonical_name?: string; type_code?: string; definition?: string }
+
+export type BatchPreviewResult = {
+  action: 'accept' | 'reject'
+  clusters_selected: number
+  clusters_ready: number
+  clusters_not_pending: string[]
+  resulting_concepts: number
+  aliases_estimate: number
+  observations_affected: number
+}
+
+export type BatchExecuteResult = {
+  action: 'accept' | 'reject'
+  clusters_processed: number
+  results: ClusterActionResult[]
+}
+
 export type RequirementClaim = {
   id: string
   requirement_type: 'required' | 'preferred' | 'contextual'
@@ -663,6 +778,29 @@ export const api = {
       '/concepts/proposals/resolve-cluster',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+
+  // --- Vocabulary curation (prioritised cluster review queue) ---------------
+  listVocabClusters: (filters: VocabClusterFilters = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<VocabClusterListResponse>(`/vocabulary/clusters${suffix}`)
+  },
+  getVocabClusterDetail: (clusterKey: string) => req<VocabClusterSummary>(`/vocabulary/clusters/${encodeURIComponent(clusterKey)}`),
+  getVocabProgress: () => req<VocabProgress>('/vocabulary/progress'),
+  getVocabMethodology: () => req<VocabMethodology>('/vocabulary/methodology'),
+  acceptVocabCluster: (payload: { cluster_key: string; type_code: string; canonical_name: string; definition?: string }) =>
+    req<ClusterActionResult>('/vocabulary/clusters/accept', { method: 'POST', body: JSON.stringify(payload) }),
+  rejectVocabCluster: (payload: { cluster_key: string }) =>
+    req<ClusterActionResult>('/vocabulary/clusters/reject', { method: 'POST', body: JSON.stringify(payload) }),
+  mergeVocabCluster: (payload: { cluster_key: string; concept_id: string }) =>
+    req<ClusterActionResult>('/vocabulary/clusters/merge', { method: 'POST', body: JSON.stringify(payload) }),
+  previewVocabBatch: (payload: { action: 'accept' | 'reject'; items: BatchAcceptItemInput[] }) =>
+    req<BatchPreviewResult>('/vocabulary/clusters/batch/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  executeVocabBatch: (payload: { action: 'accept' | 'reject'; items: BatchAcceptItemInput[] }) =>
+    req<BatchExecuteResult>('/vocabulary/clusters/batch', { method: 'POST', body: JSON.stringify(payload) }),
 
   // --- Phase 2: source-aware ingestion + requirement claims -----------------
   ingestText: (payload: { text: string; kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null }) =>

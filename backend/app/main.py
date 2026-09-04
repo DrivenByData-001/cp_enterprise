@@ -18,6 +18,7 @@ from .routes import (
     space,
     targets,
     trends,
+    vocabulary,
 )
 
 app = FastAPI(title="Career Navigator")
@@ -59,6 +60,7 @@ app.include_router(capabilities.router)
 app.include_router(evaluation.router)
 app.include_router(documents.router)
 app.include_router(trends.router)
+app.include_router(vocabulary.router)
 
 
 @app.get("/api/health")
