@@ -78,9 +78,9 @@ Your task:
     "salary_estimate_min": "number or null",
     "salary_estimate_max": "number or null",
 
-    "market_demand_score": "0-1",
-    "rarity_score": "0-1",
-    "automation_risk_score": "0-1",
+    "market_demand_score": "0-1, or null — always null for a historical posting, see HISTORICAL CONTEXT",
+    "rarity_score": "0-1 — a structural judgment, stays populated even for a historical posting",
+    "automation_risk_score": "0-1, or null — always null for a historical posting, see HISTORICAL CONTEXT",
 
     "top_adjacent_roles": ["string", "string", "string"],
     "key_skills_summary": "short paragraph describing the most important skills",
@@ -118,24 +118,52 @@ which case use whatever era the text itself implies.**
 
 If the input gives you a "Known original posting date" (or the posting text
 itself states/implies one), that date is authoritative for `job.posting_date`
-and is the era every judgment below must be made in:
+and is the era every judgment below must be made in. Historical extraction
+splits into two kinds of field, and **they are not treated the same way**:
 
-* **Salary is a fact of the original advert, not a modern one.** `salary_min`/
-  `salary_max`/`currency` are exactly what the advert states — copy them
-  verbatim, never inflate, convert, or "modernise" them.
-* **Do not invent a historical salary estimate you have no credible basis
-  for.** If you cannot ground `salary_estimate_min`/`salary_estimate_max` in
-  something in the text or well-established knowledge of that era's market,
-  set them `null` rather than guessing a plausible-looking number.
-* **`market_demand_score`, `automation_risk_score`, `top_adjacent_roles`, and
-  every other forward-looking judgment in `analysis` must reflect the
-  labour market *at the original posting date*, not the present day.** A
-  skill that is scarce now may have been common then, or vice versa — do not
-  silently substitute today's market for the historical one.
-* **Prefer `null` over false precision.** If an analytical value cannot be
-  meaningfully determined in the role's original historical context, use
-  `null` — a confident-looking number you are not actually grounding in
-  anything is worse than an honest gap.
+**A. Factual/structural extraction — extract normally, exactly as you would
+for a current posting.** `title`, `organisation`, `location`/`country`,
+`employment_type`, `seniority_level`, `description`, `requirements`,
+`responsibilities`, `skills`, `career_track`, and the structural judgments
+`seniority_score`, `complexity_score`, `specialisation_score`,
+`transferability_score`, and `rarity_score` all describe the role's own
+documented shape and demands (how senior, how complex, how specialised, how
+transferable, how rare *this particular combination of requirements* was) —
+not the external labour market — so they stay fully in scope for a
+historical posting and deserve exactly as much care as for a current one.
+
+**B. Forward-looking market judgments — unconditionally deferred, never
+guessed.** These describe the *external labour market*, which cannot be
+reliably reconstructed for a past era from the advert text alone. For
+**every** historical extraction, regardless of how confident you feel:
+  * `analysis.market_demand_score` → `null`. Always.
+  * `analysis.automation_risk_score` → `null`. Always.
+  * `analysis.top_adjacent_roles` → `null` (or `[]`). Always.
+  This is not "prefer null when unsure" — it is a hard requirement. These
+  values belong to a later, separate derived-analysis step run over the
+  whole corpus at once, not to this immutable per-document extraction, and
+  must never be populated here no matter how obvious a value might seem.
+
+**Salary follows the same fact-vs-judgment split:**
+  * **`salary_min`/`salary_max`/`currency` are a fact of the original
+    advert.** Copy them verbatim from whatever the advert states — never
+    inflate, convert, "modernise", or substitute modern salary knowledge.
+  * **`salary_estimate_min`/`salary_estimate_max` are a judgment, not a
+    restatement of that fact.** If the advert already states a salary,
+    leave both of these `null` — repeating `salary_min`/`salary_max` here is
+    not an estimate, it is a copy, and that is explicitly wrong. If the
+    advert states no salary at all, these should *still normally be `null`*
+    for a historical posting; fill them in only when the advert text itself
+    gives genuinely sufficient grounding for a period-accurate estimate
+    (e.g. an explicit pay grade/band, or a comparator figure actually named
+    in the text) — never from general modern salary knowledge, and never a
+    plausible-looking guess with nothing in the text behind it.
+
+* **Prefer `null` over false precision everywhere else in `analysis`.** If
+  some other analytical value cannot be meaningfully determined in the
+  role's original historical context, use `null` — a confident-looking
+  number you are not actually grounding in anything is worse than an honest
+  gap.
 * **`metadata.captured_at` is still always the real present moment** (this
   extraction is happening now, regardless of how old the posting is) —
   historical context changes how you *judge* the role, never when you record

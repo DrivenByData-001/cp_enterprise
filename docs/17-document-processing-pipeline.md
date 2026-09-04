@@ -1,9 +1,10 @@
 # 17 — Phase 3B: Document Processing Pipeline
 
-**Status:** implemented — pipeline, schema, CLI, API, tests. The 307-document
-historical corpus has **not** been processed; a small pilot (8–10 documents)
-is expected to run separately after review, followed by the full corpus once
-that pilot is inspected.
+**Status:** implemented — pipeline, schema, CLI, API, tests. The 10-document
+pilot ran and was reviewed; that review found the historical-extraction
+policy needed refinement (§8a, CP Ent Phase 3B 0.2) before the remaining
+corpus is processed — the pilot's own roles were left untouched. The rest of
+the 307-document historical corpus has **not** been processed.
 **Related:** `docs/14-phase2-postgres-architecture.md` (confirmed schema this
 phase extends), `docs/13-ai-task-layer.md` (the `run_json_task` abstraction
 this phase's AI call goes through), `docs/16-phase3-capability-engine.md`
@@ -203,6 +204,52 @@ Original advert text:
 metadata — it never overwrites a value the model actually provided, and never
 touches the document itself.
 
+### 8a. Historical-extraction policy refinement (CP Ent Phase 3B 0.2)
+
+Review of the persisted 10-document pilot output found that despite §8's
+original prompt language, historical extractions were still coming back with
+analytical fields that were meant to be deferred (a populated
+`market_demand_score`/`automation_risk_score`, non-empty `top_adjacent_roles`,
+and/or a `salary_estimate_min`/`max` that simply restated the stated salary).
+The pilot's own 10 roles were left exactly as they are — this is a
+policy-and-safeguard fix for *future* processing, not a backfill.
+
+Two changes, deliberately layered rather than replacing one with the other:
+
+1. **Prompt strengthening (primary).** The HISTORICAL CONTEXT section now
+   splits historical fields into two explicit classes instead of one set of
+   "prefer null" guidance: (A) factual/structural extraction — including the
+   structural judgments `seniority_score`/`complexity_score`/
+   `specialisation_score`/`transferability_score`/`rarity_score`, which
+   describe the role's own documented shape, not the labour market, and stay
+   fully in scope — and (B) forward-looking market judgments
+   (`market_demand_score`, `automation_risk_score`, `top_adjacent_roles`),
+   which are now an unconditional "always null for historical", not merely
+   preferred. Salary keeps its fact/judgment split, made explicit: a stated
+   salary makes restating it as an "estimate" wrong outright, and an
+   estimate with no stated salary to draw from should still normally be
+   `null` unless the advert text itself grounds one (e.g. a named pay
+   band) — never modern salary knowledge.
+2. **Deterministic safeguard (backstop).** `document_processing._enforce_historical_extraction_policy`
+   runs after `_apply_known_metadata` and before persistence, and
+   unconditionally nulls `analysis.market_demand_score`,
+   `analysis.automation_risk_score`, and `analysis.top_adjacent_roles`, and
+   nulls `analysis.salary_estimate_min`/`max` wherever the corresponding
+   `job.salary_min`/`max` fact is present — *whenever the document itself
+   carries a known `source_date`* (the same signal that puts "Known original
+   posting date" into the model's input in the first place). This guarantees
+   the contract even against a non-compliant model response, without
+   guessing at "historical-ness" from the model's own output. It never fires
+   for a document with no known `source_date` (an ordinary current-posting
+   extraction), and it never touches the structural scores, skills,
+   requirements, or any other factual field — only the three deferred
+   analysis fields and the salary-estimate/salary-fact interaction above.
+
+No schema change was needed: every field this touches was already
+`Optional`/nullable on `JobPostingImport` (`backend/app/models.py`) — the fix
+is prompt language plus one small, targeted function, not a model or pipeline
+redesign.
+
 ## 9. An existing document becomes a role — without creating another document
 
 `backend/app/posting_persistence.py::posting_role_columns(payload,
@@ -348,6 +395,20 @@ derivation across raw/running/analysed/partial/failed; no `profile360` writes
 occur anywhere in this pipeline; batch eligibility selection (skip
 successful, include raw, retry only when asked). `test_migration_compatibility.py`
 gained direct schema/constraint assertions for the new columns and CHECKs.
+
+§8a's historical-extraction policy refinement added its own focused
+regression coverage in `test_document_processing.py`: a stated historical
+salary stays in `salary_min`/`salary_max`/`currency` while
+`salary_estimate_min`/`max` are nulled rather than echoing it; a historical
+advert with no stated salary leaves both the factual and estimated salary
+fields null; `market_demand_score`/`automation_risk_score` are null and
+`top_adjacent_roles` is null/empty for historical output regardless of what
+the (mocked) model returned; the structural scores
+(`seniority_score`/`complexity_score`/`specialisation_score`/
+`transferability_score`/`rarity_score`) survive unchanged; skills and
+`requirements`/`responsibilities` extraction is unaffected; and a control
+document with no known `source_date` proves the safeguard never fires for an
+ordinary (non-historical) extraction.
 
 `test_import_native.py` was updated (not just left alone) to match the
 refactor: its `run_json_task` mock now patches

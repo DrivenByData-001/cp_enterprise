@@ -9,7 +9,7 @@ import time
 import pytest
 
 from app import ai, db, document_processing
-from app.models import Analysis, Job, JobPostingImport, Metadata
+from app.models import Analysis, Job, JobPostingImport, Metadata, Skill
 
 
 def _fake_result(
@@ -22,12 +22,17 @@ def _fake_result(
     input_text="",
     task="job_posting_extract",
     prompt_name="extract_job_posting.md",
+    skills=None,
+    job_overrides=None,
+    analysis_overrides=None,
 ):
+    job_kwargs = {"title": title, "posting_date": posting_date, **(job_overrides or {})}
+    analysis_kwargs = {"summary": "A role.", **(analysis_overrides or {})}
     output = JobPostingImport(
         metadata=Metadata(source=source, url=url, extraction_status=extraction_status),
-        job=Job(title=title, posting_date=posting_date),
-        skills=[],
-        analysis=Analysis(summary="A role."),
+        job=Job(**job_kwargs),
+        skills=skills or [],
+        analysis=Analysis(**analysis_kwargs),
     )
     run = ai.AITaskRun(
         task=task, model="test-model", prompt_name=prompt_name, prompt_version="testversion",
@@ -331,6 +336,209 @@ def test_historical_date_is_not_replaced_with_current_date(client, monkeypatch):
     with db.db_cursor() as cur:
         cur.execute("SELECT posting_date FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
         assert str(cur.fetchone()["posting_date"]) == "1999-11-02"
+
+
+# --- historical-extraction policy (CP Ent Phase 3B 0.2, docs/17 §8a) -------
+#
+# `_enforce_historical_extraction_policy` is a deterministic backstop: these
+# tests deliberately construct *non-compliant* fake model output (as if the
+# model had ignored the prompt's HISTORICAL CONTEXT instructions) to prove
+# the pipeline still enforces the contract regardless of what the model
+# actually returns.
+
+
+def test_historical_stated_salary_kept_but_estimate_not_copied(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting with a stated salary.", source_date="2008-03-27")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={"salary_min": 28000, "salary_max": 32000, "currency": "GBP"},
+            # Non-compliant: model echoed the stated salary into the estimate fields.
+            analysis_overrides={"salary_estimate_min": 28000, "salary_estimate_max": 32000},
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+
+    assert flat["salary_min"] == 28000
+    assert flat["salary_max"] == 32000
+    assert flat["currency"] == "GBP"
+    assert flat["salary_estimate_min"] is None
+    assert flat["salary_estimate_max"] is None
+
+
+def test_historical_advert_with_no_salary_leaves_both_null(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting with no salary stated anywhere.", source_date="2011-07-01")
+
+    monkeypatch.setattr(document_processing, "run_json_task", lambda **kw: _fake_result())
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+
+    assert flat["salary_min"] is None
+    assert flat["salary_max"] is None
+    assert flat["salary_estimate_min"] is None
+    assert flat["salary_estimate_max"] is None
+
+
+def test_historical_market_demand_score_is_null(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting.", source_date="2015-01-15")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        # Non-compliant: model produced a confident modern-looking score anyway.
+        lambda **kw: _fake_result(analysis_overrides={"market_demand_score": 0.87}),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+    assert flat["market_demand_score"] is None
+
+
+def test_historical_automation_risk_score_is_null(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting.", source_date="2019-09-30")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(analysis_overrides={"automation_risk_score": 0.42}),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+    assert flat["automation_risk_score"] is None
+
+
+def test_historical_top_adjacent_roles_is_empty_or_null(client, monkeypatch):
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting.", source_date="2013-04-11")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(analysis_overrides={"top_adjacent_roles": ["Pricing Analyst", "Reserving Actuary"]}),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+    assert flat.get("top_adjacent_roles") in (None, [])
+
+
+def test_historical_structural_scores_remain_allowed(client, monkeypatch):
+    """seniority/complexity/specialisation/transferability/rarity describe the
+    role's own documented shape, not the labour market — the historical
+    safeguard must leave them exactly as the model judged them."""
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting.", source_date="2008-06-12")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            analysis_overrides={
+                "seniority_score": 0.7,
+                "complexity_score": 0.6,
+                "specialisation_score": 0.55,
+                "transferability_score": 0.4,
+                "rarity_score": 0.65,
+            }
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+    assert flat["seniority_score"] == 0.7
+    assert flat["complexity_score"] == 0.6
+    assert flat["specialisation_score"] == 0.55
+    assert flat["transferability_score"] == 0.4
+    assert flat["rarity_score"] == 0.65
+
+
+def test_historical_skills_and_requirements_extraction_unaffected(client, monkeypatch):
+    """The historical safeguard only touches the three deferred analysis
+    fields and the salary-estimate/salary-fact interaction — ordinary
+    factual extraction (skills, requirements, responsibilities) must pass
+    through untouched."""
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "Historical posting with real requirements.", source_date="2009-02-20")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            job_overrides={
+                "requirements": "5+ years pricing experience; actuarial exams in progress.",
+                "responsibilities": "Own pricing models for the personal lines book.",
+            },
+            skills=[Skill(name="Pricing", category="technical", importance=5, requirement_type="required")],
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT requirements, responsibilities FROM jobber.role_instance WHERE id = %s",
+            (result["role_instance_id"],),
+        )
+        role = cur.fetchone()
+        cur.execute(
+            "SELECT surface_form FROM jobber.role_skill_observation WHERE role_instance_id = %s",
+            (result["role_instance_id"],),
+        )
+        skills = [r["surface_form"] for r in cur.fetchall()]
+
+    assert role["requirements"] == "5+ years pricing experience; actuarial exams in progress."
+    assert role["responsibilities"] == "Own pricing models for the personal lines book."
+    assert skills == ["Pricing"]
+
+
+def test_non_historical_document_keeps_analytical_fields(client, monkeypatch):
+    """Control case: a document with no known source_date is an ordinary
+    (non-historical) extraction, and the historical safeguard must never
+    fire for it — market_demand_score/automation_risk_score/
+    top_adjacent_roles pass through exactly as the model produced them."""
+    with db.db_cursor() as cur:
+        document_id = _seed_document(cur, "A current posting, no historical date known.")
+
+    monkeypatch.setattr(
+        document_processing,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            analysis_overrides={
+                "market_demand_score": 0.5,
+                "automation_risk_score": 0.3,
+                "top_adjacent_roles": ["Pricing Analyst", "Data Scientist"],
+            }
+        ),
+    )
+    result = document_processing.process_job_posting_document(document_id)
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s", (result["role_instance_id"],))
+        flat = db.flatten_role_instance(cur.fetchone())
+    assert flat["market_demand_score"] == 0.5
+    assert flat["automation_risk_score"] == 0.3
+    assert flat["top_adjacent_roles"] == ["Pricing Analyst", "Data Scientist"]
 
 
 def test_embedding_failure_does_not_roll_back_successful_role(client, monkeypatch):
