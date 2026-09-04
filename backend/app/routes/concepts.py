@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from ..concept_linking import normalize_name
 from ..db import db_cursor
 from ..models import ClusterProposalResolve, ConceptCreate, ProposalResolve
+from ..vocabulary_curation import resolve_surface_form_group
 
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
 
@@ -110,93 +111,16 @@ def proposal_stats():
     }
 
 
-def _resolve_surface_form_group(cur, surface_forms: list[str], payload, now) -> tuple[str, str | None]:
-    """Shared core of both `resolve_proposal` (one exact surface form — the
-    original, unchanged single-item contract) and `resolve_cluster` (every
-    exact surface form sharing a cluster_key, docs/18 §3). For a cluster with
-    more than one member, exactly one concept is ever created/chosen — every
-    *other* member surface form in the group becomes an alias of it, which is
-    the whole point of clustering "Solvency II"/"SII" together: accepting the
-    group links both surface forms to one concept, one an alias of the
-    other, rather than requiring two separate curator decisions.
-
-    Returns (status, resolved_concept_id). Raises HTTPException on the same
-    conditions the original single-surface-form endpoint did (404 no pending
-    proposals, 400 bad concept_id/duplicate name) — untouched behaviour for
-    the n=1 case.
-    """
-    all_proposal_ids: list[str] = []
-    ids_by_surface_form: dict[str, list[str]] = {}
-    for surface_form in surface_forms:
-        cur.execute(
-            "SELECT id FROM jobber.concept_proposal WHERE surface_form = %s AND status = 'pending'",
-            (surface_form,),
-        )
-        ids = [r["id"] for r in cur.fetchall()]
-        ids_by_surface_form[surface_form] = ids
-        all_proposal_ids.extend(ids)
-
-    if not all_proposal_ids:
-        raise HTTPException(404, "no pending proposals for this surface form")
-
-    resolved_concept_id = None
-
-    if payload.action == "accept_new":
-        try:
-            cur.execute(
-                "INSERT INTO jobber.concept (type_code, canonical_name, definition, status, origin, created_at, reviewed_at) "
-                "VALUES (%s, %s, %s, 'active', 'extraction_proposal', %s, %s) RETURNING id",
-                (payload.type_code, payload.canonical_name, payload.definition, now, now),
-            )
-        except psycopg.errors.UniqueViolation:
-            raise HTTPException(400, "a concept with this type and canonical name already exists")
-        resolved_concept_id = cur.fetchone()["id"]
-        new_status = "accepted_new"
-        canonical_normalized = normalize_name(payload.canonical_name)
-        alias_targets = [sf for sf in surface_forms if sf != canonical_normalized]
-
-    elif payload.action == "accept_alias":
-        cur.execute("SELECT id FROM jobber.concept WHERE id = %s AND status = 'active'", (payload.concept_id,))
-        if not cur.fetchone():
-            raise HTTPException(400, "concept_id does not exist or is not active")
-        resolved_concept_id = payload.concept_id
-        new_status = "accepted_alias"
-        alias_targets = list(surface_forms)
-
-    elif payload.action == "reject":
-        new_status = "rejected"
-        alias_targets = []
-    else:
-        new_status = "deferred"
-        alias_targets = []
-
-    for surface_form in alias_targets:
-        cur.execute(
-            "INSERT INTO jobber.concept_alias (concept_id, alias, origin, created_at) "
-            "VALUES (%s, %s, 'extraction_proposal', %s) ON CONFLICT (alias, concept_id) DO NOTHING",
-            (resolved_concept_id, surface_form, now),
-        )
-
-    for surface_form, ids in ids_by_surface_form.items():
-        if not ids:
-            continue
-        cur.execute(
-            "UPDATE jobber.concept_proposal SET status = %s, resolved_concept_id = %s, resolved_at = %s "
-            "WHERE id = ANY(%s::uuid[])",
-            (new_status, resolved_concept_id, now, ids),
-        )
-        if resolved_concept_id is not None:
-            cur.execute(
-                "SELECT id, surface_form AS name FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL"
-            )
-            matching_ids = [r["id"] for r in cur.fetchall() if normalize_name(r["name"]) == surface_form]
-            if matching_ids:
-                cur.execute(
-                    "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = ANY(%s::uuid[])",
-                    (resolved_concept_id, matching_ids),
-                )
-
-    return new_status, (str(resolved_concept_id) if resolved_concept_id is not None else None)
+def _resolve(cur, surface_forms: list[str], payload, now) -> tuple[str, str | None]:
+    """Thin adapter from the pydantic request models to the shared
+    `resolve_surface_form_group` core (moved to `vocabulary_curation.py` so
+    the new cluster-curation module can reuse it — see that module's
+    docstring). Behaviour is byte-for-byte unchanged from before the move."""
+    return resolve_surface_form_group(
+        cur, surface_forms,
+        action=payload.action, type_code=payload.type_code, canonical_name=payload.canonical_name,
+        definition=payload.definition, concept_id=payload.concept_id, now=now,
+    )
 
 
 @router.post("/proposals/resolve")
@@ -204,7 +128,7 @@ def resolve_proposal(payload: ProposalResolve):
     surface_form = normalize_name(payload.surface_form)
     now = datetime.now(timezone.utc)
     with db_cursor() as cur:
-        status, resolved_concept_id = _resolve_surface_form_group(cur, [surface_form], payload, now)
+        status, resolved_concept_id = _resolve(cur, [surface_form], payload, now)
     return {"surface_form": surface_form, "status": status, "resolved_concept_id": resolved_concept_id}
 
 
@@ -225,7 +149,7 @@ def resolve_cluster(payload: ClusterProposalResolve):
         surface_forms = [r["surface_form"] for r in cur.fetchall()]
         if not surface_forms:
             raise HTTPException(404, "no pending proposals for this cluster")
-        status, resolved_concept_id = _resolve_surface_form_group(cur, surface_forms, payload, now)
+        status, resolved_concept_id = _resolve(cur, surface_forms, payload, now)
 
     return {
         "cluster_key": cluster_key,

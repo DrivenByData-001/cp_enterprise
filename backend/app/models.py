@@ -142,6 +142,44 @@ class ClusterProposalResolve(BaseModel):
         return self
 
 
+# --- Vocabulary curation (Vocabulary Proposal Prioritisation and Curation UX) --
+
+class ClusterAcceptRequest(BaseModel):
+    cluster_key: str
+    type_code: str
+    canonical_name: str
+    definition: Optional[str] = None
+
+
+class ClusterRejectRequest(BaseModel):
+    cluster_key: str
+
+
+class ClusterMergeRequest(BaseModel):
+    cluster_key: str
+    concept_id: str
+
+
+class BatchAcceptItem(BaseModel):
+    cluster_key: str
+    canonical_name: Optional[str] = None  # required for action=accept
+    type_code: Optional[str] = None       # required for action=accept
+    definition: Optional[str] = None
+
+
+class ClusterBatchRequest(BaseModel):
+    action: str  # accept | reject
+    items: list[BatchAcceptItem]
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.action not in ("accept", "reject"):
+            raise ValueError("action must be one of accept, reject")
+        if not self.items:
+            raise ValueError("items must not be empty")
+        return self
+
+
 # --- Phase 2: AI extraction task schemas (backend/app/extraction.py) --------
 #
 # These are output_model schemas for app.ai.run_json_task, not API

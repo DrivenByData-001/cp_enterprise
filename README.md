@@ -173,7 +173,15 @@ one from a missing key — is recorded, never silently swallowed.
     accepted.
 9b. **Vocabulary** — the proposal queue groups lexical duplicates ("Solvency
     II"/"SII") into one review card (docs/18 §6.1); resolving it resolves
-    every variant at once.
+    every variant at once. Pending clusters are ranked by a deterministic,
+    documented curation-priority score (distinct-role/year/seniority/country
+    coverage, never raw mention count) into High/Medium/Low/Sparse bands, with
+    server-side filters, search, and pagination so the full queue is never
+    loaded into the browser at once; each card carries the evidence behind
+    its score plus advisory noise/sparse flags, and batch accept/reject
+    requires an explicit selection and a pre-execution confirmation showing
+    exactly what will change — see `docs/19-vocabulary-prioritisation-and-
+    curation.md`.
 9c. **Coverage** — your personal capability coverage, grouped Evidenced /
     Partial / User asserted / No evidence found, each expandable into its
     full evidence trace back to profile360.
