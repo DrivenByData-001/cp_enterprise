@@ -1,0 +1,60 @@
+# Render Blueprint for Career Navigator (cp_enterprise).
+#
+# See docs/20-render-deployment.md for the full operator walkthrough (first
+# deploy, generating secrets, smoke-testing, rollback). Summary of the
+# architecture chosen and why: ONE Render Web Service. FastAPI serves both
+# the /api/* backend and the built React frontend (same origin) — no
+# separate Static Site, no CORS, no cross-origin cookie handling. See
+# docs/20 "Recommended architecture" for the full reasoning.
+#
+# No secret VALUES live in this file. Every variable below marked
+# `sync: false` must be set by the operator in the Render dashboard after
+# this blueprint is applied — see docs/20 "Environment variables".
+#
+# Database: this service does NOT provision or manage Postgres. It connects
+# to the existing Supabase Postgres project via DATABASE_URL, unchanged —
+# see docs/20 "Supabase connection" and the brief this build implements
+# (do not move persistence to Render).
+
+services:
+  - type: web
+    name: cp-enterprise
+    runtime: python
+    plan: starter
+    buildCommand: >-
+      cd frontend && npm ci && npm run build && cd ../backend && pip install -r requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Pins the Python version Render's native build image uses — keep in
+      # sync with the version this app is developed/tested against (3.11).
+      - key: PYTHON_VERSION
+        value: 3.11.15
+
+      # Controls exactly one thing (app/config.py: is_production()): whether
+      # the session cookie is marked Secure. Render terminates HTTPS in
+      # front of this service, so this must be "production" for a real
+      # deployment.
+      - key: APP_ENV
+        value: production
+
+      # --- Existing application secrets (docs/14/15) — operator-provided ---
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CP_AI_MODEL
+        value: gpt-4o-mini
+
+      # --- Auth secrets (app/auth.py, docs/20) — operator-provided ---
+      - key: APP_AUTH_PASSWORD_HASH
+        sync: false
+      - key: APP_SESSION_SECRET
+        sync: false
+
+      # Only needed if this is ever split into a separate frontend Static
+      # Site + backend Web Service (docs/20 "Alternative: two-service
+      # deployment"). Leave unset for the default same-origin deployment.
+      - key: APP_CORS_ORIGINS
+        value: ""

@@ -668,11 +668,68 @@ function requirementKeyParams(key: RequirementKey): Record<string, string> {
   return 'concept_id' in key ? { concept_id: key.concept_id } : { surface_form: key.surface_form }
 }
 
+// --- Auth (docs/20-render-deployment.md) -----------------------------------
+//
+// Session state lives in an HttpOnly cookie the browser sends automatically
+// on same-origin requests — there is no token for this module to hold. The
+// one thing every other API call needs from here is `onUnauthorized`: when
+// any /api call comes back 401 (session missing/expired), `req` below
+// notifies whoever is showing the app's authenticated UI so it can drop
+// back to the login screen, instead of every call site having to notice
+// this itself.
+let unauthorizedHandler: (() => void) | null = null
+
+function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler
+}
+
+export type LoginResult = { ok: true } | { ok: false; error: string }
+
+async function login(password: string): Promise<LoginResult> {
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+    if (res.ok) return { ok: true }
+    if (res.status === 401) return { ok: false, error: 'Incorrect password.' }
+    if (res.status === 429) return { ok: false, error: 'Too many attempts. Please wait a minute and try again.' }
+    return { ok: false, error: 'Sign-in failed. Please try again.' }
+  } catch {
+    return { ok: false, error: 'Unable to reach the server. Please try again.' }
+  }
+}
+
+async function logout(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' })
+  } catch {
+    // Best-effort: even if this fails, the caller drops back to the login
+    // screen regardless (see AuthGate.tsx) — there is no client-side state
+    // to invalidate beyond the (HttpOnly, unreadable-by-JS) cookie itself.
+  }
+}
+
+async function authStatus(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/status')
+    if (!res.ok) return false
+    const data = (await res.json()) as { authenticated?: boolean }
+    return !!data.authenticated
+  } catch {
+    return false
+  }
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   })
+  if (res.status === 401) {
+    unauthorizedHandler?.()
+  }
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`${res.status} ${res.statusText}: ${body}`)
@@ -681,6 +738,10 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login,
+  logout,
+  authStatus,
+  setUnauthorizedHandler,
   listRoles: (
     params: {
       career_track?: string

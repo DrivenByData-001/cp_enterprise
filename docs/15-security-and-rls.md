@@ -91,3 +91,16 @@ environment only (`backend/app/config.py`) — never committed, never logged.
 `.env.example` at the repo root documents every variable the backend reads;
 `.env` itself is gitignored (already was, for `backend/data/*.db`; extended to
 cover `.env`/`.env.*` in this build — see `.gitignore`).
+
+## 6. Hosted deployment (Render) — application-level authentication
+
+Everything above assumes the backend is only ever reached by its one
+trusted operator (a local process, or a laptop on a trusted network). The
+moment this app is reachable over the public internet — as a Render Web
+Service is by default — that assumption stops holding, and the privileged
+database credential/mutating endpoints described above need an
+authentication layer in front of them. That layer (`backend/app/auth.py`,
+session cookies, a central `require_auth` policy) and everything about
+actually deploying to Render is `docs/20-render-deployment.md`. It changes
+nothing described in §1–§5 above — same backend-only Supabase credential,
+same untouched RLS posture — it only adds a login gate in front of it.
