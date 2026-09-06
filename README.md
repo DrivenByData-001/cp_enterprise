@@ -111,6 +111,13 @@ applies any pending database migrations automatically on startup
 the rest of the app runs normally, and every AI attempt — including a failed
 one from a missing key — is recorded, never silently swallowed.
 
+**Authentication is always on**, including locally — the backend refuses to
+start without `APP_AUTH_PASSWORD_HASH` and `APP_SESSION_SECRET` set (see
+`.env.example` for how to generate both, or run
+`python backend/scripts/hash_password.py`). There is no way to disable this;
+see `docs/20-render-deployment.md` §8 for the full design and
+`backend/app/auth.py`.
+
 ## Using it
 
 1. **Profile** — a read-only view of your current profile360 snapshot (the
@@ -305,3 +312,24 @@ production data. See `docs/14-phase2-postgres-architecture.md` §7.
 cd backend
 pytest
 ```
+
+## Deploying to Render
+
+See **`docs/20-render-deployment.md`** for the full step-by-step guide
+(generating secrets, environment variables, first login, rollback,
+troubleshooting). Summary of the hosted security model:
+
+- One Render Web Service serves both the API and the built frontend from
+  the same origin — no separate frontend host, no CORS.
+- Every `/api/*` route except `GET /api/health` and the three
+  `/api/auth/*` endpoints requires a logged-in session
+  (`backend/app/auth.py`) — enforced server-side by FastAPI, not by hiding
+  frontend routes.
+- The app **refuses to start** if the auth/session environment variables
+  are missing — see `render.yaml` and `.env.example`.
+- **Never deploy this app publicly (Render or anywhere else) without
+  `APP_AUTH_PASSWORD_HASH`/`APP_SESSION_SECRET` set** — the backend holds a
+  privileged Supabase credential and exposes mutating endpoints
+  (Vocabulary curation, imports, capability edits) that must not be
+  reachable by an anonymous internet caller. The app enforces this itself
+  (see above), but it's worth saying plainly here too.

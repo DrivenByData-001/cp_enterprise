@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import bcrypt
 import psycopg
 import pytest
 
@@ -42,6 +43,13 @@ from app.config import test_database_url  # noqa: E402
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 LOCAL_BASELINE_SQL = (BACKEND_DIR / "scripts" / "local_baseline.sql").read_text(encoding="utf-8")
+
+# Test-only credentials for the app's single-user auth (app/auth.py,
+# docs/20). A low bcrypt cost factor keeps `verify_password` fast across
+# hundreds of tests — nothing about this hash is used outside this file, so
+# there's no reason to pay production's cost factor here.
+TEST_AUTH_PASSWORD = "test-password"
+TEST_AUTH_PASSWORD_HASH = bcrypt.hashpw(TEST_AUTH_PASSWORD.encode("utf-8"), bcrypt.gensalt(rounds=4)).decode("utf-8")
 
 
 def _with_dbname(url: str, dbname: str) -> str:
@@ -123,6 +131,14 @@ def postgres_test_db():
 @pytest.fixture(scope="session", autouse=True)
 def _configure_app_database(postgres_test_db, monkeypatch_session):
     monkeypatch_session.setenv("DATABASE_URL", postgres_test_db)
+    # app/main.py reads both at import time (see its module-level
+    # config.session_secret()/config.auth_password_hash() calls) and fails
+    # closed if either is missing — tests need real values for the same
+    # reason a real deployment does. APP_ENV is deliberately left unset
+    # (defaults to "development") so the session cookie isn't marked
+    # `Secure`, which TestClient's http (not https) requests wouldn't carry.
+    monkeypatch_session.setenv("APP_SESSION_SECRET", "test-only-session-secret-not-for-production")
+    monkeypatch_session.setenv("APP_AUTH_PASSWORD_HASH", TEST_AUTH_PASSWORD_HASH)
     db_module.reset_pool()
     db_module.run_migrations()
     yield
@@ -186,9 +202,34 @@ def _stub_embeddings(monkeypatch):
 
 @pytest.fixture
 def client():
+    """A pre-authenticated TestClient — every one of this suite's ~300
+    existing tests predates app-level auth (app/auth.py) and exercises
+    business logic, not login itself, so this fixture logs in once up
+    front and hands back a client that behaves exactly as it did before
+    auth existed. Tests that specifically exercise unauthenticated/expired
+    session behaviour use `anon_client` instead (see tests/test_auth.py)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        login_resp = c.post("/api/auth/login", json={"password": TEST_AUTH_PASSWORD})
+        assert login_resp.status_code == 200, f"test login fixture failed: {login_resp.status_code} {login_resp.text}"
+        yield c
+
+
+@pytest.fixture
+def anon_client():
+    """A TestClient with no session cookie — for asserting what happens
+    *without* logging in first (tests/test_auth.py)."""
     from fastapi.testclient import TestClient
 
     from app.main import app
 
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def test_password() -> str:
+    return TEST_AUTH_PASSWORD

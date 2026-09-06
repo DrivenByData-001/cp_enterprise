@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
+import { useAuth } from './useAuth'
 import Dashboard from './pages/Dashboard'
 import RoleDetail from './pages/RoleDetail'
 import RoleEdit from './pages/RoleEdit'
@@ -18,6 +19,8 @@ import CapabilityCoverage from './pages/CapabilityCoverage'
 import Trends from './pages/Trends'
 
 function App() {
+  const { logout } = useAuth()
+
   return (
     <div className="app-shell">
       <nav className="nav">
@@ -57,6 +60,14 @@ function App() {
         <NavLink to="/profile" className={({ isActive }) => (isActive ? 'active' : '')}>
           Profile
         </NavLink>
+        <button
+          type="button"
+          onClick={logout}
+          style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+          title="Sign out of Career Navigator"
+        >
+          Log out
+        </button>
       </nav>
       <Routes>
         <Route path="/" element={<Dashboard />} />
