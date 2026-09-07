@@ -631,6 +631,148 @@ def merge_cluster(cur, *, cluster_key: str, concept_id: str, now: datetime | Non
     }
 
 
+# --- split cluster (Vocabulary "Split cluster", brief §4) ------------------
+#
+# Undoes an over-broad lexical cluster (e.g. "stakeholder management"/
+# "stakeholder engagement" — related but distinct concepts a curator does not
+# want collapsed) while preserving every concept_proposal row and every
+# underlying role_skill_observation: a split only ever reassigns cluster_key,
+# never deletes a proposal or observation, never creates a concept. Each
+# resulting group is marked cluster_key_locked so vocabulary_bootstrap's
+# clustering (dry-run and real) can never silently re-collapse it — see
+# migration 0010 and vocabulary_bootstrap.py's own handling of that flag.
+# Human curation decisions outrank automated lexical clustering.
+
+def _validate_split(cur, *, cluster_key: str, groups: list[list[str]]) -> list[str]:
+    """Every invalid-split condition the brief requires, raised as the same
+    404/409/400 vocabulary used by accept/reject/merge. Returns the cluster's
+    current pending surface forms on success (for convenience)."""
+    current = _pending_surface_forms(cur, cluster_key)
+    if not current:
+        prior = _cluster_resolution_state(cur, cluster_key)
+        if prior:
+            raise HTTPException(409, f"cluster already resolved with status {prior['status']!r}; a resolved cluster cannot be split")
+        raise HTTPException(404, "no pending proposals for this cluster")
+    if len(current) < 2:
+        raise HTTPException(400, "a cluster with a single surface form cannot be split")
+    if len(groups) < 2:
+        raise HTTPException(400, "a split must produce at least 2 groups")
+    if any(not g for g in groups):
+        raise HTTPException(400, "every group must contain at least one surface form")
+    flat = [sf for g in groups for sf in g]
+    if len(flat) != len(set(flat)):
+        raise HTTPException(400, "each surface form may appear in exactly one group")
+    if set(flat) != set(current):
+        raise HTTPException(400, "groups must exactly partition the cluster's current surface forms — nothing added or left out")
+    return current
+
+
+def _deterministic_split_keys(cur, *, cluster_key: str, groups: list[list[str]]) -> list[str]:
+    """One new cluster_key per group: `manual:<label>`, where `<label>` is the
+    same suggested_canonical_label heuristic the review card already uses
+    (longest surface form, alphabetical tie-break) — human-readable, and
+    stable across repeat calls against unchanged data (brief §4.3:
+    "stable across repeat execution"). The `manual:` prefix already makes
+    collision with any bootstrap-generated key (cluster_key_for never emits
+    one) vanishingly unlikely; checking against every cluster_key currently
+    in use (other than the one being split) and appending a numeric
+    disambiguator makes it a guarantee rather than a probability
+    ("collision-safe", brief §4.3), regardless of what a future curator
+    types as a label."""
+    cur.execute("SELECT DISTINCT COALESCE(cluster_key, surface_form) AS ck FROM jobber.concept_proposal")
+    existing = {row["ck"] for row in cur.fetchall() if row["ck"] != cluster_key}
+
+    assigned: list[str] = []
+    for group in groups:
+        base = normalize_name(suggested_canonical_label(group))
+        candidate = f"manual:{base}"
+        n = 2
+        while candidate in existing or candidate in assigned:
+            candidate = f"manual:{base}-{n}"
+            n += 1
+        assigned.append(candidate)
+    return assigned
+
+
+def _group_evidence_map(cur, groups: list[list[str]]) -> list[dict]:
+    """role_count/observation_count for each proposed group, in one query
+    over the (small, already-fetched-elsewhere-at-this-scale) unresolved
+    role_skill_observation set — same live-aggregation posture as
+    build_pending_cluster_index (docs/19 §1), just bucketed by proposed group
+    membership instead of by persisted cluster_key, since these groups don't
+    exist as a persisted cluster_key yet at preview time."""
+    cur.execute("SELECT surface_form, role_instance_id FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    rows = cur.fetchall()
+    normalized_rows = [(normalize_name(r["surface_form"]), str(r["role_instance_id"])) for r in rows]
+
+    result = []
+    for group in groups:
+        wanted = set(group)
+        role_ids = {role_id for surface_form, role_id in normalized_rows if surface_form in wanted}
+        observation_count = sum(1 for surface_form, _rid in normalized_rows if surface_form in wanted)
+        result.append({"role_count": len(role_ids), "observation_count": observation_count})
+    return result
+
+
+def preview_split(cur, *, cluster_key: str, groups: list[list[str]]) -> dict:
+    """Read-only (brief §4.2 point 6: "Preview resulting cluster labels and
+    affected observation counts" before confirming) — never writes."""
+    _validate_split(cur, cluster_key=cluster_key, groups=groups)
+    new_keys = _deterministic_split_keys(cur, cluster_key=cluster_key, groups=groups)
+    evidence = _group_evidence_map(cur, groups)
+    return {
+        "cluster_key": cluster_key,
+        "resulting_groups": [
+            {
+                "new_cluster_key": new_keys[i],
+                "suggested_canonical_label": suggested_canonical_label(groups[i]),
+                "surface_forms": sorted(groups[i]),
+                "role_count": evidence[i]["role_count"],
+                "observation_count": evidence[i]["observation_count"],
+            }
+            for i in range(len(groups))
+        ],
+    }
+
+
+def split_cluster(cur, *, cluster_key: str, groups: list[list[str]], now: datetime | None = None) -> dict:
+    """Splits one pending cluster into `len(groups)` independent pending
+    clusters. Preserves every concept_proposal row (only cluster_key/
+    cluster_key_locked/cluster_split_from/cluster_split_at change) and every
+    role_skill_observation (untouched — observations aren't keyed by cluster
+    at all, only proposals are); creates no concept. **Whole-operation
+    atomicity**: like execute_batch, this issues plain UPDATEs with no
+    per-group SAVEPOINT, so the first exception propagates straight out of
+    the caller's `with db_cursor() as cur:` block, which rolls back the
+    entire connection — either every group's reassignment lands, or none of
+    it does. Idempotency: retrying with the same arguments after a
+    successful split 404s (the original cluster_key no longer has any
+    member — every surface form has already moved to a new manual: key), the
+    same "no pending proposals for this cluster" a caller would see for any
+    already-fully-resolved cluster_key — a safe, non-corrupting outcome
+    rather than a silent double-split or a duplicate concept, even though it
+    is not a literal replay of the first call's result (brief §4.3: "remain
+    idempotent where practical")."""
+    now = now or datetime.now(timezone.utc)
+    _validate_split(cur, cluster_key=cluster_key, groups=groups)
+    new_keys = _deterministic_split_keys(cur, cluster_key=cluster_key, groups=groups)
+
+    resulting = []
+    for group, new_key in zip(groups, new_keys):
+        cur.execute(
+            """
+            UPDATE jobber.concept_proposal
+            SET cluster_key = %s, cluster_key_locked = TRUE,
+                cluster_split_from = COALESCE(cluster_split_from, %s), cluster_split_at = %s
+            WHERE status = 'pending' AND surface_form = ANY(%s) AND COALESCE(cluster_key, surface_form) = %s
+            """,
+            (new_key, cluster_key, now, group, cluster_key),
+        )
+        resulting.append({"new_cluster_key": new_key, "surface_forms": sorted(group), "proposals_updated": cur.rowcount})
+
+    return {"cluster_key": cluster_key, "groups_created": len(groups), "resulting_clusters": resulting}
+
+
 # --- batch review (brief §6) ------------------------------------------------
 #
 # Batch accept/reject always takes an explicit list of cluster_keys (+ the

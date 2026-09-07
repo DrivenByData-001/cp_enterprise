@@ -353,3 +353,79 @@ def upsert_role_instance(cur, role_id: str | None, columns: dict, skills: list[d
             ),
         )
     return role_id
+
+
+def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
+    """Skills evidence for one role, preferring `role_skill_observation` (the
+    JobPostingImport-shaped pipeline every historical role and every
+    /api/import* path uses) and falling back to `requirement_claim` (the
+    source-aware ingest + extract-requirements pipeline,
+    routes/role_instances.py) only when the first is completely empty.
+
+    This is the 2026 Role Detail regression fix (docs/21): a role captured
+    via the second pipeline never gets role_skill_observation rows at all —
+    its evidence lives in requirement_claim instead — so without this
+    fallback, both `GET /api/roles/{id}` and Day-in-the-Life generation would
+    see empty skills for such a role despite real captured evidence existing.
+    Never merges the two sources: a role with real role_skill_observation
+    evidence always uses that alone, unchanged."""
+    cur.execute(
+        "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
+        "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
+        (role_instance_id,),
+    )
+    skills = [
+        {**s, "resolved_concept_id": str(s["resolved_concept_id"]) if s["resolved_concept_id"] else None}
+        for s in cur.fetchall()
+    ]
+    if skills:
+        return skills
+
+    cur.execute(
+        """
+        SELECT c.canonical_name AS name, c.type_code AS category, rc.importance,
+               rc.requirement_type, rc.concept_id AS resolved_concept_id
+        FROM jobber.requirement_claim rc
+        JOIN jobber.concept c ON c.id = rc.concept_id
+        WHERE rc.role_instance_id = %s AND rc.review_status != 'rejected'
+        ORDER BY c.canonical_name
+        """,
+        (role_instance_id,),
+    )
+    return [{**s, "resolved_concept_id": str(s["resolved_concept_id"])} for s in cur.fetchall()]
+
+
+def build_role_view(cur, role_id: str) -> dict | None:
+    """The full role_instance projection `GET /api/roles/{id}` returns, and
+    what Day-in-the-Life generation (app/role_context.py) reads its evidence
+    from: the flattened row, plus skills (with the requirement_claim
+    fallback — role_skills_with_fallback), plus `source_document_text` (with
+    a fallback to the linked document's own verbatim text whenever
+    description/requirements/responsibilities are all empty — the other half
+    of the 2026 Role Detail regression fix). `_source_document_id` is an
+    internal-only field (routes/roles.py pops it before returning the API
+    response) so role_context.py can record provenance without a second
+    query. None if role_id doesn't exist."""
+    cur.execute(
+        "SELECT ri.*, d.url AS url, d.captured_at AS captured_at, "
+        "d.id AS document_row_id, d.content_text AS document_content_text "
+        "FROM jobber.role_instance ri LEFT JOIN jobber.document d ON d.id = ri.document_id "
+        "WHERE ri.id = %s",
+        (role_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    document_content_text = row["document_content_text"]
+    document_id = str(row["document_row_id"]) if row["document_row_id"] else None
+    role = flatten_role_instance(
+        {k: v for k, v in dict(row).items() if k not in ("document_content_text", "document_row_id")}
+    )
+    role["skills"] = role_skills_with_fallback(cur, role_id)
+    role["source_document_text"] = (
+        document_content_text
+        if document_content_text and not (role.get("description") or role.get("requirements") or role.get("responsibilities"))
+        else None
+    )
+    role["_source_document_id"] = document_id
+    return role

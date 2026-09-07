@@ -16,7 +16,13 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .. import vocabulary_curation as curation
 from ..db import db_cursor
-from ..models import ClusterAcceptRequest, ClusterBatchRequest, ClusterMergeRequest, ClusterRejectRequest
+from ..models import (
+    ClusterAcceptRequest,
+    ClusterBatchRequest,
+    ClusterMergeRequest,
+    ClusterRejectRequest,
+    ClusterSplitRequest,
+)
 from ..vocabulary_priority import METHODOLOGY_TEXT, PRIORITY_BANDS
 
 router = APIRouter(prefix="/api/vocabulary", tags=["vocabulary"])
@@ -122,6 +128,24 @@ def reject_cluster(payload: ClusterRejectRequest):
 def merge_cluster(payload: ClusterMergeRequest):
     with db_cursor() as cur:
         return curation.merge_cluster(cur, cluster_key=payload.cluster_key, concept_id=payload.concept_id)
+
+
+@router.post("/clusters/split/preview")
+def preview_split(payload: ClusterSplitRequest):
+    """Read-only (brief §4.2): the resulting cluster labels and affected
+    observation counts to show the curator before they confirm a split."""
+    groups = [g.surface_forms for g in payload.groups]
+    with db_cursor() as cur:
+        return curation.preview_split(cur, cluster_key=payload.cluster_key, groups=groups)
+
+
+@router.post("/clusters/split")
+def execute_split(payload: ClusterSplitRequest):
+    """Executes the split for real, atomically (see
+    `vocabulary_curation.split_cluster`'s docstring)."""
+    groups = [g.surface_forms for g in payload.groups]
+    with db_cursor() as cur:
+        return curation.split_cluster(cur, cluster_key=payload.cluster_key, groups=groups)
 
 
 @router.post("/clusters/batch/preview")

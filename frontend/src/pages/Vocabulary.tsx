@@ -4,6 +4,7 @@ import {
   api,
   type BatchAcceptItemInput,
   type BatchPreviewResult,
+  type ClusterSplitPreviewResult,
   type Concept,
   type ConceptInput,
   type ConceptType,
@@ -279,6 +280,141 @@ function MergeTargetPicker({ onCancel, onMerged, clusterKey }: { onCancel: () =>
   )
 }
 
+// --- split cluster (Vocabulary "Split cluster") -----------------------------
+//
+// Undoes an over-broad lexical cluster (e.g. "stakeholder engagement" wrongly
+// grouped with "stakeholder management") without ever auto-inferring the
+// split: every surface form defaults to its own group, and the curator must
+// explicitly regroup true synonyms and confirm before anything writes.
+
+function SplitClusterEditor({
+  cluster,
+  onCancel,
+  onSplit,
+}: {
+  cluster: VocabClusterSummary
+  onCancel: () => void
+  onSplit: () => Promise<void>
+}) {
+  const forms = cluster.surface_forms
+  // Default: each distinct surface form is its own group — the curator
+  // regroups true synonyms by picking the same group for more than one form.
+  const [groupOf, setGroupOf] = useState<Record<string, number>>(() => Object.fromEntries(forms.map((f, i) => [f, i])))
+  const [preview, setPreview] = useState<ClusterSplitPreviewResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const groups = useMemo(() => {
+    const byGroup = new Map<number, string[]>()
+    for (const f of forms) {
+      const g = groupOf[f] ?? 0
+      byGroup.set(g, [...(byGroup.get(g) ?? []), f])
+    }
+    return [...byGroup.values()].filter((g) => g.length > 0)
+  }, [groupOf, forms])
+
+  const canSplit = groups.length >= 2
+
+  const setGroup = (form: string, group: number) => {
+    setGroupOf((prev) => ({ ...prev, [form]: group }))
+    setPreview(null)
+    setError(null)
+  }
+
+  const review = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await api.previewVocabSplit({
+        cluster_key: cluster.cluster_key,
+        groups: groups.map((surface_forms) => ({ surface_forms })),
+      })
+      setPreview(result)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirm = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.splitVocabCluster({
+        cluster_key: cluster.cluster_key,
+        groups: groups.map((surface_forms) => ({ surface_forms })),
+      })
+      await onSplit()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+        Assign each surface form to a group. Forms in the same group stay together as one pending cluster; different
+        groups become independent pending clusters. Nothing is accepted, rejected, or merged by splitting — every
+        resulting cluster goes through the normal review actions afterward.
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {forms.map((f) => (
+          <div key={f} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13 }}>{f}</span>
+            <select value={groupOf[f]} onChange={(e) => setGroup(f, Number(e.target.value))}>
+              {forms.map((_, i) => (
+                <option key={i} value={i}>
+                  Group {i + 1}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+
+      {!canSplit && (
+        <p style={{ fontSize: 12, color: 'var(--warning)', margin: 0 }}>
+          Put at least two surface forms in different groups to split this cluster.
+        </p>
+      )}
+
+      {preview && (
+        <div className="card" style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <strong>Preview — {preview.resulting_groups.length} resulting clusters</strong>
+          {preview.resulting_groups.map((g) => (
+            <div key={g.new_cluster_key}>
+              <strong>{g.suggested_canonical_label}</strong>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {g.surface_forms.join(', ')} — {g.role_count} role{g.role_count === 1 ? '' : 's'}, {g.observation_count}{' '}
+                observation{g.observation_count === 1 ? '' : 's'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && <p style={{ color: 'var(--critical)', fontSize: 13, margin: 0 }}>{error}</p>}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        {!preview ? (
+          <button className="primary" disabled={!canSplit || busy} onClick={review}>
+            {busy ? 'Checking…' : 'Preview split'}
+          </button>
+        ) : (
+          <button className="primary" disabled={busy} onClick={confirm}>
+            {busy ? 'Splitting…' : `Confirm split into ${preview.resulting_groups.length} clusters`}
+          </button>
+        )}
+        <button onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // --- review card (brief §4) -------------------------------------------------
 
 function ClusterCard({
@@ -295,7 +431,7 @@ function ClusterCard({
   onChanged: () => Promise<void>
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [mode, setMode] = useState<'idle' | 'accept' | 'merge'>('idle')
+  const [mode, setMode] = useState<'idle' | 'accept' | 'merge' | 'split'>('idle')
   const [typeCode, setTypeCode] = useState(cluster.suggested_type ?? conceptTypes[0]?.code ?? '')
   const [name, setName] = useState(cluster.suggested_canonical_label)
   const [busy, setBusy] = useState(false)
@@ -372,6 +508,13 @@ function ClusterCard({
             <button onClick={() => run(() => api.rejectVocabCluster({ cluster_key: cluster.cluster_key }))} disabled={busy}>
               Reject
             </button>
+            {/* Only where a cluster contains more than one distinct surface
+                form (brief §4.2) — a single-form cluster has nothing to split. */}
+            {cluster.surface_forms.length > 1 && (
+              <button onClick={() => setMode('split')} disabled={busy}>
+                Split cluster
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -443,6 +586,17 @@ function ClusterCard({
 
       {mode === 'merge' && (
         <MergeTargetPicker clusterKey={cluster.cluster_key} onCancel={() => setMode('idle')} onMerged={onChanged} />
+      )}
+
+      {mode === 'split' && (
+        <SplitClusterEditor
+          cluster={cluster}
+          onCancel={() => setMode('idle')}
+          onSplit={async () => {
+            setMode('idle')
+            await onChanged()
+          }}
+        />
       )}
 
       {error && mode === 'idle' && <p style={{ color: 'var(--critical)', fontSize: 13, margin: 0 }}>{error}</p>}

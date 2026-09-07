@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, model_validator
 
@@ -180,6 +180,26 @@ class ClusterBatchRequest(BaseModel):
         return self
 
 
+class ClusterSplitGroup(BaseModel):
+    surface_forms: list[str]
+
+
+class ClusterSplitRequest(BaseModel):
+    cluster_key: str
+    groups: list[ClusterSplitGroup]
+
+    @model_validator(mode="after")
+    def _check(self):
+        if len(self.groups) < 2:
+            raise ValueError("a split must produce at least 2 groups")
+        if any(not g.surface_forms for g in self.groups):
+            raise ValueError("every group must contain at least one surface form")
+        flat = [sf for g in self.groups for sf in g.surface_forms]
+        if len(flat) != len(set(flat)):
+            raise ValueError("each surface form may appear in exactly one group")
+        return self
+
+
 # --- Phase 2: AI extraction task schemas (backend/app/extraction.py) --------
 #
 # These are output_model schemas for app.ai.run_json_task, not API
@@ -303,3 +323,87 @@ class ComponentEdgeReview(BaseModel):
         if self.action not in ("accept", "reject"):
             raise ValueError("action must be one of accept, reject")
         return self
+
+
+# --- Day-in-the-Life / Role Context enrichment (backend/app/role_context.py) --
+#
+# The AI output schema for role_context_generate: a role-side market/context
+# enrichment, never person-side evidence (brief §6.1/§6.2). Every claim must
+# be labelled `advert_grounded` (directly supported by the source posting) or
+# `inferred` (reasonable occupational inference, never presented as if
+# stated) — enforced here via Literal rather than free text, so a model
+# response using any other label fails validation instead of silently
+# passing through unlabelled.
+
+Basis = Literal["advert_grounded", "inferred"]
+Confidence = Literal["high", "medium", "low"]
+
+
+class DayInLifeItem(BaseModel):
+    time_or_phase: str
+    activity: str
+    detail: Optional[str] = None
+    basis: Basis
+    confidence: Confidence = "medium"
+
+
+class TypicalWeekItem(BaseModel):
+    day_or_theme: str
+    activity: str
+    detail: Optional[str] = None
+    basis: Basis
+    confidence: Confidence = "medium"
+
+
+class TeamSizeEstimate(BaseModel):
+    min: Optional[int] = None
+    max: Optional[int] = None
+    basis: Basis = "inferred"
+    confidence: Confidence = "medium"
+
+
+class GroundedNote(BaseModel):
+    text: str
+    basis: Basis
+    confidence: Confidence = "medium"
+
+
+class TeamContext(BaseModel):
+    expected_team_size: Optional[TeamSizeEstimate] = None
+    team_work: list[GroundedNote] = []
+
+
+class ManagerContext(BaseModel):
+    likely_manager_title: Optional[str] = None
+    title_basis: Optional[Basis] = None
+    dynamic: Optional[str] = None
+    dynamic_basis: Optional[Basis] = None
+    dynamic_confidence: Confidence = "medium"
+
+
+class CareerStep(BaseModel):
+    step: str
+    basis: Basis
+    confidence: Confidence = "medium"
+
+
+class GroundingSummary(BaseModel):
+    advert_grounded_points: list[str] = []
+    inferred_points: list[str] = []
+
+
+class RoleContextGeneration(BaseModel):
+    """The full structured output `role_context.py::run_json_task` validates
+    the model's response into. Deliberately several small typed sections
+    rather than one untyped blob (brief §6.5), so provenance/basis is
+    available at the granularity of each individual claim, not just once for
+    the whole response."""
+
+    day_in_life: list[DayInLifeItem] = []
+    typical_week: list[TypicalWeekItem] = []
+    team_context: TeamContext = TeamContext()
+    manager_context: ManagerContext = ManagerContext()
+    stakeholders: list[GroundedNote] = []
+    career_progression: list[CareerStep] = []
+    grounding_summary: GroundingSummary = GroundingSummary()
+    caveats: Optional[str] = None
