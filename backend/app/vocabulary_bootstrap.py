@@ -145,6 +145,21 @@ def cluster_key_for(surface_form: str) -> str:
     return _strip_trailing_plural(spelled)
 
 
+def _locked_cluster_keys(cur) -> dict[str, str]:
+    """surface_form -> curator-assigned cluster_key, for every proposal a
+    Split cluster operation has locked (app/vocabulary_curation.py::
+    split_cluster). `concept_proposal.surface_form` is always already the
+    normalized form (run_pass_b inserts `normalize_name(...)`), matching the
+    normalized keys `analyze_cluster_keys_dryrun`/`compute_cluster_keys` work
+    with — so a plain dict lookup by normalized surface form is enough to
+    join a locked override onto either code path, with no need to go through
+    concept_proposal.id. Human curation decisions outrank automated lexical
+    clustering (brief §4.3): both the real bootstrap and its --dry-run must
+    honour this, or a split would simply be re-collapsed on the next run."""
+    cur.execute("SELECT surface_form, cluster_key FROM jobber.concept_proposal WHERE cluster_key_locked = TRUE")
+    return {row["surface_form"]: row["cluster_key"] for row in cur.fetchall()}
+
+
 def analyze_cluster_keys_dryrun(cur) -> dict:
     """Diagnostic dry-run of clustering analysis: what WOULD be clustered if
     we ran the full bootstrap. Computes without writing anything. Used by
@@ -152,7 +167,7 @@ def analyze_cluster_keys_dryrun(cur) -> dict:
     # Get all unresolved role_skill_observations
     cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
     unresolved = cur.fetchall()
-    
+
     if not unresolved:
         return {
             "auto_resolved": 0,
@@ -161,20 +176,24 @@ def analyze_cluster_keys_dryrun(cur) -> dict:
             "distinct_clusters": 0,
             "sample_clusters": [],
         }
-    
+
     # Group by normalized surface form (what run_pass_b would do)
     from .concept_linking import normalize_name
-    
+
     surface_forms: dict[str, list[str]] = {}
     for row in unresolved:
         normalized = normalize_name(row["surface_form"])
         if normalized:
             surface_forms.setdefault(normalized, []).append(str(row["id"]))
-    
-    # Now apply clustering to each unique normalized form
+
+    # Now apply clustering to each unique normalized form — a curator-locked
+    # surface form uses its assigned cluster_key unchanged rather than
+    # whatever cluster_key_for would otherwise (re-)compute (brief §4.4: a
+    # manually split cluster must survive --dry-run, not just a real run).
+    locked = _locked_cluster_keys(cur)
     clusters: dict[str, list[str]] = {}  # cluster_key -> [surface_forms]
     for normalized_form in sorted(surface_forms.keys()):
-        key = cluster_key_for(normalized_form)
+        key = locked.get(normalized_form) or cluster_key_for(normalized_form)
         clusters.setdefault(key, []).append(normalized_form)
     
     # Build sample output
@@ -215,7 +234,7 @@ def compute_cluster_keys(cur) -> dict:
     cur.execute(
         """
         SELECT cp.id, cp.surface_form, cp.suggested_type, cp.nearest_concept_id, cp.nearest_similarity,
-               c.type_code AS nearest_type_code
+               cp.cluster_key_locked, c.type_code AS nearest_type_code
         FROM jobber.concept_proposal cp
         LEFT JOIN jobber.concept c ON c.id = cp.nearest_concept_id
         WHERE cp.status = 'pending'
@@ -225,6 +244,12 @@ def compute_cluster_keys(cur) -> dict:
 
     newly_keyed = 0
     for row in rows:
+        if row["cluster_key_locked"]:
+            # A curator's Split cluster decision outranks automated lexical
+            # clustering (brief §4.3) — never recompute/overwrite the
+            # cluster_key a split assigned, or the next bootstrap run would
+            # simply re-collapse the groups the curator just separated.
+            continue
         key = cluster_key_for(row["surface_form"])
         suggested_type = row["suggested_type"]
         if suggested_type is None and row["nearest_type_code"] and (row["nearest_similarity"] or 0) >= 0.5:

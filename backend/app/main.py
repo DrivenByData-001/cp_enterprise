@@ -21,6 +21,7 @@ from .routes import (
     preferences,
     profile,
     profile360,
+    role_context,
     role_instances,
     roles,
     space,
@@ -99,6 +100,7 @@ app.include_router(auth_routes.router)
 _protected = [Depends(require_auth)]
 app.include_router(import_routes.router, dependencies=_protected)
 app.include_router(roles.router, dependencies=_protected)
+app.include_router(role_context.router, dependencies=_protected)
 app.include_router(profile.router, dependencies=_protected)
 app.include_router(space.router, dependencies=_protected)
 app.include_router(targets.router, dependencies=_protected)

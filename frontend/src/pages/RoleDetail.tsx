@@ -1,7 +1,235 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Role } from '../lib/api'
+import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type TeamSizeEstimate } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
+
+// --- Day-in-the-Life / Role Context enrichment (docs/21) --------------------
+//
+// Compact grounded/inferred labelling (brief §6.10) so the user can tell
+// evidence quality at a glance, without a methodology essay on the page.
+
+function BasisBadge({ basis }: { basis: RoleContextBasis }) {
+  const fromAdvert = basis === 'advert_grounded'
+  return (
+    <span
+      title={fromAdvert ? 'Directly supported by the source posting' : 'Reasonable occupational inference — not stated in the posting'}
+      style={{
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: 0.3,
+        color: fromAdvert ? 'var(--good)' : 'var(--text-muted)',
+        border: `1px solid ${fromAdvert ? 'var(--good)' : 'var(--border)'}`,
+        borderRadius: 999,
+        padding: '1px 6px',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      }}
+    >
+      {fromAdvert ? 'From advert' : 'Inferred'}
+    </span>
+  )
+}
+
+function formatTeamSize(size: TeamSizeEstimate): string {
+  if (size.min != null && size.max != null) return `${size.min}–${size.max} people`
+  if (size.min != null) return `${size.min}+ people`
+  if (size.max != null) return `up to ${size.max} people`
+  return 'unclear'
+}
+
+function RoleContextRow({ children, basis }: { children: React.ReactNode; basis: RoleContextBasis }) {
+  return (
+    <div className="secondary" style={{ fontSize: 13, marginTop: 4, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+      <span style={{ flex: 1 }}>{children}</span>
+      <BasisBadge basis={basis} />
+    </div>
+  )
+}
+
+function RoleContextSection({ roleId }: { roleId: string }) {
+  const [enrichment, setEnrichment] = useState<RoleContextEnrichment | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoaded(false)
+    api
+      .getRoleContext(roleId)
+      .then((res) => setEnrichment(res.enrichment))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoaded(true))
+  }, [roleId])
+
+  const run = async (action: 'generate' | 'regenerate') => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = action === 'generate' ? await api.generateRoleContext(roleId) : await api.regenerateRoleContext(roleId)
+      setEnrichment(result.enrichment)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!loaded) return null
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Day in the Life</h3>
+          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 520 }}>
+            An occupational sketch of this role, generated on demand — never based on your own profile. "From advert"
+            claims are directly supported by the source posting; "Inferred" claims are reasonable occupational
+            judgement, not a guarantee.
+          </p>
+        </div>
+        {enrichment && (
+          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+            <div className="muted" style={{ fontSize: 11 }}>
+              Generated {new Date(enrichment.generated_at).toLocaleDateString()} · v{enrichment.generator_version}
+            </div>
+            <button onClick={() => run('regenerate')} disabled={busy} style={{ marginTop: 4, fontSize: 12, padding: '3px 10px' }}>
+              {busy ? 'Regenerating…' : 'Regenerate'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <p style={{ color: 'var(--critical)', fontSize: 13, marginTop: 10 }}>{error}</p>
+      )}
+
+      {!enrichment && (
+        <div style={{ marginTop: 10 }}>
+          <button className="primary" onClick={() => run('generate')} disabled={busy}>
+            {busy ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
+      )}
+
+      {enrichment && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 12 }}>
+          {enrichment.day_in_life.length > 0 && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Typical day</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                {enrichment.day_in_life.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10 }}>
+                    <span className="muted" style={{ fontSize: 12, width: 64, flexShrink: 0 }}>
+                      {item.time_or_phase}
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {item.activity}
+                        <BasisBadge basis={item.basis} />
+                      </div>
+                      {item.detail && (
+                        <div className="secondary" style={{ fontSize: 12, marginTop: 2 }}>
+                          {item.detail}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {enrichment.typical_week.length > 0 && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Typical week</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                {enrichment.typical_week.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10 }}>
+                    <span className="muted" style={{ fontSize: 12, width: 90, flexShrink: 0 }}>
+                      {item.day_or_theme}
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {item.activity}
+                        <BasisBadge basis={item.basis} />
+                      </div>
+                      {item.detail && (
+                        <div className="secondary" style={{ fontSize: 12, marginTop: 2 }}>
+                          {item.detail}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(enrichment.team_context.expected_team_size || enrichment.team_context.team_work.length > 0) && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Team</strong>
+              {enrichment.team_context.expected_team_size && (
+                <RoleContextRow basis={enrichment.team_context.expected_team_size.basis}>
+                  Expected team size: {formatTeamSize(enrichment.team_context.expected_team_size)}
+                </RoleContextRow>
+              )}
+              {enrichment.team_context.team_work.map((t, i) => (
+                <RoleContextRow key={i} basis={t.basis}>
+                  {t.text}
+                </RoleContextRow>
+              ))}
+            </div>
+          )}
+
+          {(enrichment.manager_context.likely_manager_title || enrichment.manager_context.dynamic) && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Reports to / management dynamic</strong>
+              {enrichment.manager_context.likely_manager_title && (
+                <RoleContextRow basis={enrichment.manager_context.title_basis ?? 'inferred'}>
+                  {enrichment.manager_context.likely_manager_title}
+                </RoleContextRow>
+              )}
+              {enrichment.manager_context.dynamic && (
+                <RoleContextRow basis={enrichment.manager_context.dynamic_basis ?? 'inferred'}>
+                  {enrichment.manager_context.dynamic}
+                </RoleContextRow>
+              )}
+            </div>
+          )}
+
+          {enrichment.stakeholder_context.stakeholders.length > 0 && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Key stakeholders</strong>
+              {enrichment.stakeholder_context.stakeholders.map((s, i) => (
+                <RoleContextRow key={i} basis={s.basis}>
+                  {s.text}
+                </RoleContextRow>
+              ))}
+            </div>
+          )}
+
+          {enrichment.career_progression.length > 0 && (
+            <div>
+              <strong style={{ fontSize: 13 }}>Career progression</strong>
+              {enrichment.career_progression.map((c, i) => (
+                <RoleContextRow key={i} basis={c.basis}>
+                  {c.step}
+                </RoleContextRow>
+              ))}
+            </div>
+          )}
+
+          {enrichment.caveats && (
+            <p className="muted" style={{ fontSize: 12, margin: 0, fontStyle: 'italic' }}>
+              {enrichment.caveats}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // docs/18 §5: `partial` means a usable extraction with known/model-declared
 // incompleteness — not failure, and never mutated/reanalysed merely by
@@ -328,6 +556,24 @@ export default function RoleDetail() {
           )}
         </div>
       )}
+
+      {/* Fallback for roles captured via source-aware ingest + requirement
+          extraction (2026 Role Detail regression, docs/21): no model-composed
+          description/requirements/responsibilities exist, but the originally
+          captured text does. Shown only when those flat fields are empty. */}
+      {!role.description && !role.requirements && !role.responsibilities && role.source_document_text && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Captured source text</h3>
+          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            This role was captured as raw source text rather than a structured extraction — shown verbatim below.
+          </p>
+          <p className="secondary" style={{ whiteSpace: 'pre-wrap' }}>
+            {role.source_document_text}
+          </p>
+        </div>
+      )}
+
+      <RoleContextSection roleId={role.id} />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
         {role.url ? (

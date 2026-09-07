@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from ..db import db_cursor, flatten_role_instance, upsert_role_instance
+from ..db import build_role_view, db_cursor, flatten_role_instance, upsert_role_instance
 from ..document_processing import role_extraction_quality, role_extraction_quality_bulk
 from ..embeddings import cosine_similarity, ensure_profile_embedding, get_embedding, get_embeddings
 from ..models import JobPostingImport
@@ -156,27 +156,23 @@ def list_roles(
 
 @router.get("/{role_id}")
 def get_role(role_id: str):
+    """2026 Role Detail regression (fixed here): a role captured via the
+    source-aware ingest + requirement-extraction pipeline
+    (routes/role_instances.py::_ingest_raw, extraction.extract_role_requirements)
+    never gets role_skill_observation rows or flat description/requirements/
+    responsibilities columns populated — that pipeline's evidence lives in
+    jobber.requirement_claim (concept-linked) and the linked document's own
+    verbatim content_text instead. Such a role still listed fine on the
+    Dashboard (which never touches those fields) but rendered an almost-empty
+    Role Detail, despite real captured evidence existing all along. Both
+    fallbacks below are additive — they only ever fill in evidence that is
+    otherwise completely absent, never override/hide data the older
+    JobPostingImport-shaped pipeline already populates."""
     with db_cursor() as cur:
-        cur.execute(
-            "SELECT ri.*, d.url AS url, d.captured_at AS captured_at FROM jobber.role_instance ri "
-            "LEFT JOIN jobber.document d ON d.id = ri.document_id "
-            "WHERE ri.id = %s",
-            (role_id,),
-        )
-        row = cur.fetchone()
-        if not row:
+        role = build_role_view(cur, role_id)
+        if role is None:
             raise HTTPException(404, "role not found")
-        role = flatten_role_instance(row)
-
-        cur.execute(
-            "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
-            "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
-            (role_id,),
-        )
-        role["skills"] = [
-            {**s, "resolved_concept_id": str(s["resolved_concept_id"]) if s["resolved_concept_id"] else None}
-            for s in cur.fetchall()
-        ]
+        role.pop("_source_document_id", None)
 
         _, profile_vec = ensure_profile_embedding(cur)
         role_vec = get_embedding(cur, "role_instance", role_id)

@@ -72,6 +72,13 @@ export type Role = {
   extraction_quality?: ExtractionQuality | null
   similarity: number | null
   skills?: RoleSkill[]
+  // 2026 Role Detail regression fallback (docs/21): populated only when
+  // description/requirements/responsibilities are all empty AND a linked
+  // document has real captured text — the source-aware ingest pipeline
+  // (role-instances/ingest + extract-requirements) never fills those flat
+  // columns, so without this the advert text would be invisible even though
+  // it was captured. Null whenever the flat fields already carry it.
+  source_document_text?: string | null
   url: string | null
   raw_json?: unknown
   typical_tasks?: string[] | null
@@ -82,6 +89,71 @@ export type Role = {
   is_plausible?: boolean | null
   path?: TargetPath
 }
+
+// --- Day-in-the-Life / Role Context enrichment ------------------------------
+//
+// Role-side market/context enrichment (docs/21) — never based on the user's
+// own profile360 evidence. `basis` distinguishes claims directly supported
+// by the source posting ('advert_grounded') from reasonable occupational
+// inference ('inferred') at the granularity of each individual item.
+
+export type RoleContextBasis = 'advert_grounded' | 'inferred'
+export type RoleContextConfidence = 'high' | 'medium' | 'low'
+
+export type DayInLifeItem = {
+  time_or_phase: string
+  activity: string
+  detail: string | null
+  basis: RoleContextBasis
+  confidence: RoleContextConfidence
+}
+
+export type TypicalWeekItem = {
+  day_or_theme: string
+  activity: string
+  detail: string | null
+  basis: RoleContextBasis
+  confidence: RoleContextConfidence
+}
+
+export type TeamSizeEstimate = { min: number | null; max: number | null; basis: RoleContextBasis; confidence: RoleContextConfidence }
+export type GroundedNote = { text: string; basis: RoleContextBasis; confidence: RoleContextConfidence }
+export type TeamContext = { expected_team_size: TeamSizeEstimate | null; team_work: GroundedNote[] }
+
+export type ManagerContext = {
+  likely_manager_title: string | null
+  title_basis: RoleContextBasis | null
+  dynamic: string | null
+  dynamic_basis: RoleContextBasis | null
+  dynamic_confidence: RoleContextConfidence
+}
+
+export type CareerStep = { step: string; basis: RoleContextBasis; confidence: RoleContextConfidence }
+export type GroundingSummary = { advert_grounded_points: string[]; inferred_points: string[] }
+
+export type RoleContextEnrichment = {
+  id: string
+  role_instance_id: string
+  status: 'active' | 'superseded'
+  generated_at: string
+  generator_version: string
+  model: string
+  source_document_id: string | null
+  source_content_sha256: string | null
+  day_in_life: DayInLifeItem[]
+  typical_week: TypicalWeekItem[]
+  team_context: TeamContext
+  manager_context: ManagerContext
+  stakeholder_context: { stakeholders: GroundedNote[] }
+  career_progression: CareerStep[]
+  grounding_summary: GroundingSummary
+  caveats: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RoleContextResponse = { role_instance_id: string; enrichment: RoleContextEnrichment | null }
+export type RoleContextGenerateResult = { created: boolean; enrichment: RoleContextEnrichment }
 
 export type YearRange = { min: number; max: number } | null
 
@@ -318,6 +390,31 @@ export type BatchExecuteResult = {
   action: 'accept' | 'reject'
   clusters_processed: number
   results: ClusterActionResult[]
+}
+
+// --- Vocabulary "Split cluster" ---------------------------------------------
+
+export type ClusterSplitGroupInput = { surface_forms: string[] }
+
+export type ClusterSplitPreviewGroup = {
+  new_cluster_key: string
+  suggested_canonical_label: string
+  surface_forms: string[]
+  role_count: number
+  observation_count: number
+}
+
+export type ClusterSplitPreviewResult = {
+  cluster_key: string
+  resulting_groups: ClusterSplitPreviewGroup[]
+}
+
+export type ClusterSplitResultGroup = { new_cluster_key: string; surface_forms: string[]; proposals_updated: number }
+
+export type ClusterSplitResult = {
+  cluster_key: string
+  groups_created: number
+  resulting_clusters: ClusterSplitResultGroup[]
 }
 
 export type RequirementClaim = {
@@ -771,6 +868,9 @@ export const api = {
     return req<RoleListResponse>(`/roles${suffix}`)
   },
   getRole: (id: string) => req<Role>(`/roles/${id}`),
+  getRoleContext: (id: string) => req<RoleContextResponse>(`/roles/${id}/context`),
+  generateRoleContext: (id: string) => req<RoleContextGenerateResult>(`/roles/${id}/context/generate`, { method: 'POST' }),
+  regenerateRoleContext: (id: string) => req<RoleContextGenerateResult>(`/roles/${id}/context/regenerate`, { method: 'POST' }),
   updateRole: (id: string, payload: unknown) =>
     req<{ id: string; status: string }>(`/roles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteRole: (id: string) => req<{ status: string }>(`/roles/${id}`, { method: 'DELETE' }),
@@ -862,6 +962,10 @@ export const api = {
     req<BatchPreviewResult>('/vocabulary/clusters/batch/preview', { method: 'POST', body: JSON.stringify(payload) }),
   executeVocabBatch: (payload: { action: 'accept' | 'reject'; items: BatchAcceptItemInput[] }) =>
     req<BatchExecuteResult>('/vocabulary/clusters/batch', { method: 'POST', body: JSON.stringify(payload) }),
+  previewVocabSplit: (payload: { cluster_key: string; groups: ClusterSplitGroupInput[] }) =>
+    req<ClusterSplitPreviewResult>('/vocabulary/clusters/split/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  splitVocabCluster: (payload: { cluster_key: string; groups: ClusterSplitGroupInput[] }) =>
+    req<ClusterSplitResult>('/vocabulary/clusters/split', { method: 'POST', body: JSON.stringify(payload) }),
 
   // --- Phase 2: source-aware ingestion + requirement claims -----------------
   ingestText: (payload: { text: string; kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null }) =>

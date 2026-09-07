@@ -68,6 +68,20 @@ kept for reproducibility.
   populated (0 curated capabilities today) and the ≥0.80 capability-agreement
   evaluation gate has not been run against real hand-labelled data** — see
   that doc's §0.1 before treating any capability-fit output as validated.
+- **Manual vocabulary curation outranks automated lexical clustering.** The
+  bootstrap's clustering (docs/18 §6.1) is a deliberately small synonym-seed
+  list, and it can over-collapse two related-but-distinct terms (e.g.
+  "stakeholder engagement" vs. "stakeholder management"). A curator can
+  **Split cluster** to undo that; the split is locked so a later bootstrap
+  run (dry-run or real) can never silently re-collapse it. See
+  `docs/21-role-context-and-vocabulary-splitting.md` §2.
+- **Day-in-the-Life is a role-side enrichment, generated on demand.** A
+  role's detail page can generate an occupational-context sketch — a typical
+  day/week, team, manager dynamic, stakeholders, career progression — with
+  every individual claim labelled "from advert" or "inferred". Persisted per
+  role, never generated merely by viewing it, never based on your own
+  profile360 evidence. See `docs/21-role-context-and-vocabulary-splitting.md`
+  §3.
 - **Preferences are structurally separate from capability.** Would-you-enjoy-it
   is tracked on its own dimensions, with its own source/basis/confidence.
   Personality/psychometric material can only ever enter as a low-authority
@@ -158,6 +172,12 @@ see `docs/20-render-deployment.md` §8 for the full design and
    Claude/ChatGPT, paste the resulting JSON into the Add Target page.
 6. **Editing** — any posting or target can be edited from its detail page (a
    full overwrite of the legacy flat fields, not a merge — re-embeds it).
+6a. **Day in the Life** (a role's detail page) — generate an on-demand,
+    persisted occupational-context sketch for that role — typical day/week,
+    team, manager dynamic, stakeholders, career progression — with every
+    claim labelled "from advert" or "inferred". A deliberate `[Regenerate]`
+    action replaces it; viewing the page never triggers generation. See
+    `docs/21-role-context-and-vocabulary-splitting.md` §3.
 7. **Requirements** (a role's detail page → "Requirements") — run closed-
    vocabulary AI extraction against that role's source document, then accept
    or reject each proposed requirement claim.
@@ -188,7 +208,9 @@ see `docs/20-render-deployment.md` §8 for the full design and
     its score plus advisory noise/sparse flags, and batch accept/reject
     requires an explicit selection and a pre-execution confirmation showing
     exactly what will change — see `docs/19-vocabulary-prioritisation-and-
-    curation.md`.
+    curation.md`. A cluster with more than one surface form also offers
+    **Split cluster** — undo an over-broad grouping without losing any
+    evidence — see `docs/21-role-context-and-vocabulary-splitting.md` §2.
 9c. **Coverage** — your personal capability coverage, grouped Evidenced /
     Partial / User asserted / No evidence found, each expandable into its
     full evidence trace back to profile360.
@@ -208,7 +230,9 @@ live inspection of the production Supabase project (this build itself still
 has no credential for it — read that doc's §0/§2 before pointing this at it).
 `docs/11-capability-model-design.md` is the original design document the
 schema implements; `docs/15-security-and-rls.md` covers the backend/RLS
-security model.
+security model. `docs/21-role-context-and-vocabulary-splitting.md` covers
+the two newest tables (`role_context_enrichment` and the `concept_proposal`
+split-tracking columns) plus a 2026 Role Detail rendering fix.
 
 ## Deliberately out of scope for now
 
@@ -307,6 +331,8 @@ production data. See `docs/14-phase2-postgres-architecture.md` §7.
   reviews it in Vocabulary/Capabilities — but it is a real write, so run
   `--dry-run` first and only run it for real against production with
   explicit sign-off. Never invoked automatically or from any API route.
+  Respects curator Split cluster decisions (docs/21 §2) — a split surface
+  form is never silently re-clustered back together.
 
 ```bash
 cd backend
