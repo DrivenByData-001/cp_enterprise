@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import ConceptDetailsDrawer from '../components/ConceptDetailsDrawer'
 import {
   api,
   type BatchAcceptItemInput,
@@ -423,12 +424,14 @@ function ClusterCard({
   selected,
   onToggleSelect,
   onChanged,
+  onOpenDetails,
 }: {
   cluster: VocabClusterSummary
   conceptTypes: ConceptType[]
   selected: boolean
   onToggleSelect: (() => void) | null
   onChanged: () => Promise<void>
+  onOpenDetails: (conceptId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [mode, setMode] = useState<'idle' | 'accept' | 'merge' | 'split'>('idle')
@@ -471,6 +474,11 @@ function ClusterCard({
               {cluster.suggested_canonical_label}
               <PriorityBandBadge band={cluster.priority_band} />
               {!isPending && <Badge color="var(--text-muted)">{cluster.status.replace('_', ' ')}</Badge>}
+              {!isPending && cluster.resolved_concept_id && (
+                <button style={{ fontSize: 12, padding: '2px 10px' }} onClick={() => onOpenDetails(cluster.resolved_concept_id!)}>
+                  Details
+                </button>
+              )}
             </div>
             {cluster.surface_forms.length > 1 && (
               <div className="muted" style={{ fontSize: 12 }}>
@@ -826,7 +834,15 @@ function AddConceptForm({ conceptTypes, onAdded }: { conceptTypes: ConceptType[]
   )
 }
 
-function ConceptBrowser({ conceptTypes }: { conceptTypes: ConceptType[] }) {
+function ConceptBrowser({
+  conceptTypes,
+  refreshSignal,
+  onOpenDetails,
+}: {
+  conceptTypes: ConceptType[]
+  refreshSignal: number
+  onOpenDetails: (conceptId: string) => void
+}) {
   const [browseType, setBrowseType] = useState('')
   const [concepts, setConcepts] = useState<Concept[]>([])
 
@@ -835,7 +851,7 @@ function ConceptBrowser({ conceptTypes }: { conceptTypes: ConceptType[] }) {
   useEffect(() => {
     reload().catch(() => setConcepts([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browseType])
+  }, [browseType, refreshSignal])
 
   return (
     <section style={{ marginTop: 28 }}>
@@ -856,7 +872,7 @@ function ConceptBrowser({ conceptTypes }: { conceptTypes: ConceptType[] }) {
       {concepts.length === 0 && <p className="muted">No concepts yet in this type.</p>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {concepts.map((c) => (
-          <div key={c.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div key={c.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
             <div>
               <div style={{ fontWeight: 600 }}>{c.canonical_name}</div>
               {c.definition && (
@@ -865,9 +881,14 @@ function ConceptBrowser({ conceptTypes }: { conceptTypes: ConceptType[] }) {
                 </div>
               )}
             </div>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {c.type_code}
-            </span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {c.type_code}
+              </span>
+              <button style={{ fontSize: 12, padding: '2px 10px' }} onClick={() => onOpenDetails(c.id)}>
+                Details
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -889,6 +910,8 @@ export default function Vocabulary() {
   const [batchModal, setBatchModal] = useState<'accept' | 'reject' | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [drawerConceptId, setDrawerConceptId] = useState<string | null>(null)
+  const [conceptRefreshSignal, setConceptRefreshSignal] = useState(0)
 
   const reloadClusters = () =>
     api.listVocabClusters({ ...filters, limit: PAGE_SIZE, offset }).then((res) => {
@@ -988,6 +1011,7 @@ export default function Vocabulary() {
             selected={selected.has(c.cluster_key)}
             onToggleSelect={filters.status === 'pending' ? () => toggleSelect(c.cluster_key) : null}
             onChanged={refreshAfterAction}
+            onOpenDetails={setDrawerConceptId}
           />
         ))}
       </div>
@@ -1047,7 +1071,21 @@ export default function Vocabulary() {
         />
       )}
 
-      <ConceptBrowser conceptTypes={conceptTypes} />
+      <ConceptBrowser conceptTypes={conceptTypes} refreshSignal={conceptRefreshSignal} onOpenDetails={setDrawerConceptId} />
+
+      {drawerConceptId && (
+        <ConceptDetailsDrawer
+          conceptId={drawerConceptId}
+          conceptTypes={conceptTypes}
+          onClose={() => setDrawerConceptId(null)}
+          onConceptChanged={() => {
+            setConceptRefreshSignal((n) => n + 1)
+            reloadClusters()
+            reloadProgress()
+          }}
+          onNavigate={setDrawerConceptId}
+        />
+      )}
     </div>
   )
 }

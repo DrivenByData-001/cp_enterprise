@@ -91,6 +91,7 @@ _RESETTABLE_JOBBER_TABLES = [
     "concept_proposal",
     "concept_edge",
     "concept_xref",
+    "concept_dossier",
     "capability_detail",
     "role_archetype_detail",
     "concept_alias",

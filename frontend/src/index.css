@@ -153,3 +153,33 @@ textarea {
   width: 100%;
   resize: vertical;
 }
+
+/* Concept Details drawer (Vocabulary page) — right-hand panel, full-width
+   on narrow/mobile layouts. */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 60;
+}
+
+.drawer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 440px;
+  max-width: 100vw;
+  background: var(--page);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.2);
+  z-index: 61;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+@media (max-width: 640px) {
+  .drawer-panel {
+    width: 100vw;
+  }
+}

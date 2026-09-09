@@ -240,6 +240,83 @@ export type Facet = {
   role_count: number
 }
 
+// --- Accepted-vocabulary maintenance (Concept Details drawer) --------------
+
+export type CapabilityDetailInput = {
+  demonstration_standard: string
+  min_depth?: string
+  min_autonomy?: string | null
+  requires_all_core?: boolean
+  min_core_required?: number | null
+  economic_salience?: string | null
+  notes?: string | null
+}
+
+export type ConceptMetadataUpdateInput = {
+  canonical_name?: string
+  type_code?: string
+  definition?: string | null
+  status?: 'active' | 'deprecated'
+  // Only consulted when type_code is changing *into* 'capability'.
+  capability_detail?: CapabilityDetailInput
+}
+
+// --- Concept Dossier ---------------------------------------------------------
+//
+// Persisted, AI-assisted explanatory dossier for one accepted canonical
+// concept. `related_concepts` is an explanatory annotation only — never a
+// formal concept_edge; every concept_id here is restricted server-side to
+// concepts actually offered as grounded candidates.
+
+export type ConceptDossierStatus = 'active' | 'draft' | 'superseded'
+export type ConceptDossierOrigin = 'ai' | 'curator'
+
+export type RelatedConceptSuggestion = {
+  concept_id: string
+  canonical_name: string
+  type_code: string
+  relationship: string
+  explanation: string
+}
+
+export type ConceptDossier = {
+  id: string
+  concept_id: string
+  status: ConceptDossierStatus
+  origin: ConceptDossierOrigin
+  generated_at: string
+  generator_version: string
+  model: string | null
+  prompt_version: string | null
+  guidance: string | null
+  plain_definition: string
+  classification_rationale: string
+  practical_meaning: string
+  underlying_elements: string[]
+  stronger_expressions: string[]
+  weaker_expressions: string[]
+  boundaries_and_overlaps: string
+  related_concepts: RelatedConceptSuggestion[]
+  caveats: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ConceptDossierResponse = { concept_id: string; active: ConceptDossier | null; draft: ConceptDossier | null }
+export type ConceptDossierGenerateResult = { created: boolean; dossier: ConceptDossier }
+export type ConceptDossierActionResult = { dossier: ConceptDossier }
+
+export type ConceptDossierManualEditInput = {
+  plain_definition?: string
+  classification_rationale?: string
+  practical_meaning?: string
+  underlying_elements?: string[]
+  stronger_expressions?: string[]
+  weaker_expressions?: string[]
+  boundaries_and_overlaps?: string
+  caveats?: string | null
+}
+
 export type ProposalGroup = {
   cluster_key: string
   surface_form: string // the first/representative exact form — kept for back-compat
@@ -925,7 +1002,39 @@ export const api = {
   },
   createConcept: (payload: ConceptInput) =>
     req<{ id: string; status: string }>('/concepts', { method: 'POST', body: JSON.stringify(payload) }),
+  getConcept: (id: string) => req<Concept>(`/concepts/${id}`),
   getFacets: (type_code: string) => req<Facet[]>(`/concepts/facets?type_code=${encodeURIComponent(type_code)}`),
+
+  // --- Accepted-vocabulary maintenance (Concept Details drawer) ------------
+  updateConcept: (id: string, payload: ConceptMetadataUpdateInput) =>
+    req<Concept>(`/concepts/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  addConceptAlias: (id: string, alias: string) =>
+    req<{ id: string; alias: string; status: string }>(`/concepts/${id}/aliases`, {
+      method: 'POST',
+      body: JSON.stringify({ alias }),
+    }),
+  removeConceptAlias: (id: string, aliasId: string) =>
+    req<{ status: string }>(`/concepts/${id}/aliases/${aliasId}`, { method: 'DELETE' }),
+
+  // --- Concept Dossier -------------------------------------------------------
+  getConceptDossier: (id: string) => req<ConceptDossierResponse>(`/concepts/${id}/dossier`),
+  getConceptDossierHistory: (id: string) => req<ConceptDossier[]>(`/concepts/${id}/dossier/history`),
+  generateConceptDossier: (id: string, guidance?: string) =>
+    req<ConceptDossierGenerateResult>(`/concepts/${id}/dossier/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ guidance: guidance || undefined }),
+    }),
+  regenerateConceptDossier: (id: string, guidance?: string) =>
+    req<ConceptDossierGenerateResult>(`/concepts/${id}/dossier/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify({ guidance: guidance || undefined }),
+    }),
+  adoptConceptDossierDraft: (id: string) =>
+    req<ConceptDossierActionResult>(`/concepts/${id}/dossier/adopt`, { method: 'POST' }),
+  discardConceptDossierDraft: (id: string) =>
+    req<{ status: string }>(`/concepts/${id}/dossier/discard`, { method: 'POST' }),
+  saveConceptDossierEdit: (id: string, payload: ConceptDossierManualEditInput) =>
+    req<ConceptDossierActionResult>(`/concepts/${id}/dossier`, { method: 'PUT', body: JSON.stringify(payload) }),
   listProposals: (status = 'pending') =>
     req<ProposalGroup[]>(`/concepts/proposals?status=${encodeURIComponent(status)}`),
   getProposalStats: () => req<ProposalStats>('/concepts/proposals/stats'),

@@ -3,9 +3,16 @@ from datetime import datetime, timezone
 import psycopg
 from fastapi import APIRouter, HTTPException
 
+from .. import concept_curation
 from ..concept_linking import normalize_name
 from ..db import db_cursor
-from ..models import ClusterProposalResolve, ConceptCreate, ProposalResolve
+from ..models import (
+    ClusterProposalResolve,
+    ConceptAliasCreate,
+    ConceptCreate,
+    ConceptMetadataUpdate,
+    ProposalResolve,
+)
 from ..vocabulary_curation import resolve_surface_form_group
 
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
@@ -203,3 +210,27 @@ def get_concept(concept_id: str):
         cur.execute("SELECT id, alias, origin FROM jobber.concept_alias WHERE concept_id = %s", (concept_id,))
         concept["aliases"] = cur.fetchall()
     return concept
+
+
+# --- Accepted-vocabulary maintenance (cp_round_of_changes.md §B) -----------
+# Curator editing of an already-accepted concept — see
+# app/concept_curation.py for the safety rules (type-change validation,
+# capability_detail handling, canonical-name uniqueness).
+
+@router.patch("/{concept_id}")
+def update_concept(concept_id: str, payload: ConceptMetadataUpdate):
+    with db_cursor() as cur:
+        return concept_curation.update_concept_metadata(cur, concept_id, payload.model_dump(exclude_unset=True))
+
+
+@router.post("/{concept_id}/aliases")
+def add_concept_alias(concept_id: str, payload: ConceptAliasCreate):
+    with db_cursor() as cur:
+        return concept_curation.add_alias(cur, concept_id, payload.alias)
+
+
+@router.delete("/{concept_id}/aliases/{alias_id}")
+def delete_concept_alias(concept_id: str, alias_id: str):
+    with db_cursor() as cur:
+        concept_curation.remove_alias(cur, concept_id, alias_id)
+    return {"status": "deleted"}
