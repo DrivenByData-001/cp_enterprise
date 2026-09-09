@@ -512,6 +512,76 @@ def get_progress(cur) -> dict:
     }
 
 
+# --- Accepted Vocabulary overview (Phase 4 prompt §14) ---------------------
+#
+# Deliberately lightweight: no new table (every count is a live query over
+# concept/concept_alias/concept_dossier), no AI call, no ontology dashboard,
+# no semantic-overlap scoring. Only active concepts are counted — this is a
+# maintenance surface for the *accepted* vocabulary, not the pending queue.
+# Concept-id lists (not just counts) are returned for the three
+# maintenance-signal buckets so the frontend can narrow the existing
+# Concept Browser to exactly those concepts on click, with no extra
+# round-trip and no new list endpoint.
+
+def get_accepted_overview(cur) -> dict:
+    cur.execute("SELECT COUNT(*) AS n FROM jobber.concept WHERE status = 'active'")
+    total_active_concepts = cur.fetchone()["n"]
+
+    cur.execute(
+        "SELECT type_code, COUNT(*) AS n FROM jobber.concept WHERE status = 'active' "
+        "GROUP BY type_code ORDER BY type_code"
+    )
+    by_type = [{"type_code": r["type_code"], "count": r["n"]} for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT id FROM jobber.concept WHERE status = 'active' AND (definition IS NULL OR btrim(definition) = '')"
+    )
+    missing_definition_ids = [str(r["id"]) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT c.id FROM jobber.concept c WHERE c.status = 'active' AND NOT EXISTS ("
+        "SELECT 1 FROM jobber.concept_dossier cd WHERE cd.concept_id = c.id AND cd.status = 'active')"
+    )
+    no_active_dossier_ids = [str(r["id"]) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT c.id FROM jobber.concept c JOIN jobber.concept_dossier cd ON cd.concept_id = c.id "
+        "WHERE c.status = 'active' AND cd.status = 'active' AND jsonb_array_length(cd.related_concepts) = 0"
+    )
+    dossier_no_related_concept_ids = [str(r["id"]) for r in cur.fetchall()]
+
+    cur.execute("SELECT COUNT(*) AS n FROM jobber.concept_alias")
+    alias_count = cur.fetchone()["n"]
+
+    cur.execute(
+        "SELECT id, canonical_name, type_code, reviewed_at, created_at FROM jobber.concept "
+        "WHERE status = 'active' ORDER BY COALESCE(reviewed_at, created_at) DESC LIMIT 10"
+    )
+    recent_concepts = [
+        {
+            "id": str(r["id"]),
+            "canonical_name": r["canonical_name"],
+            "type_code": r["type_code"],
+            "reviewed_at": r["reviewed_at"].isoformat() if r["reviewed_at"] else None,
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in cur.fetchall()
+    ]
+
+    return {
+        "total_active_concepts": total_active_concepts,
+        "by_type": by_type,
+        "missing_definition": {"count": len(missing_definition_ids), "concept_ids": missing_definition_ids},
+        "no_active_dossier": {"count": len(no_active_dossier_ids), "concept_ids": no_active_dossier_ids},
+        "dossier_no_related_concepts": {
+            "count": len(dossier_no_related_concept_ids),
+            "concept_ids": dossier_no_related_concept_ids,
+        },
+        "alias_count": alias_count,
+        "recent_concepts": recent_concepts,
+    }
+
+
 # --- cluster actions: accept / reject / merge (brief §5) --------------------
 
 def _pending_surface_forms(cur, cluster_key: str) -> list[str]:

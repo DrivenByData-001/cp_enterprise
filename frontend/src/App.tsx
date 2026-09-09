@@ -17,6 +17,7 @@ import Vocabulary from './pages/Vocabulary'
 import Capabilities from './pages/Capabilities'
 import CapabilityCoverage from './pages/CapabilityCoverage'
 import Trends from './pages/Trends'
+import Economics from './pages/Economics'
 
 function App() {
   const { logout } = useAuth()
@@ -32,6 +33,9 @@ function App() {
         </NavLink>
         <NavLink to="/trends" className={({ isActive }) => (isActive ? 'active' : '')}>
           Trends
+        </NavLink>
+        <NavLink to="/economics" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Economics
         </NavLink>
         <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
           Targets
@@ -73,6 +77,7 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
+        <Route path="/economics" element={<Economics />} />
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
         <Route path="/episodes" element={<Episodes />} />

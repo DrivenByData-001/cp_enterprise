@@ -66,17 +66,20 @@ def compare_role(role_instance_id: str):
             raise HTTPException(404, "role_instance not found")
 
         trace_items = fit["trace"]["items"]
-        docs_by_claim = _requirement_documents(cur, [item["requirement_claim_id"] for item in trace_items])
+        claim_ids = [item["requirement_claim_id"] for item in trace_items if item["requirement_claim_id"]]
+        docs_by_claim = _requirement_documents(cur, claim_ids)
 
         items = []
         for item in trace_items:
             role_side = {
                 "requirement_claim_id": item["requirement_claim_id"],
+                "role_skill_observation_id": item.get("role_skill_observation_id"),
+                "requirement_source": item.get("requirement_source"),
                 "requirement_type": item["requirement_type"],
                 "basis": item["role_side"]["basis"],
                 "review_status": item["role_side"]["review_status"],
                 "evidence_span": item["role_side"]["evidence_span"],
-                "document": docs_by_claim.get(item["requirement_claim_id"]),
+                "document": docs_by_claim.get(item["requirement_claim_id"]) if item["requirement_claim_id"] else None,
             }
             detail = item["detail"]
             if detail["kind"] == "concept":

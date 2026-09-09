@@ -70,6 +70,18 @@ def progress():
         return curation.get_progress(cur)
 
 
+@router.get("/accepted-overview")
+def accepted_overview():
+    """Lightweight Accepted Vocabulary overview panel (Phase 4 prompt §14):
+    total active concepts, counts by type, curation-maintenance signals
+    (missing definition / no active dossier / dossier with no related
+    concepts — each with the affected concept ids for click-to-filter),
+    alias count, and the 10 most recently accepted/reviewed concepts. No AI
+    call; deliberately not an ontology dashboard."""
+    with db_cursor() as cur:
+        return curation.get_accepted_overview(cur)
+
+
 @router.get("/clusters")
 def list_clusters(
     status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),

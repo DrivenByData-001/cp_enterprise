@@ -52,6 +52,7 @@ from . import profile360_reader as p360
 from .concept_linking import get_or_create_current_vocabulary_version
 from .db import to_json_param
 from .embeddings import cosine_similarity, ensure_profile_embedding, get_embedding
+from .role_requirements import load_role_requirements
 
 ENGINE_VERSION = "capability-engine-v1"
 
@@ -784,25 +785,17 @@ def derive_role_fit(cur, role_instance_id: str) -> dict:
     if role is None:
         raise RoleInstanceNotFoundError(role_instance_id)
 
-    cur.execute(
-        """
-        SELECT rc.id, rc.requirement_type, rc.basis, rc.review_status, rc.evidence_span,
-               c.id AS concept_id, c.canonical_name, c.type_code
-        FROM jobber.requirement_claim rc
-        JOIN jobber.concept c ON c.id = rc.concept_id
-        WHERE rc.role_instance_id = %s AND rc.superseded_by IS NULL
-        ORDER BY rc.requirement_type, c.canonical_name
-        """,
-        (role_instance_id,),
-    )
-    requirement_rows = [dict(r) for r in cur.fetchall()]
+    # Canonical requirement-evidence loader (Phase 4 §2): requirement_claim
+    # when the role has any usable rows, else mapped role_skill_observation
+    # rows — never merged. See role_requirements.py for the exact rule.
+    requirement_rows = load_role_requirements(cur, role_instance_id)
 
     items = []
     counts = {"evidenced": 0, "partial": 0, "user_asserted": 0, "not_found": 0}
     blocking_gaps, unverified_required = [], []
 
     for rc in requirement_rows:
-        concept_id = str(rc["concept_id"])
+        concept_id = rc["concept_id"]
         concept = {"id": concept_id, "canonical_name": rc["canonical_name"], "type_code": rc["type_code"]}
         if rc["type_code"] == "capability":
             coverage = derive_capability_coverage(cur, concept_id)
@@ -816,7 +809,9 @@ def derive_role_fit(cur, role_instance_id: str) -> dict:
         counts[status] += 1
         items.append(
             {
-                "requirement_claim_id": str(rc["id"]),
+                "requirement_claim_id": rc["requirement_claim_id"],
+                "role_skill_observation_id": rc["role_skill_observation_id"],
+                "requirement_source": rc["source"],
                 "concept": concept,
                 "requirement_type": rc["requirement_type"],
                 "role_side": {
