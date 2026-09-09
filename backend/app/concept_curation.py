@@ -26,12 +26,35 @@ removes the row's now-meaningless `capability_detail` sidecar. Concepts
 themselves are never hard-deleted anywhere in this module — deprecation
 (`status='deprecated'`) is the only "remove from active use" path, mirroring
 the same convention `jobber.concept.status` already uses for capabilities
-(CapabilityUpdate)."""
+(CapabilityUpdate).
+
+Two integrity-only follow-ups (still §B, not a new feature):
+
+- **Active-vocabulary surface-form integrity.** A new alias, or a renamed
+  canonical name, must not already denote another *active* concept (as
+  either its canonical_name or one of its own aliases) — `_active_surface_
+  form_conflict` rejects that with a 409 naming the conflicting concept.
+  This is deliberately application-level, not a DB-wide UNIQUE constraint:
+  `jobber.concept`'s status/lifecycle means a 'proposed'/'deprecated'/
+  'merged'/'rejected' concept's canonical_name or alias must never block an
+  active one from using the same surface form — a UNIQUE index spanning all
+  statuses would get that wrong.
+- **Concept embedding invalidation.** Renaming a concept or editing its
+  definition changes what it *means* semantically, so any existing
+  `jobber.d_embedding` row for it (owner_kind='concept') is deleted in the
+  same transaction as the metadata update — never regenerated synchronously
+  here. `concept_linking.ensure_concept_embeddings` already treats a
+  missing current-model vector as "needs backfilling" and recomputes it
+  lazily off the concept's (now-current) canonical_name/definition next
+  time it runs, so this needs no new regeneration path. A type-only or
+  status-only edit never touches embeddings — neither one is embedded text."""
 
 from datetime import datetime, timezone
 
 import psycopg
 from fastapi import HTTPException
+
+from .concept_linking import normalize_name
 
 # Concepts editable through this module. 'proposed' concepts don't occur in
 # practice (every creation path — ConceptCreate, resolve_surface_form_group —
@@ -40,6 +63,44 @@ from fastapi import HTTPException
 # editor's — so both are rejected here with a clear 409 rather than silently
 # reanimating a concept another flow already resolved.
 _EDITABLE_STATUSES = ("active", "deprecated")
+
+
+def _active_surface_form_conflict(cur, normalized_value: str, *, exclude_concept_id: str) -> dict | None:
+    """Does `normalized_value` (already run through `concept_linking.
+    normalize_name` — the same case-fold + collapse-whitespace semantics
+    `exact_match_concept_id` uses, not a new incompatible definition of
+    "the same surface form") already denote another *active* concept's
+    canonical_name or one of its aliases? Only 'active' concepts are ever a
+    conflict *source* — a deprecated concept's old name/aliases must never
+    block a new active one from reusing that surface form. Returns
+    {id, canonical_name} of the conflicting concept (enough for a curator to
+    go resolve it) or None if clear."""
+    cur.execute(
+        "SELECT id, canonical_name FROM jobber.concept "
+        "WHERE status = 'active' AND id != %s AND LOWER(canonical_name) = %s",
+        (exclude_concept_id, normalized_value),
+    )
+    row = cur.fetchone()
+    if row:
+        return {"id": str(row["id"]), "canonical_name": row["canonical_name"]}
+    cur.execute(
+        """
+        SELECT c.id, c.canonical_name FROM jobber.concept_alias a
+        JOIN jobber.concept c ON c.id = a.concept_id
+        WHERE c.status = 'active' AND c.id != %s AND LOWER(a.alias) = %s
+        """,
+        (exclude_concept_id, normalized_value),
+    )
+    row = cur.fetchone()
+    return {"id": str(row["id"]), "canonical_name": row["canonical_name"]} if row else None
+
+
+def _conflict_error(surface_form: str, conflict: dict) -> HTTPException:
+    return HTTPException(
+        409,
+        f"{surface_form!r} already denotes the active concept {conflict['canonical_name']!r} "
+        f"(id {conflict['id']}) — choose a different surface form or resolve the ambiguity on that concept first",
+    )
 
 
 def _edge_violations(cur, concept_id: str, new_type_code: str) -> list[str]:
@@ -105,9 +166,16 @@ def update_concept_metadata(cur, concept_id: str, patch: dict, *, now: datetime 
     if concept["status"] not in _EDITABLE_STATUSES:
         raise HTTPException(409, f"concept has status {concept['status']!r} and cannot be edited here")
 
+    old_canonical_name = concept["canonical_name"]
+    old_definition = concept["definition"]
+
     concept_fields: dict = {}
     if "canonical_name" in patch and patch["canonical_name"] is not None:
-        concept_fields["canonical_name"] = patch["canonical_name"]
+        new_name = patch["canonical_name"]
+        conflict = _active_surface_form_conflict(cur, normalize_name(new_name), exclude_concept_id=concept_id)
+        if conflict:
+            raise _conflict_error(new_name, conflict)
+        concept_fields["canonical_name"] = new_name
     if "definition" in patch:
         concept_fields["definition"] = patch["definition"]
     if "status" in patch and patch["status"] is not None:
@@ -162,6 +230,19 @@ def update_concept_metadata(cur, concept_id: str, patch: dict, *, now: datetime 
         except psycopg.errors.UniqueViolation:
             raise HTTPException(400, "a concept with this type and canonical name already exists")
 
+        # A concept's embedded text is canonical_name (+ definition) —
+        # concept_linking.ensure_concept_embeddings. Either one actually
+        # changing value invalidates any existing vector; a type/status-only
+        # edit (or a no-op resubmission of the same name/definition) does
+        # not. Deleted here, never regenerated synchronously — the lazy
+        # backfill in ensure_concept_embeddings recomputes it next time it
+        # runs, off the now-current text.
+        semantically_changed = (
+            "canonical_name" in concept_fields and concept_fields["canonical_name"] != old_canonical_name
+        ) or ("definition" in concept_fields and concept_fields["definition"] != old_definition)
+        if semantically_changed:
+            cur.execute("DELETE FROM jobber.d_embedding WHERE owner_kind = 'concept' AND owner_id = %s", (concept_id,))
+
         if "type_code" in concept_fields:
             if new_type == "capability":
                 cur.execute(
@@ -204,6 +285,11 @@ def add_alias(cur, concept_id: str, alias: str, *, now: datetime | None = None) 
     alias = alias.strip()
     if not alias:
         raise HTTPException(400, "alias must not be empty")
+
+    conflict = _active_surface_form_conflict(cur, normalize_name(alias), exclude_concept_id=concept_id)
+    if conflict:
+        raise _conflict_error(alias, conflict)
+
     try:
         cur.execute(
             "INSERT INTO jobber.concept_alias (concept_id, alias, origin, created_at) "

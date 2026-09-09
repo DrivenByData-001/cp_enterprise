@@ -6,6 +6,7 @@ exercises."""
 import uuid
 
 from app import db
+from app.embeddings import set_embedding
 
 
 def _concept(cur, *, type_code="knowledge", name="Solvency II", status="active", definition=None):
@@ -66,8 +67,28 @@ def test_update_unknown_concept_is_404(client):
 
 
 def test_duplicate_canonical_name_rejected(client):
+    """A same-type-code collision against another *active* concept is now
+    caught by the application-level active-vocabulary integrity check
+    (409, naming the conflict) before it would ever reach the DB's
+    UNIQUE(type_code, canonical_name) constraint — see
+    test_duplicate_canonical_name_against_deprecated_concept_still_hits_db_constraint
+    below for the one case where that DB-level 400 path is still reached."""
     with db.db_cursor() as cur:
         _concept(cur, name="Capital Management", type_code="capability")
+        other_id = _concept(cur, name="Capital Modelling", type_code="capability")
+
+    resp = client.patch(f"/api/concepts/{other_id}", json={"canonical_name": "Capital Management"})
+    assert resp.status_code == 409
+
+
+def test_duplicate_canonical_name_against_deprecated_concept_still_hits_db_constraint(client):
+    """The new active-vocabulary check deliberately never treats a
+    deprecated concept's canonical_name as a conflict source (§1) — but the
+    pre-existing DB-level UNIQUE(type_code, canonical_name) constraint
+    applies regardless of status, so this same-type-code collision is still
+    rejected, just via the older 400 path rather than the new 409 one."""
+    with db.db_cursor() as cur:
+        _concept(cur, name="Capital Management", type_code="capability", status="deprecated")
         other_id = _concept(cur, name="Capital Modelling", type_code="capability")
 
     resp = client.patch(f"/api/concepts/{other_id}", json={"canonical_name": "Capital Management"})
@@ -295,3 +316,187 @@ def test_concept_maintenance_endpoints_reject_unauthenticated_calls(anon_client)
     assert anon_client.patch(f"/api/concepts/{concept_id}", json={"definition": "x"}).status_code in (401, 403)
     assert anon_client.post(f"/api/concepts/{concept_id}/aliases", json={"alias": "x"}).status_code in (401, 403)
     assert anon_client.delete(f"/api/concepts/{concept_id}/aliases/{uuid.uuid4()}").status_code in (401, 403)
+
+
+# --- active-vocabulary surface-form integrity (follow-up patch §1) ---------
+#
+# Alias-add and canonical-name-rename must not create an ambiguous active
+# surface form — a normalised alias/canonical_name colliding with another
+# *active* concept's canonical_name or alias is rejected with a 409. Only
+# 'active' concepts are ever a conflict source: a deprecated concept's old
+# name/aliases must never block reuse of that surface form elsewhere.
+
+def test_add_alias_conflicts_with_another_active_alias(client):
+    with db.db_cursor() as cur:
+        holder_id = _concept(cur, name="Solvency II", type_code="regulation")
+        other_id = _concept(cur, name="Own Risk and Solvency Assessment", type_code="knowledge")
+    add = client.post(f"/api/concepts/{holder_id}/aliases", json={"alias": "SII"})
+    assert add.status_code == 200
+
+    conflict = client.post(f"/api/concepts/{other_id}/aliases", json={"alias": "  sii  "})
+    assert conflict.status_code == 409
+    assert "Solvency II" in conflict.json()["detail"]
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM jobber.concept_alias WHERE concept_id = %s", (other_id,))
+        assert cur.fetchone()["n"] == 0
+
+
+def test_add_alias_conflicts_with_another_active_canonical_name(client):
+    with db.db_cursor() as cur:
+        _concept(cur, name="Solvency II", type_code="regulation")
+        other_id = _concept(cur, name="ORSA", type_code="knowledge")
+
+    conflict = client.post(f"/api/concepts/{other_id}/aliases", json={"alias": "solvency ii"})
+    assert conflict.status_code == 409
+    assert "Solvency II" in conflict.json()["detail"]
+
+
+def test_canonical_rename_conflicts_with_another_active_alias(client):
+    with db.db_cursor() as cur:
+        holder_id = _concept(cur, name="Solvency II", type_code="regulation")
+        renamer_id = _concept(cur, name="ORSA", type_code="knowledge")
+    client.post(f"/api/concepts/{holder_id}/aliases", json={"alias": "SII"})
+
+    conflict = client.patch(f"/api/concepts/{renamer_id}", json={"canonical_name": "SII"})
+    assert conflict.status_code == 409
+    assert "Solvency II" in conflict.json()["detail"]
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT canonical_name FROM jobber.concept WHERE id = %s", (renamer_id,))
+        assert cur.fetchone()["canonical_name"] == "ORSA"
+
+
+def test_canonical_rename_conflicts_with_another_active_canonical_name_across_types(client):
+    """The DB's own UNIQUE(type_code, canonical_name) constraint would not
+    catch a cross-type collision — this is exactly what the new
+    application-level check adds."""
+    with db.db_cursor() as cur:
+        _concept(cur, name="Capital Management", type_code="capability")
+        renamer_id = _concept(cur, name="Capital Modelling", type_code="capability")
+        other_type_renamer_id = _concept(cur, name="Something Else", type_code="knowledge")
+
+    same_type_conflict = client.patch(f"/api/concepts/{renamer_id}", json={"canonical_name": "Capital Management"})
+    assert same_type_conflict.status_code == 409
+
+    cross_type_conflict = client.patch(f"/api/concepts/{other_type_renamer_id}", json={"canonical_name": "capital management"})
+    assert cross_type_conflict.status_code == 409
+    assert "Capital Management" in cross_type_conflict.json()["detail"]
+
+
+def test_harmless_aliases_on_the_same_concept(client):
+    """Adding several distinct aliases to one concept never conflicts with
+    itself, and renaming a concept to match one of its own aliases is not a
+    conflict (only *other* concepts are ever a conflict source)."""
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, name="ORSA", type_code="knowledge")
+
+    first = client.post(f"/api/concepts/{concept_id}/aliases", json={"alias": "Own Risk and Solvency Assessment"})
+    assert first.status_code == 200
+    second = client.post(f"/api/concepts/{concept_id}/aliases", json={"alias": "ORSA process"})
+    assert second.status_code == 200
+
+    rename = client.patch(f"/api/concepts/{concept_id}", json={"canonical_name": "Own Risk and Solvency Assessment"})
+    assert rename.status_code == 200
+    assert rename.json()["canonical_name"] == "Own Risk and Solvency Assessment"
+
+
+def test_deprecated_concept_alias_does_not_block_active_concept(client):
+    with db.db_cursor() as cur:
+        deprecated_id = _concept(cur, name="Old Term", type_code="knowledge", status="deprecated")
+        active_id = _concept(cur, name="New Term", type_code="knowledge")
+    with db.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.concept_alias (concept_id, alias, origin, created_at) VALUES (%s, 'Shared Label', 'curator', now())",
+            (deprecated_id,),
+        )
+
+    add = client.post(f"/api/concepts/{active_id}/aliases", json={"alias": "Shared Label"})
+    assert add.status_code == 200
+
+    rename = client.patch(f"/api/concepts/{active_id}", json={"canonical_name": "Shared Label"})
+    assert rename.status_code == 200
+
+
+def test_deprecated_concept_canonical_name_does_not_block_active_concept(client):
+    with db.db_cursor() as cur:
+        deprecated_id = _concept(cur, name="Prophet", type_code="tool", status="deprecated")
+        active_id = _concept(cur, name="Something Unrelated", type_code="tool")
+    assert deprecated_id  # the deprecated row exists but must not block reuse below
+
+    add = client.post(f"/api/concepts/{active_id}/aliases", json={"alias": "Prophet"})
+    assert add.status_code == 200
+
+    with db.db_cursor() as cur:
+        other_id = _concept(cur, name="Another Concept", type_code="tool")
+    rename = client.patch(f"/api/concepts/{other_id}", json={"canonical_name": "Prophet"})
+    # "Prophet" is now an active alias (of active_id) — this collision IS
+    # real and must still be rejected, proving the deprecated concept's
+    # original canonical_name specifically was not what was blocking things.
+    assert rename.status_code == 409
+
+
+# --- concept embedding invalidation (follow-up patch §2) -------------------
+
+def _has_concept_embedding(cur, concept_id: str) -> bool:
+    cur.execute("SELECT 1 FROM jobber.d_embedding WHERE owner_kind = 'concept' AND owner_id = %s", (concept_id,))
+    return cur.fetchone() is not None
+
+
+def test_rename_invalidates_existing_concept_embedding(client):
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, name="Solvency II", type_code="regulation")
+        set_embedding(cur, "concept", concept_id, [1.0, 0.0, 0.0] + [0.0] * 381)
+        assert _has_concept_embedding(cur, concept_id)
+
+    resp = client.patch(f"/api/concepts/{concept_id}", json={"canonical_name": "Solvency II Directive"})
+    assert resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        assert not _has_concept_embedding(cur, concept_id)
+
+
+def test_definition_edit_invalidates_existing_concept_embedding(client):
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, name="ORSA", type_code="knowledge", definition="Old definition.")
+        set_embedding(cur, "concept", concept_id, [0.0, 1.0, 0.0] + [0.0] * 381)
+        assert _has_concept_embedding(cur, concept_id)
+
+    resp = client.patch(f"/api/concepts/{concept_id}", json={"definition": "A materially different definition."})
+    assert resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        assert not _has_concept_embedding(cur, concept_id)
+
+
+def test_unrelated_metadata_edit_does_not_delete_embedding(client):
+    """A status-only or type-only edit never touches canonical_name/
+    definition — the embedded text — so any existing vector must survive."""
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, name="Prophet", type_code="tool")
+        set_embedding(cur, "concept", concept_id, [0.0, 0.0, 1.0] + [0.0] * 381)
+        assert _has_concept_embedding(cur, concept_id)
+
+    deprecate = client.patch(f"/api/concepts/{concept_id}", json={"status": "deprecated"})
+    assert deprecate.status_code == 200
+    with db.db_cursor() as cur:
+        assert _has_concept_embedding(cur, concept_id)
+
+    retype = client.patch(f"/api/concepts/{concept_id}", json={"type_code": "knowledge"})
+    assert retype.status_code == 200
+    with db.db_cursor() as cur:
+        assert _has_concept_embedding(cur, concept_id)
+
+
+def test_noop_canonical_name_resubmission_does_not_delete_embedding(client):
+    """Resubmitting the same canonical_name (no actual semantic change)
+    must not needlessly invalidate the vector."""
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, name="Prophet", type_code="tool")
+        set_embedding(cur, "concept", concept_id, [0.2, 0.2, 0.2] + [0.0] * 381)
+
+    resp = client.patch(f"/api/concepts/{concept_id}", json={"canonical_name": "Prophet"})
+    assert resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        assert _has_concept_embedding(cur, concept_id)
