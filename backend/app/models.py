@@ -99,6 +99,58 @@ class ConceptCreate(BaseModel):
     status: str = "active"  # curator-created concepts are usable immediately
 
 
+# --- Accepted-vocabulary maintenance (cp_round_of_changes.md §B) -----------
+#
+# Curator editing of an already-accepted concept: canonical name, type,
+# definition, active/deprecated status, and (independently) aliases. Distinct
+# from ConceptCreate above, which creates a brand-new concept.
+
+class CapabilityDetailInput(BaseModel):
+    """Required capability_detail state when a type change moves a concept
+    *into* `type_code='capability'` (app/concept_curation.py) — the same
+    fields CapabilityCreate/CapabilityUpdate accept, since it's the same
+    underlying jobber.capability_detail row."""
+
+    demonstration_standard: str
+    min_depth: str = "owned"
+    min_autonomy: Optional[str] = None
+    requires_all_core: bool = True
+    min_core_required: Optional[int] = None
+    economic_salience: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ConceptMetadataUpdate(BaseModel):
+    """PATCH /api/concepts/{id}. Every field is optional — only supplied
+    fields are changed (app/concept_curation.py reads `exclude_unset`, not
+    plain None-checks, so explicitly clearing `definition` to null is still
+    possible while an omitted field is left alone). `capability_detail` is
+    only consulted when `type_code` is changing *into* 'capability' — it is
+    not a general capability-detail editor (that's PUT /api/capabilities/{id})."""
+
+    canonical_name: Optional[str] = None
+    type_code: Optional[str] = None
+    definition: Optional[str] = None
+    status: Optional[str] = None  # active | deprecated — concepts are never hard-deleted, see app/concept_curation.py
+    capability_detail: Optional[CapabilityDetailInput] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.status is not None and self.status not in ("active", "deprecated"):
+            raise ValueError("status must be one of active, deprecated")
+        return self
+
+
+class ConceptAliasCreate(BaseModel):
+    alias: str
+
+    @model_validator(mode="after")
+    def _check(self):
+        if not self.alias.strip():
+            raise ValueError("alias must not be empty")
+        return self
+
+
 class ProposalResolve(BaseModel):
     surface_form: str
     action: str  # accept_new | accept_alias | reject | defer
@@ -406,4 +458,61 @@ class RoleContextGeneration(BaseModel):
     stakeholders: list[GroundedNote] = []
     career_progression: list[CareerStep] = []
     grounding_summary: GroundingSummary = GroundingSummary()
+    caveats: Optional[str] = None
+
+
+# --- Concept Dossier (backend/app/concept_dossier.py) -----------------------
+#
+# The AI output schema for concept_dossier_generate: a curator-facing
+# explanatory dossier for one accepted canonical concept (cp_round_of_changes
+# .md §C/§D/§E/§F). `related_concepts` is an explanatory annotation only — it
+# is never written as a formal jobber.concept_edge row (§C: "must not
+# confuse a dossier's explanatory decomposition with formal ontology
+# edges"), and every `concept_id` the model returns is filtered, after
+# validation, down to only the candidate ids it was actually offered (§F:
+# "ONLY among real accepted canonical concepts supplied as candidates") —
+# app/concept_dossier.py does that filtering; nothing here can enforce it at
+# the schema level since a concept_id is just a string.
+
+class RelatedConceptSuggestion(BaseModel):
+    concept_id: str
+    relationship: str  # e.g. related to | informs | used in | broader/narrower | commonly combined with
+    explanation: str
+
+
+class ConceptDossierGeneration(BaseModel):
+    plain_definition: str
+    classification_rationale: str = ""
+    practical_meaning: str
+    underlying_elements: list[str] = []
+    stronger_expressions: list[str] = []
+    weaker_expressions: list[str] = []
+    boundaries_and_overlaps: str = ""
+    related_concepts: list[RelatedConceptSuggestion] = []
+    caveats: Optional[str] = None
+
+
+class ConceptDossierGenerateRequest(BaseModel):
+    """Body for both POST .../dossier/generate and .../dossier/regenerate —
+    the optional "Guide the AI" input (§D), persisted alongside whichever
+    version it produced."""
+
+    guidance: Optional[str] = None
+
+
+class ConceptDossierManualEdit(BaseModel):
+    """PUT .../dossier — a curator's direct edit of the active dossier's
+    content. Deliberately excludes `related_concepts`: those are an AI
+    suggestion surface (§F), not a manually-curated field on this endpoint.
+    Every field optional; only supplied fields change (app/concept_dossier.py
+    reads `exclude_unset`), the rest carried over unchanged from the version
+    being superseded."""
+
+    plain_definition: Optional[str] = None
+    classification_rationale: Optional[str] = None
+    practical_meaning: Optional[str] = None
+    underlying_elements: Optional[list[str]] = None
+    stronger_expressions: Optional[list[str]] = None
+    weaker_expressions: Optional[list[str]] = None
+    boundaries_and_overlaps: Optional[str] = None
     caveats: Optional[str] = None

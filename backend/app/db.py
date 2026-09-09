@@ -273,6 +273,36 @@ def instance_type_to_app_kind(instance_type: str, target_basis: str | None) -> s
     raise ValueError(f"unknown instance_type {instance_type!r}")
 
 
+def _normalize_top_adjacent_roles(value) -> list[str] | None:
+    """Enforce the wire contract `top_adjacent_roles: string[] | null`
+    (frontend's `Role` type, RoleDetail.tsx's `.join(', ')`) against
+    whatever `legacy_analysis.top_adjacent_roles` actually holds. Production
+    diagnosis found 23 historical/imported rows storing this as a *string*
+    containing JSON (e.g. `"[\\"Deputy Head of Actuarial Function\\", ...]"`)
+    rather than a genuine JSON array — one extra layer of encoding somewhere
+    upstream. `role.top_adjacent_roles.join(', ')` crashes on a plain string
+    (no `.join` method), so this must never hand the frontend anything but a
+    real list of strings or null — never the raw malformed value. A value
+    that cannot be safely interpreted as `string[]` becomes null rather than
+    raising, so one bad historical row can never crash Role Detail again.
+    Purely a read-time projection: the caller only ever has an in-memory
+    dict here, so this can't and doesn't mutate the stored database row —
+    the original legacy_analysis JSON is untouched in persistence."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value if all(isinstance(item, str) for item in value) else None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+            return parsed
+        return None
+    return None
+
+
 def flatten_role_instance(role: dict) -> dict:
     """A `SELECT *` off jobber.role_instance packs everything this app used
     to keep as individual flat columns (scores, top_adjacent_roles,
@@ -289,6 +319,8 @@ def flatten_role_instance(role: dict) -> dict:
         nested = role.pop(jsonb_col, None) or {}
         for k, v in nested.items():
             role.setdefault(k, v)
+    if "top_adjacent_roles" in role:
+        role["top_adjacent_roles"] = _normalize_top_adjacent_roles(role["top_adjacent_roles"])
     return role
 
 

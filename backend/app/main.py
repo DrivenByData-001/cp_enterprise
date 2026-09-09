@@ -13,6 +13,7 @@ from .routes import (
     auth as auth_routes,
     capabilities,
     comparison,
+    concept_dossier,
     concepts,
     documents,
     episodes,
@@ -106,6 +107,7 @@ app.include_router(space.router, dependencies=_protected)
 app.include_router(targets.router, dependencies=_protected)
 app.include_router(episodes.router, dependencies=_protected)
 app.include_router(concepts.router, dependencies=_protected)
+app.include_router(concept_dossier.router, dependencies=_protected)
 app.include_router(role_instances.router, dependencies=_protected)
 app.include_router(profile360.router, dependencies=_protected)
 app.include_router(preferences.router, dependencies=_protected)

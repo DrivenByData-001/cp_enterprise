@@ -75,6 +75,22 @@ kept for reproducibility.
   **Split cluster** to undo that; the split is locked so a later bootstrap
   run (dry-run or real) can never silently re-collapse it. See
   `docs/21-role-context-and-vocabulary-splitting.md` §2.
+- **Accepted vocabulary is curated, not immutable — and never overwritten by
+  automation.** Every canonical concept's Details drawer (Vocabulary page)
+  lets a curator edit its name/type/definition/status and aliases, with
+  type changes validated against `concept_edge_rule`/`capability_detail`
+  server-side (an unsafe transition is rejected with a 409, never silently
+  applied) — deprecation, not deletion, is how a concept is retired. See
+  `docs/22-concept-vocabulary-maintenance-and-dossiers.md` §2.
+- **A Concept Dossier expands a terse canonical term into something
+  understandable, generated on demand and never overwritten silently.** The
+  same drawer shows a persisted, AI-assisted explanation — plain-English
+  meaning, what it means in practice, stronger/weaker expressions,
+  boundaries with neighbouring concepts, and grounded related-concept chips
+  — with full version history (active/draft/superseded), a deliberate
+  Regenerate that creates a draft rather than touching the curated active
+  version, and an optional "Guide the AI" input. Never reads profile360.
+  See `docs/22-concept-vocabulary-maintenance-and-dossiers.md` §3.
 - **Day-in-the-Life is a role-side enrichment, generated on demand.** A
   role's detail page can generate an occupational-context sketch — a typical
   day/week, team, manager dynamic, stakeholders, career progression — with
@@ -211,6 +227,12 @@ see `docs/20-render-deployment.md` §8 for the full design and
     curation.md`. A cluster with more than one surface form also offers
     **Split cluster** — undo an over-broad grouping without losing any
     evidence — see `docs/21-role-context-and-vocabulary-splitting.md` §2.
+    Once accepted, a concept's **Details** button opens a maintenance drawer
+    — curator-editable name/type/definition/status/aliases, and a persisted,
+    on-demand **Concept Dossier** (plain-English meaning, boundaries with
+    neighbouring concepts, grounded related-concept chips) with full
+    Generate/Regenerate/Adopt/Discard version history — see
+    `docs/22-concept-vocabulary-maintenance-and-dossiers.md`.
 9c. **Coverage** — your personal capability coverage, grouped Evidenced /
     Partial / User asserted / No evidence found, each expandable into its
     full evidence trace back to profile360.
@@ -233,6 +255,10 @@ schema implements; `docs/15-security-and-rls.md` covers the backend/RLS
 security model. `docs/21-role-context-and-vocabulary-splitting.md` covers
 the two newest tables (`role_context_enrichment` and the `concept_proposal`
 split-tracking columns) plus a 2026 Role Detail rendering fix.
+`docs/22-concept-vocabulary-maintenance-and-dossiers.md` covers the
+permanent fix for the remaining 2026 Role Detail crash (a malformed
+`top_adjacent_roles` JSON string), accepted-concept metadata/type-safety
+editing, and the newest table, `concept_dossier`.
 
 ## Deliberately out of scope for now
 
