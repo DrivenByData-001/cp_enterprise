@@ -132,6 +132,11 @@ function GapValueTab() {
           </span>
         )}
       </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+        Archetype/role counts below are structural, over every role captured in this corpus — not a count of
+        vacancies observed specifically in the selected market. Only the compensation benchmark itself is
+        market/currency-specific.
+      </p>
 
       {rows === null ? (
         <p className="muted">Loading…</p>
@@ -157,7 +162,7 @@ function GapValueTab() {
                   <strong>{row.archetypes_improved}</strong> improved
                 </span>
                 <span className="muted">
-                  {row.roles_unlocked} role(s) unlocked, {row.roles_improved} improved
+                  {row.roles_unlocked} captured role(s) unlocked, {row.roles_improved} improved
                 </span>
               </div>
               <div style={{ marginTop: 8 }}>
@@ -603,6 +608,7 @@ function MarketDataTab() {
   const [text, setText] = useState('')
   const [publisher, setPublisher] = useState('')
   const [reportTitle, setReportTitle] = useState('')
+  const [reportDate, setReportDate] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const reload = () => {
@@ -616,10 +622,16 @@ function MarketDataTab() {
     if (!text.trim()) return
     setError(null)
     try {
-      await api.ingestMarketDataText({ text, publisher: publisher || undefined, report_title: reportTitle || undefined })
+      await api.ingestMarketDataText({
+        text,
+        publisher: publisher || undefined,
+        report_title: reportTitle || undefined,
+        report_date: reportDate || undefined,
+      })
       setText('')
       setPublisher('')
       setReportTitle('')
+      setReportDate('')
       reload()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -629,7 +641,11 @@ function MarketDataTab() {
   const uploadPdf = async (file: File) => {
     setError(null)
     try {
-      await api.ingestMarketDataPdf(file, { publisher: publisher || undefined, report_title: reportTitle || undefined })
+      await api.ingestMarketDataPdf(file, {
+        publisher: publisher || undefined,
+        report_title: reportTitle || undefined,
+        report_date: reportDate || undefined,
+      })
       reload()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -644,6 +660,12 @@ function MarketDataTab() {
         <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <input value={publisher} onChange={(e) => setPublisher(e.target.value)} placeholder="Publisher" />
           <input value={reportTitle} onChange={(e) => setReportTitle(e.target.value)} placeholder="Report title" />
+          <input
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+            placeholder="Report date (YYYY-MM-DD)"
+            title="The report's own publication/as-of date — used as the survey benchmark's date for the most-recent-qualifying-survey rule. Leave blank if unknown."
+          />
         </div>
         <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste raw report text…" rows={4} style={{ width: '100%' }} />
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>

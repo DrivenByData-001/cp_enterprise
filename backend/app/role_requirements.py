@@ -29,7 +29,18 @@ validated pipeline and should win whenever it has anything usable to say):
    rejected falls through to the observation fallback rather than being
    treated as having zero requirements.
 2. Otherwise, fall back to `role_skill_observation` rows whose
-   `canonical_concept_id` resolves to an *active* canonical concept.
+   `canonical_concept_id` resolves to an *active* canonical concept —
+   **except** for a concept the curator has already spoken on via a
+   rejected or superseded requirement_claim on this same role. Curator
+   authority always outranks a legacy observation: a rejected claim for
+   "Python" must prevent a legacy "Python" observation from resurrecting
+   that same requirement, even though no *usable* claim exists to be
+   authoritative in its place. An unrelated concept's observation (e.g.
+   "SQL") is unaffected and still participates in fallback normally. This
+   only ever applies within the fallback branch — reaching it already means
+   no concept on this role has a usable claim (see point 1), so every
+   requirement_claim row found here is, by construction, rejected and/or
+   superseded.
    Unmapped observations (`canonical_concept_id IS NULL`, or resolving to a
    non-active concept) are ignored — never surfaced as a requirement.
 3. The two sources are never merged for one role. Exactly one is used.
@@ -82,7 +93,21 @@ def _load_requirement_claims(cur, role_instance_id: str) -> list[dict]:
     return items
 
 
-def _load_mapped_observations(cur, role_instance_id: str) -> list[dict]:
+def _rejected_or_superseded_concept_ids(cur, role_instance_id: str) -> set[str]:
+    """Concept ids the curator has already spoken on for this role via a
+    requirement_claim that is rejected and/or superseded. Explicit on its
+    own WHERE clause (rather than relying on the caller only ever invoking
+    this once `_load_requirement_claims` is known empty) so this function
+    is correct in isolation, not just under one caller's invariant."""
+    cur.execute(
+        "SELECT DISTINCT concept_id FROM jobber.requirement_claim "
+        "WHERE role_instance_id = %s AND (review_status = 'rejected' OR superseded_by IS NOT NULL)",
+        (role_instance_id,),
+    )
+    return {str(r["concept_id"]) for r in cur.fetchall()}
+
+
+def _load_mapped_observations(cur, role_instance_id: str, exclude_concept_ids: set[str]) -> list[dict]:
     cur.execute(
         """
         SELECT rso.id, rso.requirement_type, rso.importance,
@@ -96,9 +121,15 @@ def _load_mapped_observations(cur, role_instance_id: str) -> list[dict]:
     )
     items = []
     for r in cur.fetchall():
+        concept_id = str(r["concept_id"])
+        if concept_id in exclude_concept_ids:
+            # Curator-authority veto (point 2 above): this concept's only
+            # requirement_claim history on this role was rejected/superseded
+            # — a legacy observation must never resurrect it.
+            continue
         items.append(
             {
-                "concept_id": str(r["concept_id"]),
+                "concept_id": concept_id,
                 "canonical_name": r["canonical_name"],
                 "type_code": r["type_code"],
                 "requirement_type": r["requirement_type"],
@@ -122,4 +153,5 @@ def load_role_requirements(cur, role_instance_id: str) -> list[dict]:
     claims = _load_requirement_claims(cur, role_instance_id)
     if claims:
         return claims
-    return _load_mapped_observations(cur, role_instance_id)
+    excluded = _rejected_or_superseded_concept_ids(cur, role_instance_id)
+    return _load_mapped_observations(cur, role_instance_id, excluded)

@@ -37,6 +37,93 @@ def test_ingest_text_creates_market_survey_document(client):
     assert doc["observations"] == []
 
 
+def test_report_date_propagates_to_extracted_observations(client, monkeypatch):
+    resp = client.post(
+        "/api/market-data/documents/ingest",
+        json={"text": "A survey report.", "report_date": "2026-03-01"},
+    )
+    document_id = resp.json()["id"]
+    monkeypatch.setattr(
+        mdp, "run_json_task",
+        lambda **kw: _fake_result([
+            {"raw_role_label": "Dated Row", "component": "base", "pay_period": "annual", "currency": "GBP", "amount_mid": 60000},
+        ]),
+    )
+    client.post(f"/api/market-data/documents/{document_id}/extract")
+    draft = client.get("/api/market-data/compensation-observations", params={"review_status": "unreviewed"}).json()
+    row = next(r for r in draft if r["raw_role_label"] == "Dated Row")
+    assert row["observed_at"] == "2026-03-01"
+    assert row["period_end"] == "2026-03-01"
+
+
+def test_missing_report_date_leaves_observed_at_and_period_end_null(client, monkeypatch):
+    resp = client.post("/api/market-data/documents/ingest", json={"text": "A survey report with no date."})
+    document_id = resp.json()["id"]
+    monkeypatch.setattr(
+        mdp, "run_json_task",
+        lambda **kw: _fake_result([
+            {"raw_role_label": "Undated Row", "component": "base", "pay_period": "annual", "currency": "GBP", "amount_mid": 60000},
+        ]),
+    )
+    client.post(f"/api/market-data/documents/{document_id}/extract")
+    draft = client.get("/api/market-data/compensation-observations", params={"review_status": "unreviewed"}).json()
+    row = next(r for r in draft if r["raw_role_label"] == "Undated Row")
+    assert row["observed_at"] is None
+    assert row["period_end"] is None
+
+
+def test_curator_can_correct_observation_date(client, monkeypatch):
+    resp = client.post("/api/market-data/documents/ingest", json={"text": "A survey report."})
+    document_id = resp.json()["id"]
+    monkeypatch.setattr(
+        mdp, "run_json_task",
+        lambda **kw: _fake_result([
+            {"raw_role_label": "Fix My Date", "component": "base", "pay_period": "annual", "currency": "GBP", "amount_mid": 60000},
+        ]),
+    )
+    client.post(f"/api/market-data/documents/{document_id}/extract")
+    draft = client.get("/api/market-data/compensation-observations", params={"review_status": "unreviewed"}).json()
+    observation_id = next(r["id"] for r in draft if r["raw_role_label"] == "Fix My Date")
+
+    patch_resp = client.patch(
+        f"/api/market-data/compensation-observations/{observation_id}",
+        json={"observed_at": "2026-05-15", "period_end": "2026-05-15"},
+    )
+    assert patch_resp.status_code == 200
+
+    draft_after = client.get("/api/market-data/compensation-observations", params={"review_status": "unreviewed"}).json()
+    row = next(r for r in draft_after if r["id"] == observation_id)
+    assert row["observed_at"] == "2026-05-15"
+    assert row["period_end"] == "2026-05-15"
+
+
+def test_correct_observation_rejects_invalid_date(client):
+    resp = client.post("/api/market-data/documents/ingest", json={"text": "A survey report."})
+    document_id = resp.json()["id"]
+    with db.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.compensation_observation (source_key, raw_role_label, component, pay_period, "
+            "currency, basis, review_status, document_id) "
+            "VALUES ('bad-date-test-row', 'Bad Date Row', 'base', 'annual', 'GBP', 'survey', 'unreviewed', %s) RETURNING id",
+            (document_id,),
+        )
+        observation_id = str(cur.fetchone()["id"])
+
+    resp = client.patch(
+        f"/api/market-data/compensation-observations/{observation_id}",
+        json={"observed_at": "not-a-date"},
+    )
+    assert resp.status_code == 422
+
+
+def test_ingest_rejects_invalid_report_date(client):
+    resp = client.post(
+        "/api/market-data/documents/ingest",
+        json={"text": "A survey report.", "report_date": "15th of March"},
+    )
+    assert resp.status_code == 422
+
+
 def test_ingest_pdf_extracts_selectable_text(client, monkeypatch):
     import pypdf
 

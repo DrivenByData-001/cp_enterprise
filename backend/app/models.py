@@ -1,3 +1,4 @@
+from datetime import date as _date
 from typing import Literal, Optional
 
 from pydantic import BaseModel, model_validator
@@ -569,6 +570,18 @@ class MarketUpdate(BaseModel):
 
 # --- Phase 4: compensation observations -------------------------------------
 
+
+def _validate_iso_date(value: str, field_name: str) -> None:
+    """Validate supplied dates safely (prompt §2) — a malformed date string
+    would otherwise only surface as an opaque database error at INSERT/
+    UPDATE time. Never invents or corrects a date; only rejects one that
+    isn't genuinely ISO 8601 (YYYY-MM-DD)."""
+    try:
+        _date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{field_name} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from None
+
+
 _COMPENSATION_COMPONENTS = ("base", "bonus_pct", "total_package", "day_rate")
 _PAY_PERIODS = ("annual", "daily")
 _EMPLOYMENT_BASES = ("permanent", "contract", "unknown")
@@ -646,6 +659,11 @@ class CompensationObservationCorrect(BaseModel):
     bonus_pct: Optional[float] = None
     reported_sample_size: Optional[int] = None
     source_note: Optional[str] = None
+    # A curator correcting a genuinely wrong/missing report date (prompt
+    # §2) — never set automatically here; extraction sets these from the
+    # source document's own source_date (market_data_processing.py).
+    observed_at: Optional[str] = None
+    period_end: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self):
@@ -655,6 +673,10 @@ class CompensationObservationCorrect(BaseModel):
             raise ValueError(f"pay_period must be one of {_PAY_PERIODS}")
         if self.employment_basis is not None and self.employment_basis not in _EMPLOYMENT_BASES:
             raise ValueError(f"employment_basis must be one of {_EMPLOYMENT_BASES}")
+        if self.observed_at is not None:
+            _validate_iso_date(self.observed_at, "observed_at")
+        if self.period_end is not None:
+            _validate_iso_date(self.period_end, "period_end")
         return self
 
 
@@ -667,6 +689,12 @@ class MarketDataIngest(BaseModel):
     report_date: Optional[str] = None
     source_url: Optional[str] = None
     methodology_notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.report_date is not None:
+            _validate_iso_date(self.report_date, "report_date")
+        return self
 
 
 # --- Phase 4: derived-table rebuild scoping ---------------------------------

@@ -215,6 +215,50 @@ def test_qualifying_survey_takes_precedence_over_posting(client):
     assert row["posting_p50"] == 60000
 
 
+def test_newer_qualifying_survey_beats_older_survey_with_larger_sample(client):
+    """The rule is 'most recent qualifying survey', not 'largest sample' —
+    a genuinely newer, smaller-sample survey must win over an older one
+    with a bigger sample, exactly per prompt §10's stated precedence."""
+    with db.db_cursor() as cur:
+        archetype_id = _archetype(cur, "Date Precedence Archetype")
+        market_id = _market(cur)
+        older_doc = _document(cur)
+        newer_doc = _document(cur)
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=80000, reported_sample_size=100, document_id=older_doc, period_end=date(2024, 1, 1),
+        )
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=95000, reported_sample_size=10, document_id=newer_doc, period_end=date(2026, 1, 1),
+        )
+
+        row = engine.derive_archetype_comp(cur, archetype_id, market_id, "GBP", "base", "annual")
+    assert row["reference_source"] == "survey"
+    assert row["reference_comp"] == 95000
+
+
+def test_equal_survey_dates_tiebreak_by_sample_size_then_id(client):
+    with db.db_cursor() as cur:
+        archetype_id = _archetype(cur, "Tiebreak Archetype")
+        market_id = _market(cur)
+        same_date = date(2026, 1, 1)
+        smaller_doc = _document(cur)
+        larger_doc = _document(cur)
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=70000, reported_sample_size=8, document_id=smaller_doc, period_end=same_date,
+        )
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=90000, reported_sample_size=25, document_id=larger_doc, period_end=same_date,
+        )
+
+        row = engine.derive_archetype_comp(cur, archetype_id, market_id, "GBP", "base", "annual")
+    # Same date -> the larger-sample survey wins the tie.
+    assert row["reference_comp"] == 90000
+
+
 def test_survey_with_insufficient_sample_does_not_qualify(client):
     with db.db_cursor() as cur:
         archetype_id = _archetype(cur, "Thin Survey Archetype")
@@ -251,6 +295,43 @@ def test_survey_and_posting_never_falsely_pooled(client):
     # Survey stats are preserved as their own separate benchmark entry.
     assert len(row["survey_benchmarks"]) == 1
     assert row["survey_benchmarks"][0]["reported_p50"] == 90000
+
+
+def test_n_survey_sources_counts_distinct_documents_not_rows(client):
+    with db.db_cursor() as cur:
+        archetype_id = _archetype(cur, "Distinct Sources Archetype")
+        market_id = _market(cur)
+        one_report = _document(cur)
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=70000, reported_sample_size=10, document_id=one_report,
+        )
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=72000, reported_sample_size=12, document_id=one_report,
+        )
+
+        row = engine.derive_archetype_comp(cur, archetype_id, market_id, "GBP", "base", "annual")
+    assert row["n_survey_sources"] == 1
+
+
+def test_n_survey_sources_counts_two_reports_as_two(client):
+    with db.db_cursor() as cur:
+        archetype_id = _archetype(cur, "Two Sources Archetype")
+        market_id = _market(cur)
+        report_a = _document(cur)
+        report_b = _document(cur)
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=70000, reported_sample_size=10, document_id=report_a,
+        )
+        _observation(
+            cur, archetype_concept_id=archetype_id, market_id=market_id, basis="survey",
+            reported_p50=72000, reported_sample_size=12, document_id=report_b,
+        )
+
+        row = engine.derive_archetype_comp(cur, archetype_id, market_id, "GBP", "base", "annual")
+    assert row["n_survey_sources"] == 2
 
 
 def test_rejected_observations_never_influence_the_benchmark(client):

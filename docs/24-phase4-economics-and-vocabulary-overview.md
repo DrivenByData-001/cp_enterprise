@@ -123,7 +123,19 @@ one canonical loader, shared by `capability_engine.derive_role_fit` and
    (`superseded_by IS NULL`) **and** non-rejected (`review_status !=
    'rejected'`) — those are authoritative.
 2. Otherwise, mapped `role_skill_observation` rows whose
-   `canonical_concept_id` resolves to an **active** concept.
+   `canonical_concept_id` resolves to an **active** concept —
+   **except a concept the curator has already spoken on for this role via
+   a rejected or superseded `requirement_claim`.** Curator authority always
+   outranks a legacy observation: a rejected claim for "Python" must
+   prevent a legacy "Python" observation from resurrecting that same
+   requirement through the fallback, even though no *usable* claim exists
+   to be authoritative in its place. An unrelated concept's observation
+   (e.g. "SQL") is unaffected. If the concept's history includes a
+   superseded claim but a *current usable successor* claim also exists,
+   point 1 already handles it — the whole role takes the claim-
+   authoritative branch and this exclusion never runs; it only matters when
+   a concept's entire requirement_claim history on this role resolved to
+   nothing usable. See `role_requirements._rejected_or_superseded_concept_ids`.
 3. The two sources are **never merged** for one role.
 4. A `role_skill_observation`-sourced item always carries `basis =
    review_status = evidence_span = None` — never upgraded to "stated"
@@ -146,10 +158,22 @@ One deliberate behaviour refinement, not just a passthrough: previously
 from both the "does this role have usable claims" check and the returned
 item list — consistent with the existing `db.py` convention for the same
 table, and covered by
-`test_role_requirements.py::test_rejected_claims_do_not_block_fallback`/
+`test_role_requirements.py::test_rejected_claims_do_not_block_fallback_for_other_roles`/
 `test_rejected_or_superseded_claims_never_reappear_even_with_no_fallback`.
 Production currently has 0 capability requirement_claim rows, so this
 changes no production behaviour today.
+
+**Post-merge integrity fix**: an initial version of this loader excluded
+rejected/superseded claims from the "does the role have usable claims"
+check, but did not yet exclude their *own* concept from the observation
+fallback — meaning a rejected claim for a concept could still be
+resurrected by a legacy `role_skill_observation` mapped to that exact same
+concept. Fixed by `_rejected_or_superseded_concept_ids` (queries every
+`requirement_claim` row for the role that is rejected and/or superseded,
+independent of the caller's own state, so it is correct in isolation) and
+covered by `test_rejected_concept_cannot_reenter_through_fallback`,
+`test_superseded_concept_cannot_reenter_through_fallback`, and
+`test_superseded_concept_with_current_usable_successor_uses_claim_path`.
 
 `capability_engine.derive_role_fit` and `routes/comparison.py::compare_role`
 were updated to carry the new provenance fields (`requirement_source`,
@@ -300,6 +324,26 @@ item plus the run's own status in one short transaction.
   (`ok`/`partial`) run is blocked (`already_processed`) rather than
   accumulating repeat AI passes over the same report — review or reject the
   existing drafts first.
+- **Report date propagation (post-merge integrity fix).** Every extracted
+  observation's `observed_at` and `period_end` are set from the source
+  document's own `source_date` — the report-level date the curator supplied
+  at ingest (`MarketDataIngest.report_date`), never inferred from document
+  prose. `period_start` is deliberately never set — a single report date is
+  not a period. When the document has no known `source_date`, both stay
+  `NULL`, honestly reflecting that no date is known. Both fields are
+  exposed on every survey-observation read (`GET
+  /api/market-data/documents/{id}`, `GET
+  /api/market-data/compensation-observations`, `GET
+  /api/economics/compensation-observations`) and correctable via `PATCH
+  /api/market-data/compensation-observations/{id}` — every supplied date
+  (`report_date` at ingest, `observed_at`/`period_end` on correction) is
+  validated as a genuine ISO 8601 date before it ever reaches the database
+  (`models._validate_iso_date`), rather than surfacing as an opaque
+  Postgres error. This is what makes §9's "most recent qualifying survey"
+  benchmark-selection rule actually sortable by a real date — previously
+  every survey observation had `period_end = NULL`, so the rule's stated
+  precedence (date first, sample size only as a tiebreak) could never
+  actually be exercised in practice.
 
 ---
 
@@ -323,6 +367,15 @@ pay_period)` bucket:
    participates structurally; sample/source information is still shown
    (`n_observations`, `n_posting_stated`, `n_survey_sources`); no monetary
    figure is exposed.
+
+`n_survey_sources` counts **distinct source documents** (`DISTINCT
+document_id` among accepted survey rows in the bucket), not observation
+rows — two accepted rows extracted from the same report are one
+independent source, not two (post-merge integrity fix; a curator-asserted
+row with no linked document can never count as a source). This is the
+number the UI's "N survey source(s)" label already claimed to mean.
+`survey_benchmarks` is unaffected — it still lists every individual
+accepted survey row.
 
 `d_archetype_comp.reference_basis_detail` always records exactly which
 observation/basis was selected. Every rejected observation is excluded from
@@ -360,6 +413,14 @@ hazard" choice docs/16 §16 already made for coverage-inside-role-fit):
 - Distinct archetypes are aggregated from the roles they unlock/improve; an
   archetype with at least one unlocked role is reported as **unlocked**,
   never double-counted as also **improved**.
+- `roles_unlocked`/`roles_improved` are structural, over **every role
+  captured in this corpus**, regardless of the market/currency bucket
+  being viewed — this is deliberate (unlocking is a property of the role's
+  own requirement evidence, not of the market selector), but it means the
+  count must never be read as "vacancies observed in the selected market."
+  The UI labels this explicitly ("captured role(s) unlocked", plus a note
+  under the market selector) rather than changing the underlying
+  corpus-wide role universe — post-merge wording fix, no engine change.
 - **"Best current reachable"** = the highest qualifying `reference_comp`
   (§9) among archetypes with at least one currently-reachable role, in the
   selected market/currency, at the fixed `component='base',

@@ -984,6 +984,7 @@ export interface CompensationObservation {
   basis: 'posting_stated' | 'posting_estimated' | 'survey' | 'curator_asserted'
   review_status: 'unreviewed' | 'accepted' | 'rejected'
   observed_at: string | null
+  period_end: string | null
   document_id: string | null
   reported_sample_size: number | null
   source_note: string | null
@@ -1573,6 +1574,8 @@ export const api = {
       bonus_pct: number
       reported_sample_size: number
       source_note: string
+      observed_at: string
+      period_end: string
     }>,
   ) => req<{ id: string; status: string }>(`/market-data/compensation-observations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 

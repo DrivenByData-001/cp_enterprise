@@ -303,7 +303,11 @@ def derive_archetype_comp(cur, archetype_concept_id: str, market_id: str, curren
 
     n_posting_stated = sum(1 for o in observations if o["basis"] == "posting_stated")
     n_posting_estimated = sum(1 for o in observations if o["basis"] == "posting_estimated")
-    n_survey_sources = sum(1 for o in observations if o["basis"] == "survey")
+    # Independent *sources*, not observation rows: two accepted survey rows
+    # extracted from the same report are one source, not two. A row with no
+    # document_id (there is no such write path today, but defensively) can
+    # never be counted as an independent source.
+    n_survey_sources = len({o["document_id"] for o in observations if o["basis"] == "survey" and o["document_id"] is not None})
 
     posting_midpoints = sorted(m for o in observations if o["basis"] == "posting_stated" and (m := _posting_midpoint(o)) is not None)
     posting_p25 = posting_p50 = posting_p75 = None
