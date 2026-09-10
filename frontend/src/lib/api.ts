@@ -896,6 +896,285 @@ async function authStatus(): Promise<boolean> {
   }
 }
 
+// --- Phase 4: role archetypes -----------------------------------------------
+
+export interface RoleSummary {
+  id: string
+  title: string | null
+  organisation: string | null
+  country: string | null
+  seniority_level: string | null
+  instance_type?: string
+}
+
+export interface TitleGroup {
+  normalized_title: string
+  sample_title: string | null
+  role_count: number
+  roles: RoleSummary[]
+}
+
+export interface Archetype {
+  id: string
+  canonical_name: string
+  status: string
+  created_at: string
+  reviewed_at: string | null
+  seniority_band: string | null
+  primary_function_concept_id: string | null
+  typical_market: string | null
+  notes: string | null
+  role_count: number
+  accepted_compensation_observation_count: number
+}
+
+export interface ArchetypeDetail extends Archetype {
+  roles: RoleSummary[]
+}
+
+export interface ArchetypeCreateInput {
+  canonical_name: string
+  seniority_band?: string | null
+  primary_function_concept_id?: string | null
+  typical_market?: string | null
+  notes?: string | null
+  role_instance_ids?: string[]
+}
+
+export interface ArchetypeUpdateInput {
+  canonical_name?: string
+  seniority_band?: string | null
+  primary_function_concept_id?: string | null
+  typical_market?: string | null
+  notes?: string | null
+  status?: 'active' | 'deprecated'
+}
+
+// --- Phase 4: market + compensation observations ----------------------------
+
+export interface Market {
+  id: string
+  code: string
+  label: string
+  country: string | null
+  geography: string | null
+  domain_concept_id: string | null
+  status: string
+  notes: string | null
+  created_at: string
+}
+
+export interface CompensationObservation {
+  id: string
+  role_instance_id: string | null
+  archetype_concept_id: string | null
+  raw_role_label: string | null
+  market_id: string | null
+  component: string
+  pay_period: string
+  employment_basis: string | null
+  amount_min: number | null
+  amount_mid: number | null
+  amount_max: number | null
+  currency: string
+  reported_p25: number | null
+  reported_p50: number | null
+  reported_p75: number | null
+  bonus_pct: number | null
+  basis: 'posting_stated' | 'posting_estimated' | 'survey' | 'curator_asserted'
+  review_status: 'unreviewed' | 'accepted' | 'rejected'
+  observed_at: string | null
+  document_id: string | null
+  reported_sample_size: number | null
+  source_note: string | null
+  page_reference?: string | null
+  table_reference?: string | null
+  created_at: string
+  reviewed_at: string | null
+}
+
+export interface CompensationObservationCreateInput {
+  role_instance_id?: string | null
+  archetype_concept_id?: string | null
+  raw_role_label?: string | null
+  market_id: string
+  component: string
+  pay_period: string
+  employment_basis?: string | null
+  amount_min?: number | null
+  amount_mid?: number | null
+  amount_max?: number | null
+  currency: string
+  reported_p25?: number | null
+  reported_p50?: number | null
+  reported_p75?: number | null
+  bonus_pct?: number | null
+  observed_at?: string | null
+  reported_sample_size?: number | null
+  source_note?: string | null
+}
+
+export interface BackfillSummary {
+  roles_considered: number
+  observations_created: number
+  observations_already_present: number
+  skipped_no_currency: number
+  unassigned_market: number
+}
+
+// --- Phase 4: derived economics tables --------------------------------------
+
+export interface ArchetypeDemandRow {
+  archetype_concept_id: string
+  capability_concept_id: string
+  canonical_name: string
+  roles_in_archetype: number
+  roles_demanding_capability: number
+  demand_rate: number | null
+  required_count: number
+  preferred_count: number
+  contextual_count: number
+  source_role_ids: string[]
+  trace: Record<string, unknown>
+  engine_version: string
+  computed_at: string
+}
+
+export interface ArchetypeCompRow {
+  archetype_concept_id: string
+  archetype_name: string
+  market_id: string
+  market_label: string
+  period_start: string
+  period_end: string
+  currency: string
+  component: string
+  pay_period: string
+  n_observations: number
+  n_posting_stated: number
+  n_posting_estimated: number
+  n_survey_sources: number
+  posting_p25: number | null
+  posting_p50: number | null
+  posting_p75: number | null
+  survey_benchmarks: Array<{
+    observation_id: string
+    reported_p25: number | null
+    reported_p50: number | null
+    reported_p75: number | null
+    amount_mid: number | null
+    reported_sample_size: number | null
+    source_note: string | null
+  }>
+  reference_comp: number | null
+  reference_source: 'survey' | 'posting' | null
+  reference_basis_detail: Record<string, unknown> | null
+  trace: Record<string, unknown>
+  engine_version: string
+  computed_at: string
+}
+
+export interface GapValueContext {
+  market_id: string
+  market_label: string
+  currency: string
+}
+
+export interface GapValueRow {
+  capability_concept_id: string
+  canonical_name: string
+  market_id: string
+  period_start: string
+  period_end: string
+  currency: string
+  archetypes_unlocked: number
+  archetypes_improved: number
+  roles_unlocked: number
+  roles_improved: number
+  reference_comp_unlocked: number | null
+  comp_delta_vs_best_current_reachable: number | null
+  n_comp_observations: number
+  evidence_quality: 'insufficient' | 'thin' | 'moderate' | 'good'
+  rank: number | null
+  trace: {
+    capability_name?: string
+    best_current_reachable?: number | null
+    unlocked_archetype_ids?: string[]
+    improved_archetype_ids?: string[]
+    roles?: Array<{ role_instance_id: string; effect: 'unlocked' | 'improved' }>
+    [key: string]: unknown
+  }
+  engine_version: string
+  computed_at: string
+}
+
+export interface Phase4RebuildSummary {
+  engine_version: string
+  archetype_demand: { computed: number; removed_stale: number; engine_version: string }
+  archetype_comp: { computed: number; removed_stale: number; engine_version: string }
+  gap_value: { computed: number; removed_stale: number; engine_version: string; buckets: number }
+}
+
+export interface Phase4Readiness {
+  capability_agreement: { measured: boolean; value: number | null; n: number; note?: string }
+  total_active_archetypes: number
+  archetypes_with_assigned_roles: number
+  accepted_compensation_observations: number
+  accepted_posting_stated_observations: number
+  accepted_survey_observations: number
+  compensation_sample_sufficiency: 'sufficient' | 'insufficient'
+  engine_version: string
+}
+
+// --- Phase 4: market survey documents ---------------------------------------
+
+export interface MarketSurveyDocument {
+  id: string
+  title: string | null
+  source: string | null
+  url: string | null
+  source_date: string | null
+  captured_at: string | null
+  source_payload: { publisher?: string; report_title?: string; report_date?: string; methodology_notes?: string }
+  created_at: string
+}
+
+export interface MarketSurveyDocumentDetail extends MarketSurveyDocument {
+  content_text: string
+  observations: CompensationObservation[]
+  extraction_runs: Array<{ id: string; status: string; started_at: string; finished_at: string | null; error_message: string | null }>
+}
+
+export interface MarketDataIngestInput {
+  text: string
+  publisher?: string
+  report_title?: string
+  report_date?: string
+  source_url?: string
+  methodology_notes?: string
+}
+
+export interface ExtractionResult {
+  document_id: string
+  extraction_run_id: string
+  status: string
+  observations_created?: number
+  items_skipped_incomplete?: number
+  error?: string
+}
+
+// --- Phase 4: accepted vocabulary overview ----------------------------------
+
+export interface AcceptedVocabularyOverview {
+  total_active_concepts: number
+  by_type: Array<{ type_code: string; count: number }>
+  missing_definition: { count: number; concept_ids: string[] }
+  no_active_dossier: { count: number; concept_ids: string[] }
+  dossier_no_related_concepts: { count: number; concept_ids: string[] }
+  alias_count: number
+  recent_concepts: Array<{ id: string; canonical_name: string; type_code: string; reviewed_at: string | null; created_at: string | null }>
+}
+
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -1197,4 +1476,106 @@ export const api = {
     filters: TrendFilterInput = {},
   ) => req<DimensionCompare>(`/trends/compare${trendQuery(filters, { ...requirementKeyParams(key), dimension })}`),
   getTrendMethodology: () => req<TrendMethodology>('/trends/methodology'),
+
+  // --- Phase 4: role archetypes -----------------------------------------------
+  listArchetypeTitleGroups: () => req<TitleGroup[]>('/archetypes/title-groups'),
+  listArchetypes: (status = 'active') => req<Archetype[]>(`/archetypes?status=${encodeURIComponent(status)}`),
+  getArchetype: (id: string) => req<ArchetypeDetail>(`/archetypes/${id}`),
+  createArchetype: (payload: ArchetypeCreateInput) =>
+    req<{ id: string; status: string; assigned_count: number }>('/archetypes', { method: 'POST', body: JSON.stringify(payload) }),
+  updateArchetype: (id: string, payload: ArchetypeUpdateInput) =>
+    req<{ id: string; status: string }>(`/archetypes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  assignRolesToArchetype: (id: string, roleInstanceIds: string[]) =>
+    req<{ id: string; status: string; assigned_count: number }>(`/archetypes/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ role_instance_ids: roleInstanceIds }),
+    }),
+
+  // --- Phase 4: markets + compensation observations ---------------------------
+  listMarkets: (status = 'active') => req<Market[]>(`/economics/markets?status=${encodeURIComponent(status)}`),
+  createMarket: (payload: { code: string; label: string; country?: string; geography?: string; domain_concept_id?: string; notes?: string }) =>
+    req<{ id: string; status: string }>('/economics/markets', { method: 'POST', body: JSON.stringify(payload) }),
+  updateMarket: (id: string, payload: { label?: string; country?: string; geography?: string; status?: 'active' | 'deprecated'; notes?: string }) =>
+    req<{ id: string; status: string }>(`/economics/markets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  listCompensationObservations: (
+    params: { basis?: string; review_status?: string; archetype_concept_id?: string; market_id?: string } = {},
+  ) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<CompensationObservation[]>(`/economics/compensation-observations${suffix}`)
+  },
+  createCompensationObservation: (payload: CompensationObservationCreateInput) =>
+    req<{ id: string; status: string }>('/economics/compensation-observations', { method: 'POST', body: JSON.stringify(payload) }),
+  backfillCompensation: () => req<BackfillSummary>('/economics/compensation-observations/backfill', { method: 'POST' }),
+
+  // --- Phase 4: derived economics tables --------------------------------------
+  getArchetypeDemand: (archetypeId: string) => req<ArchetypeDemandRow[]>(`/economics/archetype-demand/${archetypeId}`),
+  listArchetypeComp: (params: { archetype_concept_id?: string; market_id?: string; currency?: string } = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<ArchetypeCompRow[]>(`/economics/archetype-comp${suffix}`)
+  },
+  listGapValueContexts: () => req<GapValueContext[]>('/economics/gap-value/contexts'),
+  listGapValue: (marketId: string, currency: string) =>
+    req<GapValueRow[]>(`/economics/gap-value?market_id=${encodeURIComponent(marketId)}&currency=${encodeURIComponent(currency)}`),
+  getGapValue: (capabilityId: string, marketId: string, currency: string) =>
+    req<GapValueRow>(
+      `/economics/gap-value/${capabilityId}?market_id=${encodeURIComponent(marketId)}&currency=${encodeURIComponent(currency)}`,
+    ),
+  rebuildEconomics: () => req<Phase4RebuildSummary>('/economics/rebuild', { method: 'POST' }),
+  getPhase4Readiness: () => req<Phase4Readiness>('/economics/readiness'),
+
+  // --- Phase 4: market survey documents (Market Data) -------------------------
+  listMarketDataDocuments: () => req<MarketSurveyDocument[]>('/market-data/documents'),
+  getMarketDataDocument: (id: string) => req<MarketSurveyDocumentDetail>(`/market-data/documents/${id}`),
+  ingestMarketDataText: (payload: MarketDataIngestInput) =>
+    req<{ id: string; duplicate_of_document_id: string | null; status: string }>('/market-data/documents/ingest', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  ingestMarketDataPdf: (file: File, meta: Omit<MarketDataIngestInput, 'text'> = {}) => {
+    const form = new FormData()
+    form.append('file', file)
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(meta)) if (v) qs.set(k, v)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return fetch(`/api/market-data/documents/ingest/pdf${suffix}`, { method: 'POST', body: form }).then(async (r) => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+      return r.json() as Promise<{ id: string; duplicate_of_document_id: string | null; status: string }>
+    })
+  },
+  extractMarketData: (documentId: string) => req<ExtractionResult>(`/market-data/documents/${documentId}/extract`, { method: 'POST' }),
+  listDraftCompensationObservations: (reviewStatus: 'unreviewed' | 'accepted' | 'rejected' = 'unreviewed') =>
+    req<CompensationObservation[]>(`/market-data/compensation-observations?review_status=${reviewStatus}`),
+  reviewCompensationObservation: (id: string, action: 'accept' | 'reject') =>
+    req<{ id: string; review_status: string }>(`/market-data/compensation-observations/${id}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  correctCompensationObservation: (
+    id: string,
+    payload: Partial<{
+      archetype_concept_id: string
+      market_id: string
+      raw_role_label: string
+      component: string
+      pay_period: string
+      employment_basis: string
+      amount_min: number
+      amount_mid: number
+      amount_max: number
+      currency: string
+      reported_p25: number
+      reported_p50: number
+      reported_p75: number
+      bonus_pct: number
+      reported_sample_size: number
+      source_note: string
+    }>,
+  ) => req<{ id: string; status: string }>(`/market-data/compensation-observations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  // --- Phase 4: accepted vocabulary overview -----------------------------------
+  getAcceptedVocabularyOverview: () => req<AcceptedVocabularyOverview>('/vocabulary/accepted-overview'),
 }

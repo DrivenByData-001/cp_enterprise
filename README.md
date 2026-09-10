@@ -15,7 +15,14 @@ that catalogue from the captured corpus for curator review, and a corpus
 trend-analytics layer (Trends) answers "what has this corpus historically
 required, and how has that changed" with sample sizes and a documented,
 non-predictive trend classification — see
-`docs/18-consolidation-and-analytical-foundation.md`.
+`docs/18-consolidation-and-analytical-foundation.md`. Since Phase 4, an
+Economics page turns curated role archetypes and evidence-backed
+compensation observations (posting-derived and recruiter/survey) into a
+capability gap-value ranking — which reachable roles pay more, and which
+capability gaps would unlock them — always with its sample size/source
+basis alongside the figure, and never a claim about your actual salary
+(this app does not track that) — see
+`docs/24-phase4-economics-and-vocabulary-overview.md`.
 
 **Persistence is Postgres** (a Supabase project in production; any Postgres —
 including a disposable local one — for development and tests). SQLite is no
@@ -106,6 +113,13 @@ kept for reproducibility.
   text with a small local model (`BAAI/bge-small-en-v1.5` via `fastembed`,
   downloaded once on first use, runs on CPU) and stores vectors in Postgres via
   `pgvector`.
+- **Economic facts always name their market and source; nothing is pooled
+  that shouldn't be.** A recruiter survey benchmark and an individual
+  posting's advertised range are different statistical objects and are
+  never blended into one figure; estimated posting salary never counts as
+  stated; a gap-value ranking is a counterfactual about structural
+  opportunity, never a claim that you've acquired the capability. See
+  `docs/24-phase4-economics-and-vocabulary-overview.md`.
 - **Target-role decomposition is still manual**, on purpose (see
   `docs/13-ai-task-layer.md` §1): paste `prompts/decompose_target_role.md`
   into Claude/ChatGPT, paste the resulting JSON into the Add Target page.
@@ -183,6 +197,15 @@ see `docs/20-render-deployment.md` §8 for the full design and
     documented classification, never a forecast), how they compare by
     country/seniority/track, and what co-occurs together. Every number
     carries its own sample size. See docs/18 §7/§8/§9.
+4b. **Economics** — market economics/compensation/gap value (Phase 4):
+    curate role archetypes from unassigned observed postings, capture
+    posting-derived and recruiter/survey compensation evidence with full
+    provenance, and see which capability gaps would unlock higher-paid
+    reachable roles — always with the sample size/source basis alongside
+    the figure, never a bare number, and never your actual salary (this
+    app does not track that — see docs/24 §2). Below a 5-observation
+    threshold, no monetary figure is shown at all. See
+    `docs/24-phase4-economics-and-vocabulary-overview.md`.
 5. **Targets** — a role you're navigating towards, real or imagined. Give
    `prompts/decompose_target_role.md` (plus supporting material) to
    Claude/ChatGPT, paste the resulting JSON into the Add Target page.
@@ -258,18 +281,23 @@ split-tracking columns) plus a 2026 Role Detail rendering fix.
 `docs/22-concept-vocabulary-maintenance-and-dossiers.md` covers the
 permanent fix for the remaining 2026 Role Detail crash (a malformed
 `top_adjacent_roles` JSON string), accepted-concept metadata/type-safety
-editing, and the newest table, `concept_dossier`.
+editing, and the `concept_dossier` table.
+`docs/24-phase4-economics-and-vocabulary-overview.md` covers Phase 4's five
+new tables (`market`, `compensation_observation`, `d_archetype_demand`,
+`d_archetype_comp`, `d_gap_value`) and the Accepted Vocabulary overview.
 
 ## Deliberately out of scope for now
 
-- Compensation/economics: gap-value ranking, archetype compensation,
-  `d_gap_value`, monetary gap ranking, learning-time/transition-effort
-  estimates (doc 11 Phase 4/5) — Phase 3 stops at the structural evidence
-  picture (four states, blocking gaps), deliberately before anything
-  monetary. See `docs/16-phase3-capability-engine.md` §17.
-- `salary_benchmarks` / compensation modelling (doc 11 Phase 4).
-- Prerequisite/adjacent/substitutable capability graphs and any transition-
-  effort judgment layer (doc 11 Phase 5).
+- Personal salary-history tracking — deferred until profile360 exposes a
+  structured compensation source; "current benchmark" in the Economics
+  page means the best reference among structurally reachable roles, never
+  your actual salary. See `docs/24-phase4-economics-and-vocabulary-overview.md` §2.
+- Multi-period (year-over-year) compensation comparison — Phase 4 v1
+  computes one rolling "to date" snapshot per bucket. See docs/24 §10.
+- Prerequisite/adjacent/substitutable capability graphs, transition-effort/
+  learning-time judgment, and "potential" (doc 11 Phase 5, doc 12 §1) —
+  deliberately last, so nothing evidence-backed gets contaminated by
+  judgment that can't be grounded the same way.
 - Actuarial exam tracking.
 - OCR for scanned/image-only PDFs — selectable-text PDFs only for now.
 - A general-purpose web scraper for discovering candidate postings (brief

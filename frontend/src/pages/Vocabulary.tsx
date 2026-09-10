@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import ConceptDetailsDrawer from '../components/ConceptDetailsDrawer'
 import {
   api,
+  type AcceptedVocabularyOverview,
   type BatchAcceptItemInput,
   type BatchPreviewResult,
   type ClusterSplitPreviewResult,
@@ -834,17 +835,37 @@ function AddConceptForm({ conceptTypes, onAdded }: { conceptTypes: ConceptType[]
   )
 }
 
+export interface ConceptBrowserFocus {
+  typeCode?: string
+  conceptIds?: string[]
+  label?: string
+}
+
 function ConceptBrowser({
   conceptTypes,
   refreshSignal,
   onOpenDetails,
+  focus,
+  onClearFocus,
 }: {
   conceptTypes: ConceptType[]
   refreshSignal: number
   onOpenDetails: (conceptId: string) => void
+  focus?: ConceptBrowserFocus | null
+  onClearFocus?: () => void
 }) {
   const [browseType, setBrowseType] = useState('')
   const [concepts, setConcepts] = useState<Concept[]>([])
+
+  // An overview-panel click (Accepted Vocabulary overview) overrides the
+  // type filter and/or narrows to an explicit id set — cleared either by the
+  // curator (Clear filter) or by picking a different type manually. Any new
+  // focus resets the type filter to exactly what that click implies (its own
+  // type, or "all types" for an id-set click that spans every type), so a
+  // stale type filter from an earlier click never hides matching concepts.
+  useEffect(() => {
+    if (focus) setBrowseType(focus.typeCode ?? '')
+  }, [focus])
 
   const reload = () => api.listConcepts({ type_code: browseType || undefined }).then(setConcepts)
 
@@ -853,11 +874,19 @@ function ConceptBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browseType, refreshSignal])
 
+  const visibleConcepts = focus?.conceptIds ? concepts.filter((c) => focus.conceptIds!.includes(c.id)) : concepts
+
   return (
     <section style={{ marginTop: 28 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>Concepts</h2>
-        <select value={browseType} onChange={(e) => setBrowseType(e.target.value)}>
+        <select
+          value={browseType}
+          onChange={(e) => {
+            setBrowseType(e.target.value)
+            onClearFocus?.()
+          }}
+        >
           <option value="">All types</option>
           {conceptTypes.map((t) => (
             <option key={t.code} value={t.code}>
@@ -866,12 +895,20 @@ function ConceptBrowser({
           ))}
         </select>
       </div>
+      {focus?.conceptIds && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          Showing {visibleConcepts.length} concept(s){focus.label ? ` — ${focus.label}` : ''}.{' '}
+          <button style={{ fontSize: 12, padding: '1px 8px' }} onClick={onClearFocus}>
+            Clear filter
+          </button>
+        </p>
+      )}
       <div style={{ marginBottom: 12 }}>
         <AddConceptForm conceptTypes={conceptTypes} onAdded={reload} />
       </div>
-      {concepts.length === 0 && <p className="muted">No concepts yet in this type.</p>}
+      {visibleConcepts.length === 0 && <p className="muted">No concepts match.</p>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {concepts.map((c) => (
+        {visibleConcepts.map((c) => (
           <div key={c.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
             <div>
               <div style={{ fontWeight: 600 }}>{c.canonical_name}</div>
@@ -896,6 +933,110 @@ function ConceptBrowser({
   )
 }
 
+// --- Accepted Vocabulary overview (Phase 4 prompt §14) ----------------------
+//
+// Lightweight, curation-focused counts over the accepted vocabulary only —
+// deliberately not an ontology dashboard, no semantic-overlap scoring, no AI
+// call. Only rendered when viewing Accepted (never clutters the Pending
+// queue). Clicking a count narrows the existing Concept Browser below to
+// exactly the affected concepts, via the `focus` prop it already supports.
+
+function AcceptedVocabularyOverviewPanel({
+  refreshSignal,
+  onFocus,
+}: {
+  refreshSignal: number
+  onFocus: (focus: ConceptBrowserFocus) => void
+}) {
+  const [overview, setOverview] = useState<AcceptedVocabularyOverview | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api
+      .getAcceptedVocabularyOverview()
+      .then(setOverview)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }, [refreshSignal])
+
+  if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
+  if (!overview) return <p className="muted">Loading accepted vocabulary overview…</p>
+
+  const countButtonStyle: React.CSSProperties = {
+    display: 'block',
+    fontSize: 12,
+    padding: '2px 8px',
+    background: 'none',
+    border: '1px solid var(--text-muted)',
+    borderRadius: 8,
+    cursor: 'pointer',
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h2 style={{ fontSize: 15, margin: 0 }}>Accepted Vocabulary overview</h2>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {overview.total_active_concepts} active concepts · {overview.alias_count} alias(es)
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+        {overview.by_type.map((row) => (
+          <button
+            key={row.type_code}
+            type="button"
+            style={countButtonStyle}
+            onClick={() => onFocus({ typeCode: row.type_code, label: row.type_code })}
+          >
+            {row.type_code}: <strong>{row.count}</strong>
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+        <button
+          type="button"
+          style={countButtonStyle}
+          onClick={() => onFocus({ conceptIds: overview.missing_definition.concept_ids, label: 'missing a definition' })}
+          disabled={overview.missing_definition.count === 0}
+        >
+          Missing definition: <strong>{overview.missing_definition.count}</strong>
+        </button>
+        <button
+          type="button"
+          style={countButtonStyle}
+          onClick={() => onFocus({ conceptIds: overview.no_active_dossier.concept_ids, label: 'no active Concept Dossier' })}
+          disabled={overview.no_active_dossier.count === 0}
+        >
+          No active dossier: <strong>{overview.no_active_dossier.count}</strong>
+        </button>
+        <button
+          type="button"
+          style={countButtonStyle}
+          onClick={() =>
+            onFocus({ conceptIds: overview.dossier_no_related_concepts.concept_ids, label: "dossier has no related concepts" })
+          }
+          disabled={overview.dossier_no_related_concepts.count === 0}
+        >
+          Dossier w/ no related concepts: <strong>{overview.dossier_no_related_concepts.count}</strong>
+        </button>
+      </div>
+      {overview.recent_concepts.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <p className="muted" style={{ fontSize: 12, margin: '0 0 4px' }}>
+            Recently accepted/reviewed
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {overview.recent_concepts.map((c) => (
+              <span key={c.id} style={{ fontSize: 12 }} className="muted">
+                {c.canonical_name} ({c.type_code})
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // --- main page ---------------------------------------------------------------
 
 export default function Vocabulary() {
@@ -912,6 +1053,7 @@ export default function Vocabulary() {
   const [error, setError] = useState<string | null>(null)
   const [drawerConceptId, setDrawerConceptId] = useState<string | null>(null)
   const [conceptRefreshSignal, setConceptRefreshSignal] = useState(0)
+  const [browserFocus, setBrowserFocus] = useState<ConceptBrowserFocus | null>(null)
 
   const reloadClusters = () =>
     api.listVocabClusters({ ...filters, limit: PAGE_SIZE, offset }).then((res) => {
@@ -989,6 +1131,13 @@ export default function Vocabulary() {
       <ProgressPanel progress={progress} />
       <MethodologyPanel methodology={methodology} />
       <FilterBar filters={filters} onChange={setFilters} />
+
+      {filters.status === 'accepted' && (
+        <AcceptedVocabularyOverviewPanel
+          refreshSignal={conceptRefreshSignal}
+          onFocus={(focus) => setBrowserFocus(focus)}
+        />
+      )}
 
       {loading && <p className="muted">Loading…</p>}
       {!loading && clusters.length === 0 && <p className="muted">Nothing matches the current filters.</p>}
@@ -1071,7 +1220,13 @@ export default function Vocabulary() {
         />
       )}
 
-      <ConceptBrowser conceptTypes={conceptTypes} refreshSignal={conceptRefreshSignal} onOpenDetails={setDrawerConceptId} />
+      <ConceptBrowser
+        conceptTypes={conceptTypes}
+        refreshSignal={conceptRefreshSignal}
+        onOpenDetails={setDrawerConceptId}
+        focus={browserFocus}
+        onClearFocus={() => setBrowserFocus(null)}
+      />
 
       {drawerConceptId && (
         <ConceptDetailsDrawer

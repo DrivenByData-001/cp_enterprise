@@ -500,6 +500,217 @@ class ConceptDossierGenerateRequest(BaseModel):
     guidance: Optional[str] = None
 
 
+# --- Phase 4: role archetypes (backend/app/routes/archetypes.py) -----------
+#
+# A role archetype is one jobber.concept row (type_code='role_archetype')
+# plus one role_archetype_detail row, created/edited together — the same
+# two-row-created-together pattern CapabilityCreate/CapabilityUpdate already
+# use for capability_detail (prompt §3).
+
+class ArchetypeCreate(BaseModel):
+    canonical_name: str
+    seniority_band: Optional[str] = None
+    primary_function_concept_id: Optional[str] = None
+    typical_market: Optional[str] = None
+    notes: Optional[str] = None
+    role_instance_ids: list[str] = []
+
+
+class ArchetypeUpdate(BaseModel):
+    canonical_name: Optional[str] = None
+    seniority_band: Optional[str] = None
+    primary_function_concept_id: Optional[str] = None
+    typical_market: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None  # active | deprecated — never hard-deleted
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.status is not None and self.status not in ("active", "deprecated"):
+            raise ValueError("status must be one of active, deprecated")
+        return self
+
+
+class ArchetypeAssign(BaseModel):
+    role_instance_ids: list[str]
+
+    @model_validator(mode="after")
+    def _check(self):
+        if not self.role_instance_ids:
+            raise ValueError("role_instance_ids must not be empty")
+        return self
+
+
+# --- Phase 4: market dimension (backend/app/routes/economics.py) -----------
+
+class MarketCreate(BaseModel):
+    code: str
+    label: str
+    country: Optional[str] = None
+    geography: Optional[str] = None
+    domain_concept_id: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MarketUpdate(BaseModel):
+    label: Optional[str] = None
+    country: Optional[str] = None
+    geography: Optional[str] = None
+    domain_concept_id: Optional[str] = None
+    status: Optional[str] = None  # active | deprecated
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.status is not None and self.status not in ("active", "deprecated"):
+            raise ValueError("status must be one of active, deprecated")
+        return self
+
+
+# --- Phase 4: compensation observations -------------------------------------
+
+_COMPENSATION_COMPONENTS = ("base", "bonus_pct", "total_package", "day_rate")
+_PAY_PERIODS = ("annual", "daily")
+_EMPLOYMENT_BASES = ("permanent", "contract", "unknown")
+
+
+class CompensationObservationCreate(BaseModel):
+    """Curator-asserted compensation observation — the one path that lets a
+    human directly record a benchmark with no posting/survey document behind
+    it (basis is always forced to 'curator_asserted' server-side, never
+    accepted from the payload, per prompt §16 "every economic fact has a
+    source" — this endpoint IS that source)."""
+
+    role_instance_id: Optional[str] = None
+    archetype_concept_id: Optional[str] = None
+    raw_role_label: Optional[str] = None
+    market_id: str
+    component: str
+    pay_period: str
+    employment_basis: Optional[str] = None
+    amount_min: Optional[float] = None
+    amount_mid: Optional[float] = None
+    amount_max: Optional[float] = None
+    currency: str
+    reported_p25: Optional[float] = None
+    reported_p50: Optional[float] = None
+    reported_p75: Optional[float] = None
+    bonus_pct: Optional[float] = None
+    observed_at: Optional[str] = None
+    reported_sample_size: Optional[int] = None
+    source_note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.component not in _COMPENSATION_COMPONENTS:
+            raise ValueError(f"component must be one of {_COMPENSATION_COMPONENTS}")
+        if self.pay_period not in _PAY_PERIODS:
+            raise ValueError(f"pay_period must be one of {_PAY_PERIODS}")
+        if self.employment_basis is not None and self.employment_basis not in _EMPLOYMENT_BASES:
+            raise ValueError(f"employment_basis must be one of {_EMPLOYMENT_BASES}")
+        if not (self.role_instance_id or self.archetype_concept_id or self.raw_role_label):
+            raise ValueError("one of role_instance_id, archetype_concept_id, raw_role_label is required")
+        return self
+
+
+class CompensationObservationReview(BaseModel):
+    action: str  # accept | reject
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.action not in ("accept", "reject"):
+            raise ValueError("action must be one of accept, reject")
+        return self
+
+
+class CompensationObservationCorrect(BaseModel):
+    """PATCH .../compensation-observations/{id} — correcting extracted
+    numeric/assignment fields before or after review (prompt §8's "correct
+    extracted numeric fields", "assign/change role archetype",
+    "assign/change market"). Every field optional; only supplied fields
+    change."""
+
+    archetype_concept_id: Optional[str] = None
+    market_id: Optional[str] = None
+    raw_role_label: Optional[str] = None
+    component: Optional[str] = None
+    pay_period: Optional[str] = None
+    employment_basis: Optional[str] = None
+    amount_min: Optional[float] = None
+    amount_mid: Optional[float] = None
+    amount_max: Optional[float] = None
+    currency: Optional[str] = None
+    reported_p25: Optional[float] = None
+    reported_p50: Optional[float] = None
+    reported_p75: Optional[float] = None
+    bonus_pct: Optional[float] = None
+    reported_sample_size: Optional[int] = None
+    source_note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.component is not None and self.component not in _COMPENSATION_COMPONENTS:
+            raise ValueError(f"component must be one of {_COMPENSATION_COMPONENTS}")
+        if self.pay_period is not None and self.pay_period not in _PAY_PERIODS:
+            raise ValueError(f"pay_period must be one of {_PAY_PERIODS}")
+        if self.employment_basis is not None and self.employment_basis not in _EMPLOYMENT_BASES:
+            raise ValueError(f"employment_basis must be one of {_EMPLOYMENT_BASES}")
+        return self
+
+
+# --- Phase 4: market survey document ingestion (backend/app/routes/market_data.py) --
+
+class MarketDataIngest(BaseModel):
+    text: str
+    publisher: Optional[str] = None
+    report_title: Optional[str] = None
+    report_date: Optional[str] = None
+    source_url: Optional[str] = None
+    methodology_notes: Optional[str] = None
+
+
+# --- Phase 4: derived-table rebuild scoping ---------------------------------
+
+class GapValueQuery(BaseModel):
+    market_id: str
+    currency: str
+
+
+# --- Phase 4: market survey AI extraction (backend/app/market_data_processing.py) --
+#
+# Output schema for compensation_extract. Deliberately loose/optional on
+# every field — "do not infer missing sample sizes or precise percentiles"
+# (prompt §8) — validated against the DB's controlled vocab only at
+# persistence time; an item whose component/pay_period/currency cannot be
+# recognised is dropped rather than guessed.
+
+class MarketSurveyExtractionItem(BaseModel):
+    raw_role_label: Optional[str] = None
+    geography: Optional[str] = None
+    domain_or_practice_area: Optional[str] = None
+    seniority_band: Optional[str] = None
+    employment_basis: Optional[str] = None  # permanent | contract | unknown
+    component: Optional[str] = None  # base | bonus_pct | total_package | day_rate
+    pay_period: Optional[str] = None  # annual | daily
+    amount_min: Optional[float] = None
+    amount_mid: Optional[float] = None
+    amount_max: Optional[float] = None
+    currency: Optional[str] = None
+    reported_p25: Optional[float] = None
+    reported_p50: Optional[float] = None
+    reported_p75: Optional[float] = None
+    bonus_pct: Optional[float] = None
+    reported_sample_size: Optional[int] = None
+    page_reference: Optional[str] = None
+    table_reference: Optional[str] = None
+    source_note: Optional[str] = None
+
+
+class MarketSurveyExtractionResult(BaseModel):
+    items: list[MarketSurveyExtractionItem] = []
+    methodology_notes: Optional[str] = None
+
+
 class ConceptDossierManualEdit(BaseModel):
     """PUT .../dossier — a curator's direct edit of the active dossier's
     content. Deliberately excludes `related_concepts`: those are an AI
