@@ -62,7 +62,7 @@ def _safe_task_metadata() -> tuple[str, str]:
 
 
 def _load_document(cur, document_id: str) -> dict:
-    cur.execute("SELECT id, kind, content_text FROM jobber.document WHERE id = %s", (document_id,))
+    cur.execute("SELECT id, kind, content_text, source_date FROM jobber.document WHERE id = %s", (document_id,))
     row = cur.fetchone()
     if not row:
         raise DocumentNotFoundError(f"document {document_id!r} not found")
@@ -104,11 +104,22 @@ def _mark_run_failed(run_id: str, *, error_type: str, error_message: str) -> Non
         )
 
 
-def _persist_draft_observations(document_id: str, run_id: str, items, ai_run) -> dict:
+def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, source_date) -> dict:
     """One short atomic transaction: every draft row plus the run's own
     output/status linkage. A currency is upper-cased for consistency with
     the posting backfill's convention; never otherwise normalised or
-    converted (prompt §16: no FX conversion, ever)."""
+    converted (prompt §16: no FX conversion, ever).
+
+    `source_date` — the immutable market_survey document's own
+    `source_date`/report date, as supplied by the curator at ingest (prompt
+    §2) — becomes both `observed_at` and `period_end` on every row this
+    extraction produces, so the reference-compensation rule's "most recent
+    qualifying survey" can actually sort by a real date instead of every
+    survey collapsing to the same `NULL`. `period_start` is deliberately
+    never set here — a single report date is not a period, and inventing
+    one would be exactly the false precision this build avoids elsewhere.
+    When the document has no known source_date, both stay `NULL`, honestly
+    reflecting that no date is known — never guessed from document text."""
     created = skipped_incomplete = 0
     with db_cursor() as cur:
         for i, item in enumerate(items):
@@ -123,9 +134,9 @@ def _persist_draft_observations(document_id: str, run_id: str, items, ai_run) ->
                     (source_key, raw_role_label, component, pay_period, employment_basis, currency,
                      amount_min, amount_mid, amount_max, reported_p25, reported_p50, reported_p75, bonus_pct,
                      basis, review_status, document_id, page_reference, table_reference, source_note,
-                     reported_sample_size, extraction_run_id)
+                     reported_sample_size, extraction_run_id, observed_at, period_end)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s)
+                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (source_key) DO NOTHING
                 RETURNING id
                 """,
@@ -134,7 +145,7 @@ def _persist_draft_observations(document_id: str, run_id: str, items, ai_run) ->
                     employment_basis, currency, item.amount_min, item.amount_mid, item.amount_max,
                     item.reported_p25, item.reported_p50, item.reported_p75, item.bonus_pct,
                     document_id, item.page_reference, item.table_reference, item.source_note,
-                    item.reported_sample_size, run_id,
+                    item.reported_sample_size, run_id, source_date, source_date,
                 ),
             )
             created += 1 if cur.fetchone() else 0
@@ -191,7 +202,7 @@ def process_market_data_document(document_id: str) -> dict:
         return {"document_id": document_id, "extraction_run_id": run_id, "status": "failed", "error": str(e), "error_type": type(e).__name__}
 
     try:
-        persisted = _persist_draft_observations(document_id, run_id, ai_result.output.items, ai_result.run)
+        persisted = _persist_draft_observations(document_id, run_id, ai_result.output.items, ai_result.run, document["source_date"])
     except Exception as e:
         _mark_run_failed(run_id, error_type=type(e).__name__, error_message=f"persistence failed: {e}")
         return {"document_id": document_id, "extraction_run_id": run_id, "status": "failed", "error": str(e), "error_type": type(e).__name__}

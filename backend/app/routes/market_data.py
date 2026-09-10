@@ -65,7 +65,8 @@ def get_document(document_id: str):
         cur.execute(
             "SELECT id, raw_role_label, market_id, archetype_concept_id, component, pay_period, employment_basis, "
             "amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, bonus_pct, "
-            "reported_sample_size, page_reference, table_reference, source_note, review_status, created_at, reviewed_at "
+            "reported_sample_size, page_reference, table_reference, source_note, review_status, observed_at, "
+            "period_end, created_at, reviewed_at "
             "FROM jobber.compensation_observation WHERE document_id = %s ORDER BY created_at",
             (document_id,),
         )
@@ -162,7 +163,8 @@ def list_draft_observations(review_status: str = "unreviewed"):
             "SELECT id, raw_role_label, market_id, archetype_concept_id, component, pay_period, "
             "employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "
             "reported_p50, reported_p75, bonus_pct, reported_sample_size, page_reference, "
-            "table_reference, source_note, review_status, document_id, created_at, reviewed_at "
+            "table_reference, source_note, review_status, document_id, observed_at, period_end, "
+            "created_at, reviewed_at "
             "FROM jobber.compensation_observation WHERE basis = 'survey' AND review_status = %s "
             "ORDER BY created_at DESC",
             (review_status,),

@@ -86,7 +86,7 @@ def list_compensation_observations(
     query = (
         "SELECT id, role_instance_id, archetype_concept_id, raw_role_label, market_id, component, pay_period, "
         "employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, "
-        "bonus_pct, basis, review_status, observed_at, document_id, reported_sample_size, source_note, "
+        "bonus_pct, basis, review_status, observed_at, period_end, document_id, reported_sample_size, source_note, "
         "created_at, reviewed_at FROM jobber.compensation_observation WHERE 1=1"
     )
     params: list = []

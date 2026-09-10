@@ -116,10 +116,11 @@ def test_observation_mapped_to_inactive_concept_is_ignored(client):
     assert items == []
 
 
-def test_rejected_claims_do_not_block_fallback(client):
+def test_rejected_claims_do_not_block_fallback_for_other_roles(client):
     """A role whose only requirement_claim rows are rejected has no *usable*
     claims, so it must fall through to the observation fallback rather than
-    being treated as having zero requirements."""
+    being treated as having zero requirements — for concepts the rejected
+    claim did not itself touch."""
     with db.db_cursor() as cur:
         role_id = _role(cur)
         rejected_concept_id = _concept(cur, "Rejected thing")
@@ -134,7 +135,30 @@ def test_rejected_claims_do_not_block_fallback(client):
     assert items[0]["concept_id"] == fallback_concept_id
 
 
-def test_superseded_claims_do_not_block_fallback(client):
+def test_rejected_concept_cannot_reenter_through_fallback(client):
+    """A rejected claim for Python must prevent a legacy Python observation
+    from resurrecting Python — but must NOT prevent an unrelated SQL
+    observation from being used."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        python_id = _concept(cur, "Python")
+        _claim_requirement(cur, role_id, python_id, review_status="rejected")
+        _observation(cur, role_id, surface_form="Python", canonical_concept_id=python_id)
+
+        sql_id = _concept(cur, "SQL")
+        _observation(cur, role_id, surface_form="SQL", canonical_concept_id=sql_id)
+
+        items = load_role_requirements(cur, role_id)
+    concept_ids = {item["concept_id"] for item in items}
+    assert python_id not in concept_ids
+    assert sql_id in concept_ids
+    assert len(items) == 1
+
+
+def test_superseded_concept_cannot_reenter_through_fallback(client):
+    """Only-superseded history (no usable successor claim) for a concept
+    must prevent that same concept's legacy observation from resurrecting
+    it — an unrelated observation is unaffected."""
     with db.db_cursor() as cur:
         role_id = _role(cur)
         old_concept_id = _concept(cur, "Old thing")
@@ -142,14 +166,36 @@ def test_superseded_claims_do_not_block_fallback(client):
         cur.execute("UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s", (old_claim_id, old_claim_id))
         # A self-superseded row is still superseded (superseded_by IS NOT NULL) —
         # simplest way to exercise the exclusion without a second row.
+        _observation(cur, role_id, surface_form="Old thing", canonical_concept_id=old_concept_id)
 
         fallback_concept_id = _concept(cur, "Python")
         _observation(cur, role_id, surface_form="Python", canonical_concept_id=fallback_concept_id)
 
         items = load_role_requirements(cur, role_id)
+    concept_ids = {item["concept_id"] for item in items}
+    assert old_concept_id not in concept_ids
+    assert fallback_concept_id in concept_ids
     assert len(items) == 1
-    assert items[0]["source"] == "role_skill_observation"
-    assert items[0]["concept_id"] == fallback_concept_id
+
+
+def test_superseded_concept_with_current_usable_successor_uses_claim_path(client):
+    """If the concept is represented by a current usable successor claim,
+    the normal authoritative-claim path handles it — the whole role takes
+    the claim-authoritative branch, and fallback (with its exclusion logic)
+    never runs at all."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        concept_id = _concept(cur, "Reserving")
+        old_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="preferred")
+        new_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="required")
+        cur.execute("UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s", (new_claim_id, old_claim_id))
+        _observation(cur, role_id, surface_form="Reserving", canonical_concept_id=concept_id)
+
+        items = load_role_requirements(cur, role_id)
+    assert len(items) == 1
+    assert items[0]["source"] == "claim"
+    assert items[0]["requirement_claim_id"] == new_claim_id
+    assert items[0]["requirement_type"] == "required"
 
 
 def test_rejected_or_superseded_claims_never_reappear_even_with_no_fallback(client):
