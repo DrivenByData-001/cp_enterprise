@@ -1,0 +1,117 @@
+name: integrate-outstanding-branches
+
+on:
+  push:
+    branches:
+      - chatgpt/integrate-outstanding-branches
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Fetch source branches
+        run: |
+          git fetch origin chatgpt/profile360-salary-history:refs/remotes/origin/chatgpt/profile360-salary-history
+          git fetch origin chatgpt/phase4-market-data-refinement:refs/remotes/origin/chatgpt/phase4-market-data-refinement
+      - name: Integrate safe branch changes
+        run: |
+          git show origin/chatgpt/profile360-salary-history:backend/migrations/0014_profile360_compensation_history.sql > backend/migrations/0015_profile360_compensation_history.sql
+          git show origin/chatgpt/profile360-salary-history:backend/migrations/manual/9001_enable_profile360_rls.sql > backend/migrations/manual/9001_enable_profile360_rls.sql
+          git show origin/chatgpt/profile360-salary-history:backend/scripts/local_baseline.sql > backend/scripts/local_baseline.sql
+          git show origin/chatgpt/profile360-salary-history:backend/tests/test_profile360_compensation_history.py > backend/tests/test_profile360_compensation_history.py
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('backend/app/market_data_processing.py')
+          s = p.read_text()
+          marker = '\n\ndef _safe_task_metadata() -> tuple[str, str]:\n'
+          helper = '''\n\ndef source_quality_for_sample_size(sample_size: int | None) -> str:\n    if sample_size is None:\n        return "document_linked_unknown_sample"\n    if sample_size >= 5:\n        return "explicit_sample_n_ge_5"\n    return "explicit_sample_n_lt_5"\n'''
+          if 'def source_quality_for_sample_size' not in s:
+              s = s.replace(marker, helper + marker)
+          old = '''            if item.reported_sample_size is None:\n                source_quality = "document_linked_unknown_sample"\n            elif item.reported_sample_size >= 5:\n                source_quality = "explicit_sample_n_ge_5"\n            else:\n                source_quality = "explicit_sample_n_lt_5"\n'''
+          s = s.replace(old, '            source_quality = source_quality_for_sample_size(item.reported_sample_size)\n')
+          p.write_text(s)
+
+          p = Path('backend/app/routes/market_data.py')
+          s = p.read_text()
+          s = s.replace('    process_market_data_document,\n)', '    process_market_data_document,\n    source_quality_for_sample_size,\n)')
+          s = s.replace('SELECT id, status, started_at, finished_at, error_message FROM jobber.extraction_run ', 'SELECT id, status, started_at, finished_at, error_message, output_payload FROM jobber.extraction_run ')
+          needle = '''    if not fields:\n        return {"id": observation_id, "status": "unchanged"}\n\n    with db_cursor() as cur:\n'''
+          replacement = '''    if not fields:\n        return {"id": observation_id, "status": "unchanged"}\n\n    if "reported_sample_size" in fields:\n        fields["source_quality"] = source_quality_for_sample_size(fields["reported_sample_size"])\n\n    with db_cursor() as cur:\n'''
+          s = s.replace(needle, replacement)
+          p.write_text(s)
+
+          p = Path('prompts/extract_market_survey.md')
+          s = p.read_text()
+          s = s.replace(
+              '''1. Extract every distinct role/practice compensation row you can find in the\n   text. Each row becomes one item in the `items` array.\n''',
+              '''1. Extract every distinct compensation row you can identify. Each economically\n   distinct row becomes one item in the `items` array. Keep separate rows when\n   the source separates geography, practice area, seniority, total experience,\n   PQE, or compensation component.\n'''
+          )
+          s = s.replace(
+              '''2. This is closed extraction, not judgment: only extract numbers and labels\n   that are actually present in the text. Never estimate, infer, or fill in\n   a missing sample size, percentile, or currency — leave the field `null`\n   instead. A survey that reports only a mean/average, or only a range, must\n   not have percentiles invented to fit the schema.\n''',
+              '''2. This is closed extraction, not judgment: only extract numbers and labels\n   actually present in the text. Never estimate, infer, or fill in a missing\n   sample size, percentile, currency, experience band, PQE band, or period.\n   Leave the field `null` instead. A survey that reports only a mean/average,\n   or only a range, must not have percentiles invented to fit the schema.\n'''
+          )
+          s = s.replace(
+              '''3. Do not decide which canonical role archetype a row belongs to. Extract\n   the report's own label verbatim into `raw_role_label` — a human curator\n   assigns archetypes afterwards.\n''',
+              '''3. Do not decide which canonical role archetype a row belongs to. Preserve the\n   report's own nearest role/band wording in `raw_role_label`; a human curator\n   assigns canonical archetypes afterwards. Do not silently discard segmentation\n   merely because the report uses an experience/PQE band rather than a\n   conventional job title.\n'''
+          )
+          anchor = '## Field-by-field guidance\n\n'
+          extra = '''- `raw_role_label`: preserve the source's own role or band wording; do not replace it with a canonical role.\n- `geography`: use the geography actually attached to the row, not a broader report scope when the row is more specific.\n- `domain_or_practice_area`: preserve the report's own practice/sector label, e.g. `Life`, `Non-Life`, `Pensions`, or `Reinsurance`.\n- `seniority_band`: preserve an explicitly stated seniority/qualification band where useful and distinct from the raw role label.\n'''
+          if extra not in s:
+              s = s.replace(anchor, anchor + extra)
+          s = s.replace(
+              '''- `source_kind`: `respondent_survey`, `recruiter_benchmark`, or `other` only\n  when the report's methodology clearly supports that classification; leave\n  null if unclear.\n''',
+              '''- `source_kind`: classify each row only when the report's methodology supports it: `respondent_survey` for respondent/participant statistics, `recruiter_benchmark` for placement/offer/mandate-book/direct-market ranges, or `other` when compensation evidence is present but neither specific class is supported. Leave null if unclear; never infer quality from the publisher's brand.\n'''
+          )
+          p.write_text(s)
+
+          p = Path('backend/tests/test_market_data_refinement.py')
+          s = p.read_text()
+          test = '''\n\ndef test_source_quality_helper_keeps_curator_sample_edits_consistent():\n    assert mdp.source_quality_for_sample_size(None) == "document_linked_unknown_sample"\n    assert mdp.source_quality_for_sample_size(4) == "explicit_sample_n_lt_5"\n    assert mdp.source_quality_for_sample_size(5) == "explicit_sample_n_ge_5"\n'''
+          if 'test_source_quality_helper_keeps_curator_sample_edits_consistent' not in s:
+              s += test
+          p.write_text(s)
+          PY
+          rm .github/workflows/integrate-outstanding-branches.yml
+      - name: Install backend
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests
+        run: cd backend && pytest -q
+      - name: Frontend checks
+        run: cd frontend && npm ci && npm run lint && npm run build
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Integrate safe outstanding branch changes"
+          git push origin HEAD:chatgpt/integrate-outstanding-branches
