@@ -1,0 +1,102 @@
+name: chatgpt-phase4-refine-v2
+
+on:
+  push:
+    branches:
+      - chatgpt/phase4-market-ingestion-refinement
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/phase4-market-ingestion-refinement
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply original refinement and fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          wf = Path('.github/workflows/chatgpt-phase4-refine.yml')
+          lines = wf.read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == '- name: Apply refinement')
+          run_line = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'run: |')
+          end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name: Install backend'))
+          script_lines = []
+          for line in lines[run_line + 1:end]:
+              script_lines.append(line[10:] if line.startswith('          ') else line)
+          script = '\n'.join(script_lines) + '\n'
+          exec(compile(script, '<phase4-refinement>', 'exec'), {'__name__': '__main__'})
+
+          route = Path('backend/app/routes/market_data.py')
+          text = route.read_text()
+          marker = 'def list_draft_observations'
+          pos = text.index(marker)
+          before, after = text[:pos], text[pos:]
+          old = '"SELECT id, raw_role_label, market_id, archetype_concept_id, component, pay_period, employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "'
+          new = '"SELECT co.id, raw_role_label, market_id, archetype_concept_id, component, pay_period, employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "'
+          if old not in after:
+              raise SystemExit('draft observation SELECT prefix not found')
+          route.write_text(before + after.replace(old, new, 1))
+
+          proc = Path('backend/app/market_data_processing.py')
+          plines = proc.read_text().splitlines()
+          changed = False
+          for i, line in enumerate(plines):
+              if "'survey', 'unreviewed'," in line and '%s' in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  plines[i] = indent + "'survey', 'unreviewed', " + ', '.join(['%s'] * 15) + ')'
+                  changed = True
+                  break
+          if not changed:
+              raise SystemExit('survey VALUES placeholder line not found')
+          proc.write_text('\n'.join(plines) + '\n')
+
+          Path('.github/workflows/chatgpt-phase4-refine-v2.yml').unlink()
+      - name: Install backend
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          APP_SESSION_SECRET: test-secret-test-secret-test-secret
+          APP_AUTH_PASSWORD_HASH: $2b$04$K2Y7c4xIazgZxwGQ8xZ1yO5vXQFf3B5o33msyK3V8HdCJSM9M2k/u
+        run: |
+          cd backend
+          pytest -q
+      - name: Frontend checks
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - name: Commit generated refinement
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Refine Phase 4 market report ingestion and benchmark quality"
+          git push origin HEAD:chatgpt/phase4-market-ingestion-refinement
