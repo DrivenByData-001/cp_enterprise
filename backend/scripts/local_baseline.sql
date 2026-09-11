@@ -24,11 +24,11 @@
 -- profile360.claims/capabilities/episodes, so migrations now genuinely
 -- require *something* at those tables to apply at all — even for a
 -- jobber-only local setup that will never touch the profile360-mapping
--- features. Every table below (`claims`/`capabilities`/`episodes`/
+-- features. Every table below (`claims`/`capabilities`/`documents`/`episodes`/
 -- `snapshots`/`manual_import_queue`) matches the columns confirmed by live
--- inspection of the real `open-brain.profile360` project (docs/14 §5/§6) —
--- this stub is a realistic production stand-in, not an `id`-only
--- approximation.
+-- inspection of the real `open-brain.profile360` project (docs/14 §5/§6 and
+-- the 2026-09-11 compensation-history preflight) — this stub is a realistic
+-- production stand-in, not an `id`-only approximation.
 --
 -- Usage: applied by backend/tests/conftest.py before run_migrations(), and by
 -- hand for local dev against a from-scratch Postgres:
@@ -62,6 +62,22 @@ CREATE TABLE IF NOT EXISTS profile360.capabilities (
     uncertainty        TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS profile360.documents (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_key       TEXT NOT NULL UNIQUE,
+    title            TEXT NOT NULL,
+    source_type      TEXT NOT NULL,
+    source_date      TEXT,
+    immutable        BOOLEAN NOT NULL DEFAULT true,
+    notes            TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    content_markdown TEXT,
+    content_sha256   TEXT,
+    content_bytes    INTEGER,
+    content_archive  BYTEA,
+    content_encoding TEXT
 );
 
 CREATE TABLE IF NOT EXISTS profile360.episodes (

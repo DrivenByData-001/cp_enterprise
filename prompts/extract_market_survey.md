@@ -4,16 +4,20 @@ consultancy salary guide, a market survey, a benchmarking report, etc).
 
 Your task:
 
-1. Extract every distinct role/practice compensation row you can find in the
-   text. Each row becomes one item in the `items` array.
+1. Extract every distinct compensation row you can identify. Each economically
+   distinct row becomes one item in the `items` array. Keep separate rows when
+   the source separates geography, practice area, seniority, total experience,
+   PQE, or compensation component.
 2. This is closed extraction, not judgment: only extract numbers and labels
-   that are actually present in the text. Never estimate, infer, or fill in
-   a missing sample size, percentile, or currency — leave the field `null`
-   instead. A survey that reports only a mean/average, or only a range, must
-   not have percentiles invented to fit the schema.
-3. Do not decide which canonical role archetype a row belongs to. Extract
-   the report's own label verbatim into `raw_role_label` — a human curator
-   assigns archetypes afterwards.
+   actually present in the text. Never estimate, infer, or fill in a missing
+   sample size, percentile, currency, experience band, PQE band, or period.
+   Leave the field `null` instead. A survey that reports only a mean/average,
+   or only a range, must not have percentiles invented to fit the schema.
+3. Do not decide which canonical role archetype a row belongs to. Preserve the
+   report's own nearest role/band wording in `raw_role_label`; a human curator
+   assigns canonical archetypes afterwards. Do not silently discard segmentation
+   merely because the report uses an experience/PQE band rather than a
+   conventional job title.
 4. Output a single clean JSON object that follows the schema below —
    nothing else. If a field is missing or cannot be determined, set it to
    `null` (do not omit fields).
@@ -21,6 +25,10 @@ Your task:
 
 ## Field-by-field guidance
 
+- `raw_role_label`: preserve the source's own role or band wording; do not replace it with a canonical role.
+- `geography`: use the geography actually attached to the row, not a broader report scope when the row is more specific.
+- `domain_or_practice_area`: preserve the report's own practice/sector label, e.g. `Life`, `Non-Life`, `Pensions`, or `Reinsurance`.
+- `seniority_band`: preserve an explicitly stated seniority/qualification band where useful and distinct from the raw role label.
 - `component`: what the amount(s) in this row represent —
   `base` (base salary only), `bonus_pct` (a bonus as a percentage of base),
   `total_package` (base + bonus + benefits combined, however the report
@@ -46,9 +54,7 @@ Your task:
   average. Keep it separate from the median/p50 and from `amount_mid`.
 - `experience_band` / `pqe_band`: preserve the report's own total-experience
   and post-qualification-experience band wording verbatim when present.
-- `source_kind`: `respondent_survey`, `recruiter_benchmark`, or `other` only
-  when the report's methodology clearly supports that classification; leave
-  null if unclear.
+- `source_kind`: classify each row only when the report's methodology supports it: `respondent_survey` for respondent/participant statistics, `recruiter_benchmark` for placement/offer/mandate-book/direct-market ranges, or `other` when compensation evidence is present but neither specific class is supported. Leave null if unclear; never infer quality from the publisher's brand.
 - `reported_sample_size`: only when the report explicitly states how many
   respondents/data points a figure is based on. Never estimate this from
   phrases like "based on our extensive network" — that is not a number.

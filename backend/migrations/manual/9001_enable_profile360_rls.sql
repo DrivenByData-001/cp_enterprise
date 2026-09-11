@@ -19,12 +19,13 @@
 -- than something that happens automatically the first time the app starts.
 --
 -- THE THREAT MODEL THIS CLOSES: live inspection of open-brain.profile360 on
--- 2026-09-03 found RLS disabled on 11 of its 12 tables (only
--- manual_import_queue already had it enabled) — which means, on a Supabase
--- project, that anyone holding only the public anon key can read (and via
--- PostgREST, potentially write) the user's personal career evidence
--- directly, bypassing every application-layer control entirely. That is the
--- "known issue" the brief names in §15.
+-- 2026-09-03 found RLS disabled on 11 of its 12 then-existing tables (only
+-- manual_import_queue already had it enabled). The later personal-compensation
+-- migration adds compensation_observation and compensation_evidence; they are
+-- included here too so a future deliberate RLS enablement cannot accidentally
+-- leave salary history exposed. On a Supabase project, RLS-disabled tables may
+-- otherwise be reachable to holders of a public anon key via PostgREST,
+-- bypassing application-layer controls entirely.
 --
 -- THE ASSUMPTION THAT MAKES THIS SAFE: Supabase's `service_role` Postgres role
 -- (and any custom role granted BYPASSRLS) ignores RLS entirely, by Postgres
@@ -48,13 +49,15 @@ DO $$
 DECLARE
     tbl TEXT;
 BEGIN
-    -- All 11 tables confirmed to have RLS disabled at review time.
-    -- profile360.manual_import_queue already has RLS enabled and is
-    -- deliberately not touched here.
+    -- All profile360 tables that should be private-by-default. The original
+    -- 11 were confirmed RLS-disabled at review time; the two compensation
+    -- tables were added later. profile360.manual_import_queue already has RLS
+    -- enabled and is deliberately not touched here.
     FOREACH tbl IN ARRAY ARRAY[
         'documents', 'episodes', 'concepts', 'claims', 'evidence',
         'claim_concepts', 'capabilities', 'capability_claims',
-        'contradictions', 'open_questions', 'snapshots'
+        'contradictions', 'open_questions', 'snapshots',
+        'compensation_observation', 'compensation_evidence'
     ]
     LOOP
         IF EXISTS (
