@@ -22,6 +22,7 @@ action (`routes/market_data.py::correct_observation`). A malformed item
 and counted in the run's own summary."""
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from .ai import AIConfigError, AITaskError, ai_model_name, load_prompt, prompt_version, run_json_task
 from .db import db_cursor, to_json_param
@@ -49,7 +50,27 @@ class DocumentNotProcessableError(MarketDataProcessingError):
     pass
 
 
+ReportSourceType = Literal["respondent_survey", "recruiter_benchmark", "market_report"]
+
+
+class MarketSurveyExtractionEnvelope(MarketSurveyExtractionResult):
+    """Extraction output plus report-level methodology metadata.
+
+    `report_source_type` describes the report's stated methodology as a whole.
+    It is kept on the extraction run and never becomes a competing observation
+    schema field; row-level `source_kind` remains the durable observation fact.
+    """
+
+    report_source_type: ReportSourceType | None = None
+
+
 def source_quality_for_sample_size(sample_size: int | None) -> str:
+    """Classify evidence strength without claiming statistical validation.
+
+    This label records whether row-level sample evidence was published. It is
+    not a consensus score, a provider rating, or proof that a benchmark is
+    representative of the market. Curator review remains a separate gate.
+    """
     if sample_size is None:
         return "document_linked_unknown_sample"
     if sample_size >= 5:
@@ -112,7 +133,7 @@ def _mark_run_failed(run_id: str, *, error_type: str, error_message: str) -> Non
         )
 
 
-def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, source_date) -> dict:
+def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, source_date, report_source_type=None, methodology_notes=None) -> dict:
     """One short atomic transaction: every draft row plus the run's own
     output/status linkage. A currency is upper-cased for consistency with
     the posting backfill's convention; never otherwise normalised or
@@ -167,7 +188,13 @@ def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, so
             "model = %s, prompt_version = %s, input_chars = %s, output_chars = %s WHERE id = %s",
             (
                 run_status,
-                to_json_param({"items_extracted": len(items), "items_created": created, "items_skipped_incomplete": skipped_incomplete}),
+                to_json_param({
+                    "items_extracted": len(items),
+                    "items_created": created,
+                    "items_skipped_incomplete": skipped_incomplete,
+                    "report_source_type": report_source_type,
+                    "methodology_notes": methodology_notes,
+                }),
                 ai_run.model, ai_run.prompt_version, ai_run.input_chars, ai_run.output_chars, run_id,
             ),
         )
@@ -206,14 +233,22 @@ def process_market_data_document(document_id: str) -> dict:
 
     try:
         ai_result = run_json_task(
-            task=TASK, prompt_name=PROMPT_NAME, user_input=document["content_text"], output_model=MarketSurveyExtractionResult,
+            task=TASK, prompt_name=PROMPT_NAME, user_input=document["content_text"], output_model=MarketSurveyExtractionEnvelope,
         )
     except AITaskError as e:
         _mark_run_failed(run_id, error_type=type(e).__name__, error_message=str(e))
         return {"document_id": document_id, "extraction_run_id": run_id, "status": "failed", "error": str(e), "error_type": type(e).__name__}
 
     try:
-        persisted = _persist_draft_observations(document_id, run_id, ai_result.output.items, ai_result.run, document["source_date"])
+        persisted = _persist_draft_observations(
+            document_id,
+            run_id,
+            ai_result.output.items,
+            ai_result.run,
+            document["source_date"],
+            getattr(ai_result.output, "report_source_type", None),
+            ai_result.output.methodology_notes,
+        )
     except Exception as e:
         _mark_run_failed(run_id, error_type=type(e).__name__, error_message=f"persistence failed: {e}")
         return {"document_id": document_id, "extraction_run_id": run_id, "status": "failed", "error": str(e), "error_type": type(e).__name__}
@@ -224,5 +259,7 @@ def process_market_data_document(document_id: str) -> dict:
         "status": persisted["status"],
         "observations_created": persisted["created"],
         "items_skipped_incomplete": persisted["skipped_incomplete"],
+        "report_source_type": getattr(ai_result.output, "report_source_type", None),
+        "methodology_notes": ai_result.output.methodology_notes,
         "model": ai_result.run.model,
     }
