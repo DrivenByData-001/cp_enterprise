@@ -49,6 +49,14 @@ class DocumentNotProcessableError(MarketDataProcessingError):
     pass
 
 
+def source_quality_for_sample_size(sample_size: int | None) -> str:
+    if sample_size is None:
+        return "document_linked_unknown_sample"
+    if sample_size >= 5:
+        return "explicit_sample_n_ge_5"
+    return "explicit_sample_n_lt_5"
+
+
 def _safe_task_metadata() -> tuple[str, str]:
     try:
         model = ai_model_name()
@@ -128,12 +136,7 @@ def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, so
                 skipped_incomplete += 1
                 continue
             employment_basis = item.employment_basis if item.employment_basis in _VALID_EMPLOYMENT_BASES else None
-            if item.reported_sample_size is None:
-                source_quality = "document_linked_unknown_sample"
-            elif item.reported_sample_size >= 5:
-                source_quality = "explicit_sample_n_ge_5"
-            else:
-                source_quality = "explicit_sample_n_lt_5"
+            source_quality = source_quality_for_sample_size(item.reported_sample_size)
             cur.execute(
                 """
                 INSERT INTO jobber.compensation_observation

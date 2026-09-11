@@ -70,3 +70,9 @@ def test_unknown_sample_recruiter_range_can_use_labelled_derived_midpoint():
     assert result["reference_comp"] == 172000
     assert result["reference_basis_detail"]["statistic"] == "derived_range_midpoint"
     assert result["reference_basis_detail"]["source_kind"] == "recruiter_benchmark"
+
+
+def test_source_quality_helper_keeps_curator_sample_edits_consistent():
+    assert mdp.source_quality_for_sample_size(None) == "document_linked_unknown_sample"
+    assert mdp.source_quality_for_sample_size(4) == "explicit_sample_n_lt_5"
+    assert mdp.source_quality_for_sample_size(5) == "explicit_sample_n_ge_5"

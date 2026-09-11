@@ -16,6 +16,7 @@ from ..market_data_processing import (
     DocumentNotFoundError,
     DocumentNotProcessableError,
     process_market_data_document,
+    source_quality_for_sample_size,
 )
 from ..models import CompensationObservationCorrect, CompensationObservationReview, MarketDataIngest
 
@@ -74,7 +75,7 @@ def get_document(document_id: str):
         document["observations"] = [_observation_row(r) for r in cur.fetchall()]
 
         cur.execute(
-            "SELECT id, status, started_at, finished_at, error_message FROM jobber.extraction_run "
+            "SELECT id, status, started_at, finished_at, error_message, output_payload FROM jobber.extraction_run "
             "WHERE task = 'compensation_extract' AND document_id = %s ORDER BY started_at DESC",
             (document_id,),
         )
@@ -197,6 +198,9 @@ def correct_observation(observation_id: str, payload: CompensationObservationCor
     fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
     if not fields:
         return {"id": observation_id, "status": "unchanged"}
+
+    if "reported_sample_size" in fields:
+        fields["source_quality"] = source_quality_for_sample_size(fields["reported_sample_size"])
 
     with db_cursor() as cur:
         if "market_id" in fields:

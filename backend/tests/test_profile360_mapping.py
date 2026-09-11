@@ -58,7 +58,7 @@ def test_reader_raises_for_unreachable_table(client):
         with pytest.raises(Profile360UnavailableError):
             from app.profile360_reader import fetch_rows
 
-            fetch_rows(cur, "documents")  # allowlisted by name, but this fake schema never created it
+            fetch_rows(cur, "contradictions")  # allowlisted by name, but the local baseline deliberately does not create it
 
 
 def test_reader_rejects_non_allowlisted_table(client):
