@@ -1,0 +1,75 @@
+name: chatgpt-phase4-range-midpoint
+on:
+  push:
+    branches: [chatgpt/phase4-market-ingestion-refinement]
+permissions:
+  contents: write
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/phase4-market-ingestion-refinement
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Patch range-only benchmark support
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('backend/app/economics_engine.py')
+          text = p.read_text()
+          old = '''        if o.get("reported_mean") is not None:\n            return o["reported_mean"], "reported_mean"\n        return None, None\n'''
+          new = '''        if o.get("reported_mean") is not None:\n            return o["reported_mean"], "reported_mean"\n        if o.get("amount_min") is not None and o.get("amount_max") is not None:\n            return (float(o["amount_min"]) + float(o["amount_max"])) / 2.0, "derived_range_midpoint"\n        return None, None\n'''
+          if old not in text:
+              raise SystemExit('central statistic block not found')
+          p.write_text(text.replace(old, new, 1))
+
+          t = Path('backend/tests/test_market_data_refinement.py')
+          text = t.read_text()
+          text += '''\n\ndef test_unknown_sample_recruiter_range_can_use_labelled_derived_midpoint():\n    row = _survey("cavehill", n=None, end=date(2026, 6, 30), source_quality="document_linked_unknown_sample")\n    row["source_kind"] = "recruiter_benchmark"\n    row["amount_min"] = 144000\n    row["amount_max"] = 200000\n    result = select_reference_compensation([row])\n    assert result["reference_comp"] == 172000\n    assert result["reference_basis_detail"]["statistic"] == "derived_range_midpoint"\n    assert result["reference_basis_detail"]["source_kind"] == "recruiter_benchmark"\n'''
+          t.write_text(text)
+          Path('.github/workflows/chatgpt-phase4-range-midpoint.yml').unlink()
+      - name: Install backend
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          APP_SESSION_SECRET: test-secret-test-secret-test-secret
+          APP_AUTH_PASSWORD_HASH: $2b$04$K2Y7c4xIazgZxwGQ8xZ1yO5vXQFf3B5o33msyK3V8HdCJSM9M2k/u
+        run: |
+          cd backend
+          pytest -q
+      - name: Frontend build
+        run: |
+          cd frontend
+          npm ci
+          npx tsc -b
+          npx oxlint .
+          npm run build
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Support range-only recruiter benchmarks transparently"
+          git push origin HEAD:chatgpt/phase4-market-ingestion-refinement
