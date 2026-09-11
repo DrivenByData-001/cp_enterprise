@@ -100,6 +100,14 @@ jobs:
           if 'test_source_quality_helper_keeps_curator_sample_edits_consistent' not in s:
               s += test
           p.write_text(s)
+
+          p = Path('backend/tests/test_profile360_mapping.py')
+          s = p.read_text()
+          s = s.replace(
+              'fetch_rows(cur, "documents")  # allowlisted by name, but this fake schema never created it',
+              'fetch_rows(cur, "contradictions")  # allowlisted by name, but the local baseline deliberately does not create it',
+          )
+          p.write_text(s)
           PY
           rm .github/workflows/integrate-outstanding-branches.yml
       - name: Install backend
