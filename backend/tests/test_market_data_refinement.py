@@ -3,11 +3,15 @@ from datetime import date
 from app import ai
 from app import market_data_processing as mdp
 from app.economics_engine import select_reference_compensation
-from app.models import MarketSurveyExtractionItem, MarketSurveyExtractionResult
+from app.models import MarketSurveyExtractionItem
 
 
-def _fake_result(items):
-    output = MarketSurveyExtractionResult(items=[MarketSurveyExtractionItem(**item) for item in items])
+def _fake_result(items, *, report_source_type=None, methodology_notes=None):
+    output = mdp.MarketSurveyExtractionEnvelope(
+        items=[MarketSurveyExtractionItem(**item) for item in items],
+        report_source_type=report_source_type,
+        methodology_notes=methodology_notes,
+    )
     run = ai.AITaskRun(task=mdp.TASK, model="test-model", prompt_name=mdp.PROMPT_NAME, prompt_version="test", started_at="2026-01-01T00:00:00+00:00", finished_at="2026-01-01T00:00:01+00:00", status="ok", input_chars=10, output_chars=10)
     return ai.AITaskResult(output=output, run=run)
 
@@ -76,3 +80,54 @@ def test_source_quality_helper_keeps_curator_sample_edits_consistent():
     assert mdp.source_quality_for_sample_size(None) == "document_linked_unknown_sample"
     assert mdp.source_quality_for_sample_size(4) == "explicit_sample_n_lt_5"
     assert mdp.source_quality_for_sample_size(5) == "explicit_sample_n_ge_5"
+
+
+def test_report_methodology_is_preserved_as_extraction_metadata(client, monkeypatch):
+    doc = client.post(
+        "/api/market-data/documents/ingest",
+        json={
+            "text": "Cavehill representative recruiter benchmark",
+            "publisher": "Cavehill Consulting Group",
+            "report_title": "H1 2026 Review",
+            "report_date": "2026-06-30",
+        },
+    ).json()
+    monkeypatch.setattr(
+        mdp,
+        "run_json_task",
+        lambda **kw: _fake_result(
+            [{
+                "raw_role_label": "Actuarial Manager (Capital / Reporting)",
+                "geography": "Dublin",
+                "domain_or_practice_area": "Life",
+                "source_kind": "recruiter_benchmark",
+                "component": "base",
+                "pay_period": "annual",
+                "currency": "EUR",
+                "amount_min": 92000,
+                "amount_max": 128000,
+            }],
+            report_source_type="recruiter_benchmark",
+            methodology_notes="Placement evidence, candidate offers and direct market conversations.",
+        ),
+    )
+
+    response = client.post(f"/api/market-data/documents/{doc['id']}/extract")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report_source_type"] == "recruiter_benchmark"
+    assert "Placement evidence" in body["methodology_notes"]
+
+    detail = client.get(f"/api/market-data/documents/{doc['id']}").json()
+    payload = detail["extraction_runs"][0]["output_payload"]
+    assert payload["report_source_type"] == "recruiter_benchmark"
+    assert "candidate offers" in payload["methodology_notes"]
+    assert detail["observations"][0]["source_kind"] == "recruiter_benchmark"
+    assert "report_source_type" not in detail["observations"][0]
+
+
+def test_market_survey_prompt_forbids_copying_overall_sample_to_each_row():
+    prompt = mdp.load_prompt(mdp.PROMPT_NAME)
+    assert "overall report" in prompt
+    assert "must not be copied into every row" in prompt
+    assert "not a source-quality score or a claim of statistical validation" in prompt

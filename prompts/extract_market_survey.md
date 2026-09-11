@@ -23,6 +23,23 @@ Your task:
    `null` (do not omit fields).
 5. Be consistent and deterministic in structure and naming.
 
+## Report-level methodology
+
+Set `report_source_type` once for the report, and only from methodology or
+provenance that the report itself states:
+
+- `respondent_survey` — compensation statistics derived from survey
+  respondents or participants;
+- `recruiter_benchmark` — salary ranges or benchmarks based on placements,
+  candidate offers, mandate books, or direct recruiter market conversations;
+- `market_report` — compensation evidence is present but the stated
+  methodology does not support either more specific classification.
+
+If the methodology is mixed or unclear, use `null`. This is provenance
+metadata, not a source-quality score or a claim of statistical validation.
+It is retained on the extraction run; it does not replace row-level
+`source_kind`.
+
 ## Field-by-field guidance
 
 - `raw_role_label`: preserve the source's own role or band wording; do not replace it with a canonical role.
@@ -54,10 +71,12 @@ Your task:
   average. Keep it separate from the median/p50 and from `amount_mid`.
 - `experience_band` / `pqe_band`: preserve the report's own total-experience
   and post-qualification-experience band wording verbatim when present.
-- `source_kind`: classify each row only when the report's methodology supports it: `respondent_survey` for respondent/participant statistics, `recruiter_benchmark` for placement/offer/mandate-book/direct-market ranges, or `other` when compensation evidence is present but neither specific class is supported. Leave null if unclear; never infer quality from the publisher's brand.
+- `source_kind`: classify the row only when the evidence behind that row supports it: `respondent_survey` for respondent/participant statistics, `recruiter_benchmark` for placement/offer/mandate-book/direct-market ranges, or `other` when compensation evidence is present but neither specific class is supported. If one clearly stated report-wide methodology applies uniformly to all compensation rows, the same classification may be repeated on those rows. If the report mixes evidence types, classify each row separately or leave it null. Never infer quality from the publisher's brand.
 - `reported_sample_size`: only when the report explicitly states how many
-  respondents/data points a figure is based on. Never estimate this from
-  phrases like "based on our extensive network" — that is not a number.
+  respondents/data points the row or figure is based on. An overall report
+  sample must not be copied into every row unless the source explicitly says
+  that whole sample underlies that row. Never estimate a row count from phrases
+  like "based on our extensive network" — that is not a number.
 - `page_reference` / `table_reference`: page number or table/figure label
   if the source text makes this identifiable (e.g. page breaks, table
   headers); otherwise `null`.
@@ -101,6 +120,7 @@ Your task:
       "source_note": "string or null"
     }
   ],
-  "methodology_notes": "string or null"
+  "methodology_notes": "string or null",
+  "report_source_type": "respondent_survey | recruiter_benchmark | market_report or null"
 }
 ```
