@@ -34,12 +34,21 @@ Your task:
   report actually distinguishes these; do not guess from the role title
   alone.
 - `amount_min` / `amount_mid` / `amount_max`: a stated range or a single
-  stated midpoint/average, exactly as given. Do not compute a midpoint
-  yourself if the report only gives a range — leave `amount_mid` null in
-  that case; a downstream system computes a labelled range midpoint if
-  needed.
+  explicitly-labelled midpoint, exactly as given. Do not put a mean/average
+  into `amount_mid`. Do not compute a midpoint yourself if the report only
+  gives a range — leave `amount_mid` null in that case; a downstream system
+  computes a labelled range midpoint if needed.
 - `reported_p25` / `reported_p50` / `reported_p75`: only when the report
-  explicitly states percentile figures.
+  explicitly states percentile figures. An explicitly-labelled median is
+  semantically p50 and must be stored in `reported_p50`; do not infer any
+  other percentile.
+- `reported_mean`: only when the report explicitly labels a value as mean or
+  average. Keep it separate from the median/p50 and from `amount_mid`.
+- `experience_band` / `pqe_band`: preserve the report's own total-experience
+  and post-qualification-experience band wording verbatim when present.
+- `source_kind`: `respondent_survey`, `recruiter_benchmark`, or `other` only
+  when the report's methodology clearly supports that classification; leave
+  null if unclear.
 - `reported_sample_size`: only when the report explicitly states how many
   respondents/data points a figure is based on. Never estimate this from
   phrases like "based on our extensive network" — that is not a number.
@@ -65,6 +74,9 @@ Your task:
       "geography": "string or null",
       "domain_or_practice_area": "string or null",
       "seniority_band": "string or null",
+      "experience_band": "string or null",
+      "pqe_band": "string or null",
+      "source_kind": "respondent_survey | recruiter_benchmark | other or null",
       "employment_basis": "permanent | contract | unknown or null",
       "component": "base | bonus_pct | total_package | day_rate or null",
       "pay_period": "annual | daily or null",
@@ -75,6 +87,7 @@ Your task:
       "reported_p25": "number or null",
       "reported_p50": "number or null",
       "reported_p75": "number or null",
+      "reported_mean": "number or null",
       "bonus_pct": "number or null",
       "reported_sample_size": "integer or null",
       "page_reference": "string or null",

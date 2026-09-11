@@ -225,8 +225,10 @@ def _accepted_observations_for_archetype(cur, archetype_concept_id: str, market_
     cur.execute(
         """
         SELECT co.id, co.basis, co.amount_min, co.amount_max, co.amount_mid,
-               co.reported_p25, co.reported_p50, co.reported_p75, co.reported_sample_size,
-               co.document_id, co.period_end, co.source_note
+               co.reported_p25, co.reported_p50, co.reported_p75, co.reported_mean, co.reported_sample_size,
+               co.document_id, co.period_end, co.source_note, co.source_quality, co.source_kind,
+               co.geography_reported, co.domain_or_practice_area, co.seniority_band_reported,
+               co.experience_band, co.pqe_band
         FROM jobber.compensation_observation co
         WHERE co.review_status = 'accepted' AND co.market_id = %s AND co.currency = %s
           AND co.component = %s AND co.pay_period = %s
@@ -241,42 +243,55 @@ def _accepted_observations_for_archetype(cur, archetype_concept_id: str, market_
 
 
 def select_reference_compensation(observations: list[dict]) -> dict:
-    """The deterministic benchmark-selection rule (prompt §10):
+    """Choose a transparent reference without treating recency as quality.
 
-    1. Prefer the most recent accepted survey benchmark with an explicit
-       p50/mid figure, reported_sample_size >= 5, and a linked source
-       document — never a posting_estimated row, never a survey with a
-       missing/sub-5 sample.
-    2. Else use the posting-derived benchmark only with >=5 posting_stated
-       observations (posting_estimated never counts toward this gate).
-    3. Else no monetary benchmark — the caller keeps structural information
-       only.
-
-    Ties among qualifying surveys break by most recent period_end, then
-    reported_sample_size, then a stable id ordering.
+    Quality tier is evaluated before recency: a document-linked survey with
+    an explicit row sample >=5 outranks an otherwise usable document-linked
+    survey whose row-level sample is simply not published. A known sample
+    below 5 does not qualify. Only after quality tier do we use report date,
+    sample size and stable id ordering. Posting evidence remains the fallback
+    and still requires >=5 stated observations.
     """
-    surveys = [o for o in observations if o["basis"] == "survey"]
-    qualifying_surveys = [
-        o
-        for o in surveys
-        if (o["reported_p50"] is not None or o["amount_mid"] is not None)
-        and o["reported_sample_size"] is not None
-        and o["reported_sample_size"] >= _SURVEY_SAMPLE_MIN
-        and o["document_id"] is not None
-    ]
-    if qualifying_surveys:
-        def _key(o):
-            return (o["period_end"] or date.min, o["reported_sample_size"], str(o["id"]))
+    def _central(o):
+        if o.get("reported_p50") is not None:
+            return o["reported_p50"], "reported_p50"
+        if o.get("amount_mid") is not None:
+            return o["amount_mid"], "stated_midpoint"
+        if o.get("reported_mean") is not None:
+            return o["reported_mean"], "reported_mean"
+        return None, None
 
-        chosen = max(qualifying_surveys, key=_key)
-        reference_comp = chosen["reported_p50"] if chosen["reported_p50"] is not None else chosen["amount_mid"]
+    qualifying = []
+    for o in observations:
+        if o["basis"] != "survey" or o.get("document_id") is None:
+            continue
+        value, statistic = _central(o)
+        if value is None:
+            continue
+        n = o.get("reported_sample_size")
+        if n is not None and n < _SURVEY_SAMPLE_MIN:
+            continue
+        quality_tier = 2 if n is not None else 1
+        qualifying.append((quality_tier, o, value, statistic))
+
+    if qualifying:
+        def _key(item):
+            quality_tier, o, _value, _statistic = item
+            return (quality_tier, o.get("period_end") or date.min, o.get("reported_sample_size") or -1, str(o["id"]))
+
+        quality_tier, chosen, reference_comp, statistic = max(qualifying, key=_key)
         return {
             "reference_comp": float(reference_comp),
             "reference_source": "survey",
             "reference_basis_detail": {
                 "observation_id": str(chosen["id"]),
-                "sample_size": chosen["reported_sample_size"],
-                "period_end": chosen["period_end"].isoformat() if chosen["period_end"] else None,
+                "document_id": str(chosen["document_id"]),
+                "sample_size": chosen.get("reported_sample_size"),
+                "source_quality": chosen.get("source_quality"),
+                "source_kind": chosen.get("source_kind"),
+                "quality_tier": "explicit_sample_n_ge_5" if quality_tier == 2 else "document_linked_unknown_sample",
+                "statistic": statistic,
+                "period_end": chosen["period_end"].isoformat() if chosen.get("period_end") else None,
             },
         }
 
@@ -322,8 +337,19 @@ def derive_archetype_comp(cur, archetype_concept_id: str, market_id: str, curren
             "reported_p25": float(o["reported_p25"]) if o["reported_p25"] is not None else None,
             "reported_p50": float(o["reported_p50"]) if o["reported_p50"] is not None else None,
             "reported_p75": float(o["reported_p75"]) if o["reported_p75"] is not None else None,
+            "reported_mean": float(o["reported_mean"]) if o["reported_mean"] is not None else None,
+            "amount_min": float(o["amount_min"]) if o["amount_min"] is not None else None,
             "amount_mid": float(o["amount_mid"]) if o["amount_mid"] is not None else None,
+            "amount_max": float(o["amount_max"]) if o["amount_max"] is not None else None,
             "reported_sample_size": o["reported_sample_size"],
+            "document_id": str(o["document_id"]) if o["document_id"] else None,
+            "source_quality": o["source_quality"],
+            "source_kind": o["source_kind"],
+            "geography_reported": o["geography_reported"],
+            "domain_or_practice_area": o["domain_or_practice_area"],
+            "seniority_band_reported": o["seniority_band_reported"],
+            "experience_band": o["experience_band"],
+            "pqe_band": o["pqe_band"],
             "source_note": o["source_note"],
         }
         for o in observations

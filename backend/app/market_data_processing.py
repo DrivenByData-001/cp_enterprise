@@ -128,24 +128,32 @@ def _persist_draft_observations(document_id: str, run_id: str, items, ai_run, so
                 skipped_incomplete += 1
                 continue
             employment_basis = item.employment_basis if item.employment_basis in _VALID_EMPLOYMENT_BASES else None
+            if item.reported_sample_size is None:
+                source_quality = "document_linked_unknown_sample"
+            elif item.reported_sample_size >= 5:
+                source_quality = "explicit_sample_n_ge_5"
+            else:
+                source_quality = "explicit_sample_n_lt_5"
             cur.execute(
                 """
                 INSERT INTO jobber.compensation_observation
                     (source_key, raw_role_label, component, pay_period, employment_basis, currency,
-                     amount_min, amount_mid, amount_max, reported_p25, reported_p50, reported_p75, bonus_pct,
+                     amount_min, amount_mid, amount_max, reported_p25, reported_p50, reported_p75, reported_mean, bonus_pct,
                      basis, review_status, document_id, page_reference, table_reference, source_note,
-                     reported_sample_size, extraction_run_id, observed_at, period_end)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s, %s, %s)
+                     reported_sample_size, source_quality, source_kind, geography_reported, domain_or_practice_area,
+                     seniority_band_reported, experience_band, pqe_band, extraction_run_id, observed_at, period_end)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (source_key) DO NOTHING
                 RETURNING id
                 """,
                 (
                     f"survey:{run_id}:{i}", item.raw_role_label, item.component, item.pay_period,
                     employment_basis, currency, item.amount_min, item.amount_mid, item.amount_max,
-                    item.reported_p25, item.reported_p50, item.reported_p75, item.bonus_pct,
+                    item.reported_p25, item.reported_p50, item.reported_p75, item.reported_mean, item.bonus_pct,
                     document_id, item.page_reference, item.table_reference, item.source_note,
-                    item.reported_sample_size, run_id, source_date, source_date,
+                    item.reported_sample_size, source_quality, item.source_kind, item.geography, item.domain_or_practice_area,
+                    item.seniority_band, item.experience_band, item.pqe_band, run_id, source_date, source_date,
                 ),
             )
             created += 1 if cur.fetchone() else 0

@@ -493,13 +493,30 @@ function DraftObservationRow({ obs, onChanged }: { obs: CompensationObservation;
 
   return (
     <div className="card">
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <strong>{obs.raw_role_label || 'Unlabelled row'}</strong>
-        <span className="muted">
-          {formatMoney(obs.amount_mid ?? obs.amount_min ?? obs.amount_max, obs.currency)} · {obs.component}/{obs.pay_period}
-          {obs.reported_sample_size ? ` · n=${obs.reported_sample_size}` : ' · sample size not reported'}
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <strong>{obs.raw_role_label || 'Unlabelled row'}</strong>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {[obs.publisher, obs.document_title, obs.report_date].filter(Boolean).join(' · ')}
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {[obs.geography_reported, obs.domain_or_practice_area, obs.seniority_band_reported, obs.experience_band && `Experience ${obs.experience_band}`, obs.pqe_band && `PQE ${obs.pqe_band}`].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+        <span className="muted" style={{ textAlign: 'right', fontSize: 12 }}>
+          {obs.component}/{obs.pay_period}
+          {obs.reported_p50 != null ? ` · median ${formatMoney(obs.reported_p50, obs.currency)}` : ''}
+          {obs.reported_mean != null ? ` · mean ${formatMoney(obs.reported_mean, obs.currency)}` : ''}
+          {obs.amount_min != null || obs.amount_max != null ? ` · range ${formatMoney(obs.amount_min, obs.currency)}–${formatMoney(obs.amount_max, obs.currency)}` : ''}
+          {obs.reported_sample_size != null ? ` · n=${obs.reported_sample_size}` : ' · sample n not published'}
+          {obs.source_kind ? ` · ${obs.source_kind.replace('_', ' ')}` : ''}
         </span>
       </div>
+      {(obs.page_reference || obs.table_reference || obs.source_note) && (
+        <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+          {[obs.page_reference && `p. ${obs.page_reference}`, obs.table_reference, obs.source_note].filter(Boolean).join(' · ')}
+        </p>
+      )}
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <select value={marketId} onChange={(e) => setMarketId(e.target.value)}>
           <option value="">Assign market…</option>
@@ -593,8 +610,11 @@ function MarketDataDocumentDetailView({ documentId, onClose }: { documentId: str
       )}
       <p style={{ fontSize: 13, fontWeight: 600, marginTop: 12 }}>Extracted observations ({doc.observations.length})</p>
       {doc.observations.map((o) => (
-        <p key={o.id} className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
-          {o.raw_role_label || '—'}: {formatMoney(o.amount_mid ?? o.amount_min, o.currency)} [{o.review_status}]
+        <p key={o.id} className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+          {o.raw_role_label || '—'} · {[o.geography_reported, o.domain_or_practice_area, o.experience_band, o.pqe_band && `PQE ${o.pqe_band}`].filter(Boolean).join(' · ')} ·
+          {o.reported_p50 != null ? ` median ${formatMoney(o.reported_p50, o.currency)}` : ''}
+          {o.reported_mean != null ? ` mean ${formatMoney(o.reported_mean, o.currency)}` : ''}
+          {o.amount_min != null || o.amount_max != null ? ` range ${formatMoney(o.amount_min, o.currency)}–${formatMoney(o.amount_max, o.currency)}` : ''} [{o.review_status}]
         </p>
       ))}
     </div>

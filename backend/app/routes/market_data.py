@@ -64,8 +64,9 @@ def get_document(document_id: str):
 
         cur.execute(
             "SELECT id, raw_role_label, market_id, archetype_concept_id, component, pay_period, employment_basis, "
-            "amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, bonus_pct, "
-            "reported_sample_size, page_reference, table_reference, source_note, review_status, observed_at, "
+            "amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, reported_mean, bonus_pct, "
+            "reported_sample_size, source_quality, source_kind, geography_reported, domain_or_practice_area, seniority_band_reported, "
+            "experience_band, pqe_band, page_reference, table_reference, source_note, review_status, observed_at, "
             "period_end, created_at, reviewed_at "
             "FROM jobber.compensation_observation WHERE document_id = %s ORDER BY created_at",
             (document_id,),
@@ -160,13 +161,15 @@ def extract(document_id: str):
 def list_draft_observations(review_status: str = "unreviewed"):
     with db_cursor() as cur:
         cur.execute(
-            "SELECT id, raw_role_label, market_id, archetype_concept_id, component, pay_period, "
+            "SELECT co.id, raw_role_label, market_id, archetype_concept_id, component, pay_period, "
             "employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "
-            "reported_p50, reported_p75, bonus_pct, reported_sample_size, page_reference, "
-            "table_reference, source_note, review_status, document_id, observed_at, period_end, "
-            "created_at, reviewed_at "
-            "FROM jobber.compensation_observation WHERE basis = 'survey' AND review_status = %s "
-            "ORDER BY created_at DESC",
+            "reported_p50, reported_p75, reported_mean, bonus_pct, reported_sample_size, source_quality, source_kind, "
+            "geography_reported, domain_or_practice_area, seniority_band_reported, experience_band, pqe_band, page_reference, "
+            "table_reference, source_note, review_status, co.document_id, co.observed_at, co.period_end, "
+            "co.created_at, co.reviewed_at, d.source AS publisher, d.title AS document_title, d.source_date AS report_date "
+            "FROM jobber.compensation_observation co LEFT JOIN jobber.document d ON d.id = co.document_id "
+            "WHERE co.basis = 'survey' AND co.review_status = %s "
+            "ORDER BY co.created_at DESC",
             (review_status,),
         )
         rows = [_observation_row(r) for r in cur.fetchall()]
