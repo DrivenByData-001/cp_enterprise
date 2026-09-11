@@ -259,6 +259,8 @@ def select_reference_compensation(observations: list[dict]) -> dict:
             return o["amount_mid"], "stated_midpoint"
         if o.get("reported_mean") is not None:
             return o["reported_mean"], "reported_mean"
+        if o.get("amount_min") is not None and o.get("amount_max") is not None:
+            return (float(o["amount_min"]) + float(o["amount_max"])) / 2.0, "derived_range_midpoint"
         return None, None
 
     qualifying = []

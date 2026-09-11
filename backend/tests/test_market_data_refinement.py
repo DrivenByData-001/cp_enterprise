@@ -59,3 +59,14 @@ def test_unknown_sample_document_linked_survey_can_be_reference_and_mean_is_pres
 def test_known_subfive_survey_does_not_qualify():
     result = select_reference_compensation([_survey("thin", n=4, end=date(2026, 6, 30), p50=100000, source_quality="explicit_sample_n_lt_5")])
     assert result["reference_comp"] is None
+
+
+def test_unknown_sample_recruiter_range_can_use_labelled_derived_midpoint():
+    row = _survey("cavehill", n=None, end=date(2026, 6, 30), source_quality="document_linked_unknown_sample")
+    row["source_kind"] = "recruiter_benchmark"
+    row["amount_min"] = 144000
+    row["amount_max"] = 200000
+    result = select_reference_compensation([row])
+    assert result["reference_comp"] == 172000
+    assert result["reference_basis_detail"]["statistic"] == "derived_range_midpoint"
+    assert result["reference_basis_detail"]["source_kind"] == "recruiter_benchmark"
