@@ -980,6 +980,7 @@ export interface CompensationObservation {
   reported_p25: number | null
   reported_p50: number | null
   reported_p75: number | null
+  reported_mean: number | null
   bonus_pct: number | null
   basis: 'posting_stated' | 'posting_estimated' | 'survey' | 'curator_asserted'
   review_status: 'unreviewed' | 'accepted' | 'rejected'
@@ -987,6 +988,16 @@ export interface CompensationObservation {
   period_end: string | null
   document_id: string | null
   reported_sample_size: number | null
+  source_quality: string | null
+  source_kind: string | null
+  geography_reported: string | null
+  domain_or_practice_area: string | null
+  seniority_band_reported: string | null
+  experience_band: string | null
+  pqe_band: string | null
+  publisher?: string | null
+  document_title?: string | null
+  report_date?: string | null
   source_note: string | null
   page_reference?: string | null
   table_reference?: string | null

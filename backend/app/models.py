@@ -656,8 +656,16 @@ class CompensationObservationCorrect(BaseModel):
     reported_p25: Optional[float] = None
     reported_p50: Optional[float] = None
     reported_p75: Optional[float] = None
+    reported_mean: Optional[float] = None
     bonus_pct: Optional[float] = None
     reported_sample_size: Optional[int] = None
+    geography_reported: Optional[str] = None
+    domain_or_practice_area: Optional[str] = None
+    seniority_band_reported: Optional[str] = None
+    experience_band: Optional[str] = None
+    pqe_band: Optional[str] = None
+    source_kind: Optional[str] = None
+    source_quality: Optional[str] = None
     source_note: Optional[str] = None
     # A curator correcting a genuinely wrong/missing report date (prompt
     # §2) — never set automatically here; extraction sets these from the
@@ -717,6 +725,9 @@ class MarketSurveyExtractionItem(BaseModel):
     geography: Optional[str] = None
     domain_or_practice_area: Optional[str] = None
     seniority_band: Optional[str] = None
+    experience_band: Optional[str] = None
+    pqe_band: Optional[str] = None
+    source_kind: Optional[str] = None  # respondent_survey | recruiter_benchmark | other
     employment_basis: Optional[str] = None  # permanent | contract | unknown
     component: Optional[str] = None  # base | bonus_pct | total_package | day_rate
     pay_period: Optional[str] = None  # annual | daily
@@ -727,6 +738,7 @@ class MarketSurveyExtractionItem(BaseModel):
     reported_p25: Optional[float] = None
     reported_p50: Optional[float] = None
     reported_p75: Optional[float] = None
+    reported_mean: Optional[float] = None
     bonus_pct: Optional[float] = None
     reported_sample_size: Optional[int] = None
     page_reference: Optional[str] = None
