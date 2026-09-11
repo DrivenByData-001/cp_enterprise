@@ -1,0 +1,157 @@
+name: chatgpt-phase4-refine
+
+on:
+  push:
+    branches:
+      - chatgpt/phase4-market-ingestion-refinement
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/phase4-market-ingestion-refinement
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply refinement
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'expected block not found in {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          Path('backend/migrations/0014_phase4_market_ingestion_refinement.sql').write_text('''-- Phase 4 market-report ingestion refinement. Additive only.\nALTER TABLE jobber.compensation_observation\n    ADD COLUMN IF NOT EXISTS reported_mean NUMERIC,\n    ADD COLUMN IF NOT EXISTS geography_reported TEXT,\n    ADD COLUMN IF NOT EXISTS domain_or_practice_area TEXT,\n    ADD COLUMN IF NOT EXISTS seniority_band_reported TEXT,\n    ADD COLUMN IF NOT EXISTS experience_band TEXT,\n    ADD COLUMN IF NOT EXISTS pqe_band TEXT,\n    ADD COLUMN IF NOT EXISTS source_kind TEXT;\n''')
+
+          replace('backend/app/models.py',
+          '''    reported_p25: Optional[float] = None\n    reported_p50: Optional[float] = None\n    reported_p75: Optional[float] = None\n    bonus_pct: Optional[float] = None\n    reported_sample_size: Optional[int] = None\n    source_note: Optional[str] = None\n    # A curator correcting a genuinely wrong/missing report date (prompt\n''',
+          '''    reported_p25: Optional[float] = None\n    reported_p50: Optional[float] = None\n    reported_p75: Optional[float] = None\n    reported_mean: Optional[float] = None\n    bonus_pct: Optional[float] = None\n    reported_sample_size: Optional[int] = None\n    geography_reported: Optional[str] = None\n    domain_or_practice_area: Optional[str] = None\n    seniority_band_reported: Optional[str] = None\n    experience_band: Optional[str] = None\n    pqe_band: Optional[str] = None\n    source_kind: Optional[str] = None\n    source_quality: Optional[str] = None\n    source_note: Optional[str] = None\n    # A curator correcting a genuinely wrong/missing report date (prompt\n''')
+
+          replace('backend/app/models.py',
+          '''class MarketSurveyExtractionItem(BaseModel):\n    raw_role_label: Optional[str] = None\n    geography: Optional[str] = None\n    domain_or_practice_area: Optional[str] = None\n    seniority_band: Optional[str] = None\n    employment_basis: Optional[str] = None  # permanent | contract | unknown\n''',
+          '''class MarketSurveyExtractionItem(BaseModel):\n    raw_role_label: Optional[str] = None\n    geography: Optional[str] = None\n    domain_or_practice_area: Optional[str] = None\n    seniority_band: Optional[str] = None\n    experience_band: Optional[str] = None\n    pqe_band: Optional[str] = None\n    source_kind: Optional[str] = None  # respondent_survey | recruiter_benchmark | other\n    employment_basis: Optional[str] = None  # permanent | contract | unknown\n''')
+
+          replace('backend/app/models.py',
+          '''    reported_p25: Optional[float] = None\n    reported_p50: Optional[float] = None\n    reported_p75: Optional[float] = None\n    bonus_pct: Optional[float] = None\n    reported_sample_size: Optional[int] = None\n''',
+          '''    reported_p25: Optional[float] = None\n    reported_p50: Optional[float] = None\n    reported_p75: Optional[float] = None\n    reported_mean: Optional[float] = None\n    bonus_pct: Optional[float] = None\n    reported_sample_size: Optional[int] = None\n''')
+
+          replace('backend/app/market_data_processing.py',
+          '''            employment_basis = item.employment_basis if item.employment_basis in _VALID_EMPLOYMENT_BASES else None\n            cur.execute(\n''',
+          '''            employment_basis = item.employment_basis if item.employment_basis in _VALID_EMPLOYMENT_BASES else None\n            if item.reported_sample_size is None:\n                source_quality = "document_linked_unknown_sample"\n            elif item.reported_sample_size >= 5:\n                source_quality = "explicit_sample_n_ge_5"\n            else:\n                source_quality = "explicit_sample_n_lt_5"\n            cur.execute(\n''')
+
+          replace('backend/app/market_data_processing.py',
+          '''                    (source_key, raw_role_label, component, pay_period, employment_basis, currency,\n                     amount_min, amount_mid, amount_max, reported_p25, reported_p50, reported_p75, bonus_pct,\n                     basis, review_status, document_id, page_reference, table_reference, source_note,\n                     reported_sample_size, extraction_run_id, observed_at, period_end)\n                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,\n                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s, %s, %s)\n''',
+          '''                    (source_key, raw_role_label, component, pay_period, employment_basis, currency,\n                     amount_min, amount_mid, amount_max, reported_p25, reported_p50, reported_p75, reported_mean, bonus_pct,\n                     basis, review_status, document_id, page_reference, table_reference, source_note,\n                     reported_sample_size, source_quality, source_kind, geography_reported, domain_or_practice_area,\n                     seniority_band_reported, experience_band, pqe_band, extraction_run_id, observed_at, period_end)\n                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,\n                        'survey', 'unreviewed', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)\n''')
+
+          replace('backend/app/market_data_processing.py',
+          '''                    employment_basis, currency, item.amount_min, item.amount_mid, item.amount_max,\n                    item.reported_p25, item.reported_p50, item.reported_p75, item.bonus_pct,\n                    document_id, item.page_reference, item.table_reference, item.source_note,\n                    item.reported_sample_size, run_id, source_date, source_date,\n''',
+          '''                    employment_basis, currency, item.amount_min, item.amount_mid, item.amount_max,\n                    item.reported_p25, item.reported_p50, item.reported_p75, item.reported_mean, item.bonus_pct,\n                    document_id, item.page_reference, item.table_reference, item.source_note,\n                    item.reported_sample_size, source_quality, item.source_kind, item.geography, item.domain_or_practice_area,\n                    item.seniority_band, item.experience_band, item.pqe_band, run_id, source_date, source_date,\n''')
+
+          replace('prompts/extract_market_survey.md',
+          '''- `amount_min` / `amount_mid` / `amount_max`: a stated range or a single\n  stated midpoint/average, exactly as given. Do not compute a midpoint\n  yourself if the report only gives a range — leave `amount_mid` null in\n  that case; a downstream system computes a labelled range midpoint if\n  needed.\n- `reported_p25` / `reported_p50` / `reported_p75`: only when the report\n  explicitly states percentile figures.\n''',
+          '''- `amount_min` / `amount_mid` / `amount_max`: a stated range or a single\n  explicitly-labelled midpoint, exactly as given. Do not put a mean/average\n  into `amount_mid`. Do not compute a midpoint yourself if the report only\n  gives a range — leave `amount_mid` null in that case; a downstream system\n  computes a labelled range midpoint if needed.\n- `reported_p25` / `reported_p50` / `reported_p75`: only when the report\n  explicitly states percentile figures. An explicitly-labelled median is\n  semantically p50 and must be stored in `reported_p50`; do not infer any\n  other percentile.\n- `reported_mean`: only when the report explicitly labels a value as mean or\n  average. Keep it separate from the median/p50 and from `amount_mid`.\n- `experience_band` / `pqe_band`: preserve the report's own total-experience\n  and post-qualification-experience band wording verbatim when present.\n- `source_kind`: `respondent_survey`, `recruiter_benchmark`, or `other` only\n  when the report's methodology clearly supports that classification; leave\n  null if unclear.\n''')
+
+          replace('prompts/extract_market_survey.md',
+          '''      "seniority_band": "string or null",\n      "employment_basis": "permanent | contract | unknown or null",\n''',
+          '''      "seniority_band": "string or null",\n      "experience_band": "string or null",\n      "pqe_band": "string or null",\n      "source_kind": "respondent_survey | recruiter_benchmark | other or null",\n      "employment_basis": "permanent | contract | unknown or null",\n''')
+
+          replace('prompts/extract_market_survey.md',
+          '''      "reported_p75": "number or null",\n      "bonus_pct": "number or null",\n''',
+          '''      "reported_p75": "number or null",\n      "reported_mean": "number or null",\n      "bonus_pct": "number or null",\n''')
+
+          replace('backend/app/economics_engine.py',
+          '''        SELECT co.id, co.basis, co.amount_min, co.amount_max, co.amount_mid,\n               co.reported_p25, co.reported_p50, co.reported_p75, co.reported_sample_size,\n               co.document_id, co.period_end, co.source_note\n''',
+          '''        SELECT co.id, co.basis, co.amount_min, co.amount_max, co.amount_mid,\n               co.reported_p25, co.reported_p50, co.reported_p75, co.reported_mean, co.reported_sample_size,\n               co.document_id, co.period_end, co.source_note, co.source_quality, co.source_kind,\n               co.geography_reported, co.domain_or_practice_area, co.seniority_band_reported,\n               co.experience_band, co.pqe_band\n''')
+
+          start = Path('backend/app/economics_engine.py').read_text()
+          a = start.index('def select_reference_compensation(observations: list[dict]) -> dict:')
+          b = start.index('\n\ndef derive_archetype_comp', a)
+          new_func = '''def select_reference_compensation(observations: list[dict]) -> dict:\n    """Choose a transparent reference without treating recency as quality.\n\n    Quality tier is evaluated before recency: a document-linked survey with\n    an explicit row sample >=5 outranks an otherwise usable document-linked\n    survey whose row-level sample is simply not published. A known sample\n    below 5 does not qualify. Only after quality tier do we use report date,\n    sample size and stable id ordering. Posting evidence remains the fallback\n    and still requires >=5 stated observations.\n    """\n    def _central(o):\n        if o.get("reported_p50") is not None:\n            return o["reported_p50"], "reported_p50"\n        if o.get("amount_mid") is not None:\n            return o["amount_mid"], "stated_midpoint"\n        if o.get("reported_mean") is not None:\n            return o["reported_mean"], "reported_mean"\n        return None, None\n\n    qualifying = []\n    for o in observations:\n        if o["basis"] != "survey" or o.get("document_id") is None:\n            continue\n        value, statistic = _central(o)\n        if value is None:\n            continue\n        n = o.get("reported_sample_size")\n        if n is not None and n < _SURVEY_SAMPLE_MIN:\n            continue\n        quality_tier = 2 if n is not None else 1\n        qualifying.append((quality_tier, o, value, statistic))\n\n    if qualifying:\n        def _key(item):\n            quality_tier, o, _value, _statistic = item\n            return (quality_tier, o.get("period_end") or date.min, o.get("reported_sample_size") or -1, str(o["id"]))\n\n        quality_tier, chosen, reference_comp, statistic = max(qualifying, key=_key)\n        return {\n            "reference_comp": float(reference_comp),\n            "reference_source": "survey",\n            "reference_basis_detail": {\n                "observation_id": str(chosen["id"]),\n                "document_id": str(chosen["document_id"]),\n                "sample_size": chosen.get("reported_sample_size"),\n                "source_quality": chosen.get("source_quality"),\n                "source_kind": chosen.get("source_kind"),\n                "quality_tier": "explicit_sample_n_ge_5" if quality_tier == 2 else "document_linked_unknown_sample",\n                "statistic": statistic,\n                "period_end": chosen["period_end"].isoformat() if chosen.get("period_end") else None,\n            },\n        }\n\n    posting_stated = [o for o in observations if o["basis"] == "posting_stated"]\n    if len(posting_stated) >= _POSTING_SAMPLE_MIN:\n        midpoints = sorted(m for o in posting_stated if (m := _posting_midpoint(o)) is not None)\n        if midpoints:\n            return {\n                "reference_comp": statistics.median(midpoints),\n                "reference_source": "posting",\n                "reference_basis_detail": {\n                    "n_posting_stated": len(posting_stated),\n                    "label": "median advertised-range midpoint",\n                },\n            }\n\n    return {"reference_comp": None, "reference_source": None, "reference_basis_detail": None}\n'''
+          Path('backend/app/economics_engine.py').write_text(start[:a] + new_func + start[b:])
+
+          replace('backend/app/economics_engine.py',
+          '''            "reported_p75": float(o["reported_p75"]) if o["reported_p75"] is not None else None,\n            "amount_mid": float(o["amount_mid"]) if o["amount_mid"] is not None else None,\n            "reported_sample_size": o["reported_sample_size"],\n            "source_note": o["source_note"],\n''',
+          '''            "reported_p75": float(o["reported_p75"]) if o["reported_p75"] is not None else None,\n            "reported_mean": float(o["reported_mean"]) if o["reported_mean"] is not None else None,\n            "amount_min": float(o["amount_min"]) if o["amount_min"] is not None else None,\n            "amount_mid": float(o["amount_mid"]) if o["amount_mid"] is not None else None,\n            "amount_max": float(o["amount_max"]) if o["amount_max"] is not None else None,\n            "reported_sample_size": o["reported_sample_size"],\n            "document_id": str(o["document_id"]) if o["document_id"] else None,\n            "source_quality": o["source_quality"],\n            "source_kind": o["source_kind"],\n            "geography_reported": o["geography_reported"],\n            "domain_or_practice_area": o["domain_or_practice_area"],\n            "seniority_band_reported": o["seniority_band_reported"],\n            "experience_band": o["experience_band"],\n            "pqe_band": o["pqe_band"],\n            "source_note": o["source_note"],\n''')
+
+          replace('backend/app/routes/market_data.py',
+          '''            "amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, bonus_pct, "\n            "reported_sample_size, page_reference, table_reference, source_note, review_status, observed_at, "\n''',
+          '''            "amount_min, amount_mid, amount_max, currency, reported_p25, reported_p50, reported_p75, reported_mean, bonus_pct, "\n            "reported_sample_size, source_quality, source_kind, geography_reported, domain_or_practice_area, seniority_band_reported, "\n            "experience_band, pqe_band, page_reference, table_reference, source_note, review_status, observed_at, "\n''')
+
+          replace('backend/app/routes/market_data.py',
+          '''            "employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "\n            "reported_p50, reported_p75, bonus_pct, reported_sample_size, page_reference, "\n            "table_reference, source_note, review_status, document_id, observed_at, period_end, "\n            "created_at, reviewed_at "\n            "FROM jobber.compensation_observation WHERE basis = 'survey' AND review_status = %s "\n''',
+          '''            "employment_basis, amount_min, amount_mid, amount_max, currency, reported_p25, "\n            "reported_p50, reported_p75, reported_mean, bonus_pct, reported_sample_size, source_quality, source_kind, "\n            "geography_reported, domain_or_practice_area, seniority_band_reported, experience_band, pqe_band, page_reference, "\n            "table_reference, source_note, review_status, co.document_id, co.observed_at, co.period_end, "\n            "co.created_at, co.reviewed_at, d.source AS publisher, d.title AS document_title, d.source_date AS report_date "\n            "FROM jobber.compensation_observation co LEFT JOIN jobber.document d ON d.id = co.document_id "\n            "WHERE co.basis = 'survey' AND co.review_status = %s "\n''')
+
+          replace('backend/app/routes/market_data.py',
+          '''            "ORDER BY created_at DESC",\n''',
+          '''            "ORDER BY co.created_at DESC",\n''')
+
+          replace('frontend/src/lib/api.ts',
+          '''  reported_p75: number | null\n  bonus_pct: number | null\n''',
+          '''  reported_p75: number | null\n  reported_mean: number | null\n  bonus_pct: number | null\n''')
+
+          replace('frontend/src/lib/api.ts',
+          '''  reported_sample_size: number | null\n  source_note: string | null\n''',
+          '''  reported_sample_size: number | null\n  source_quality: string | null\n  source_kind: string | null\n  geography_reported: string | null\n  domain_or_practice_area: string | null\n  seniority_band_reported: string | null\n  experience_band: string | null\n  pqe_band: string | null\n  publisher?: string | null\n  document_title?: string | null\n  report_date?: string | null\n  source_note: string | null\n''')
+
+          replace('frontend/src/pages/Economics.tsx',
+          '''      <div style={{ display: 'flex', justifyContent: 'space-between' }}>\n        <strong>{obs.raw_role_label || 'Unlabelled row'}</strong>\n        <span className="muted">\n          {formatMoney(obs.amount_mid ?? obs.amount_min ?? obs.amount_max, obs.currency)} · {obs.component}/{obs.pay_period}\n          {obs.reported_sample_size ? ` · n=${obs.reported_sample_size}` : ' · sample size not reported'}\n        </span>\n      </div>\n''',
+          '''      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>\n        <div>\n          <strong>{obs.raw_role_label || 'Unlabelled row'}</strong>\n          <div className="muted" style={{ fontSize: 12 }}>\n            {[obs.publisher, obs.document_title, obs.report_date].filter(Boolean).join(' · ')}\n          </div>\n          <div className="muted" style={{ fontSize: 12 }}>\n            {[obs.geography_reported, obs.domain_or_practice_area, obs.seniority_band_reported, obs.experience_band && `Experience ${obs.experience_band}`, obs.pqe_band && `PQE ${obs.pqe_band}`].filter(Boolean).join(' · ')}\n          </div>\n        </div>\n        <span className="muted" style={{ textAlign: 'right', fontSize: 12 }}>\n          {obs.component}/{obs.pay_period}\n          {obs.reported_p50 != null ? ` · median ${formatMoney(obs.reported_p50, obs.currency)}` : ''}\n          {obs.reported_mean != null ? ` · mean ${formatMoney(obs.reported_mean, obs.currency)}` : ''}\n          {obs.amount_min != null || obs.amount_max != null ? ` · range ${formatMoney(obs.amount_min, obs.currency)}–${formatMoney(obs.amount_max, obs.currency)}` : ''}\n          {obs.reported_sample_size != null ? ` · n=${obs.reported_sample_size}` : ' · sample n not published'}\n          {obs.source_kind ? ` · ${obs.source_kind.replace('_', ' ')}` : ''}\n        </span>\n      </div>\n      {(obs.page_reference || obs.table_reference || obs.source_note) && (\n        <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>\n          {[obs.page_reference && `p. ${obs.page_reference}`, obs.table_reference, obs.source_note].filter(Boolean).join(' · ')}\n        </p>\n      )}\n''')
+
+          replace('frontend/src/pages/Economics.tsx',
+          '''        <p key={o.id} className="muted" style={{ fontSize: 12, margin: '2px 0' }}>\n          {o.raw_role_label || '—'}: {formatMoney(o.amount_mid ?? o.amount_min, o.currency)} [{o.review_status}]\n        </p>\n''',
+          '''        <p key={o.id} className="muted" style={{ fontSize: 12, margin: '4px 0' }}>\n          {o.raw_role_label || '—'} · {[o.geography_reported, o.domain_or_practice_area, o.experience_band, o.pqe_band && `PQE ${o.pqe_band}`].filter(Boolean).join(' · ')} ·\n          {o.reported_p50 != null ? ` median ${formatMoney(o.reported_p50, o.currency)}` : ''}\n          {o.reported_mean != null ? ` mean ${formatMoney(o.reported_mean, o.currency)}` : ''}\n          {o.amount_min != null || o.amount_max != null ? ` range ${formatMoney(o.amount_min, o.currency)}–${formatMoney(o.amount_max, o.currency)}` : ''} [{o.review_status}]\n        </p>\n''')
+
+          Path('backend/tests/test_market_data_refinement.py').write_text('''from datetime import date\n\nfrom app import ai\nfrom app import market_data_processing as mdp\nfrom app.economics_engine import select_reference_compensation\nfrom app.models import MarketSurveyExtractionItem, MarketSurveyExtractionResult\n\n\ndef _fake_result(items):\n    output = MarketSurveyExtractionResult(items=[MarketSurveyExtractionItem(**item) for item in items])\n    run = ai.AITaskRun(task=mdp.TASK, model="test-model", prompt_name=mdp.PROMPT_NAME, prompt_version="test", started_at="2026-01-01T00:00:00+00:00", finished_at="2026-01-01T00:00:01+00:00", status="ok", input_chars=10, output_chars=10)\n    return ai.AITaskResult(output=output, run=run)\n\n\ndef test_report_context_mean_median_and_bands_survive_persistence(client, monkeypatch):\n    doc = client.post("/api/market-data/documents/ingest", json={"text": "Raretec representative row", "publisher": "Raretec", "report_title": "Salary Survey 2026", "report_date": "2026-06-30"}).json()\n    monkeypatch.setattr(mdp, "run_json_task", lambda **kw: _fake_result([{\n        "raw_role_label": "Qualified Actuary — Life — 9–12 years PQE",\n        "geography": "Ireland", "domain_or_practice_area": "Life", "seniority_band": "Qualified Actuary",\n        "pqe_band": "9–12 years", "source_kind": "respondent_survey",\n        "component": "base", "pay_period": "annual", "currency": "EUR",\n        "amount_min": 100000, "amount_max": 178000, "reported_mean": 141134, "reported_p50": 142000,\n        "page_reference": "20", "table_reference": "Salaries - Post Qualification Experience",\n    }]))\n    assert client.post(f"/api/market-data/documents/{doc['id']}/extract").status_code == 200\n    rows = client.get("/api/market-data/compensation-observations").json()\n    row = next(r for r in rows if r["raw_role_label"].startswith("Qualified Actuary"))\n    assert row["reported_mean"] == 141134\n    assert row["reported_p50"] == 142000\n    assert row["pqe_band"] == "9–12 years"\n    assert row["domain_or_practice_area"] == "Life"\n    assert row["geography_reported"] == "Ireland"\n    assert row["source_quality"] == "document_linked_unknown_sample"\n    assert row["publisher"] == "Raretec"\n    assert row["report_date"] == "2026-06-30"\n\n\ndef _survey(id, *, n, end, p50=None, mean=None, source_quality=None):\n    return {"id": id, "basis": "survey", "reported_p50": p50, "amount_mid": None, "reported_mean": mean, "reported_sample_size": n, "document_id": f"doc-{id}", "period_end": end, "source_quality": source_quality, "source_kind": "respondent_survey", "amount_min": None, "amount_max": None}\n\n\ndef test_explicit_sample_quality_outranks_newer_unknown_sample():\n    result = select_reference_compensation([\n        _survey("older", n=21, end=date(2025, 10, 8), p50=117000, source_quality="explicit_sample_n_ge_5"),\n        _survey("newer", n=None, end=date(2026, 6, 30), p50=120000, source_quality="document_linked_unknown_sample"),\n    ])\n    assert result["reference_comp"] == 117000\n    assert result["reference_basis_detail"]["observation_id"] == "older"\n    assert result["reference_basis_detail"]["document_id"] == "doc-older"\n\n\ndef test_unknown_sample_document_linked_survey_can_be_reference_and_mean_is_preserved():\n    result = select_reference_compensation([_survey("raretec", n=None, end=date(2026, 6, 30), mean=141134, source_quality="document_linked_unknown_sample")])\n    assert result["reference_comp"] == 141134\n    assert result["reference_basis_detail"]["statistic"] == "reported_mean"\n    assert result["reference_basis_detail"]["quality_tier"] == "document_linked_unknown_sample"\n\n\ndef test_known_subfive_survey_does_not_qualify():\n    result = select_reference_compensation([_survey("thin", n=4, end=date(2026, 6, 30), p50=100000, source_quality="explicit_sample_n_lt_5")])\n    assert result["reference_comp"] is None\n''')
+
+          # Remove this one-shot workflow from the generated commit to avoid reruns.
+          Path('.github/workflows/chatgpt-phase4-refine.yml').unlink()
+      - name: Install backend
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          APP_SESSION_SECRET: test-secret-test-secret-test-secret
+          APP_AUTH_PASSWORD_HASH: $2b$04$K2Y7c4xIazgZxwGQ8xZ1yO5vXQFf3B5o33msyK3V8HdCJSM9M2k/u
+        run: |
+          cd backend
+          pytest -q
+      - name: Frontend checks
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - name: Commit generated refinement
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Refine Phase 4 market report ingestion and benchmark quality"
+          git push origin HEAD:chatgpt/phase4-market-ingestion-refinement
