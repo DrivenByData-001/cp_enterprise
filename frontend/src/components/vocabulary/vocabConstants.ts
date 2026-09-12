@@ -28,6 +28,24 @@ export const FLAG_LABEL: Record<string, string> = {
 export const CONCEPT_COLOR = 'var(--series-1)'
 export const GROUP_COLOR = 'var(--text-muted)'
 
+// Semantic zoom (vocab-graph-II brief §6): three rendering-detail bands
+// driven by React Flow's own viewport zoom value. A single source of
+// threshold truth — VocabularyGraph reads only `getZoomBand`, never a
+// hard-coded number, so the bands can't drift out of sync between the
+// label-density logic and the tooltip/legend copy that describes them.
+export type ZoomBand = 'far' | 'medium' | 'close'
+
+export const ZOOM_BAND_THRESHOLDS: { medium: number; close: number } = {
+  medium: 0.55,
+  close: 1.05,
+}
+
+export function getZoomBand(zoom: number): ZoomBand {
+  if (zoom < ZOOM_BAND_THRESHOLDS.medium) return 'far'
+  if (zoom < ZOOM_BAND_THRESHOLDS.close) return 'medium'
+  return 'close'
+}
+
 export type VocabMapFilterState = {
   status: 'pending' | 'accepted' | 'combined'
   group_by: 'priority' | 'type' | 'none'

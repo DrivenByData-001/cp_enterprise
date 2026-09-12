@@ -196,3 +196,35 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+/* Vocabulary Map fullscreen (docs/25 "Fullscreen mode") — an in-app CSS
+   overlay, not the browser Fullscreen API (see VocabularyMapFullscreenOverlay
+   for why). z-index sits below the Concept Details drawer's (60/61) so
+   opening concept details from inside fullscreen still layers on top. */
+.vocab-map-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--page);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 24px;
+  overflow: hidden;
+}
+
+.vocab-map-fullscreen-topbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.vocab-map-grid--fullscreen {
+  height: 100%;
+  min-height: 0;
+}
+
+body.scroll-locked {
+  overflow: hidden;
+}
