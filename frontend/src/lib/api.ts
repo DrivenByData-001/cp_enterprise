@@ -53,7 +53,9 @@ export type Role = {
   title: string
   organisation: string | null
   location: string | null
+  country: string | null
   remote_type: string | null
+  employment_type: string | null
   posting_date: string | null
   captured_at: string | null
   career_track: string | null
@@ -162,7 +164,7 @@ export type RoleListResponse = {
   total: number
   limit: number
   offset: number
-  period: 'recent' | 'all' | 'year' | 'range'
+  period: 'recent' | 'all' | 'year' | 'range' | 'unknown_date'
   year_range: YearRange
 }
 
@@ -646,7 +648,55 @@ export type ExtractionSummary = {
   error?: string
 }
 
-export type IngestResult = { id: string; document_id: string; duplicate_of_document_id: string | null; status: string }
+// --- Duplicate detection (source-aware ingest cleanup) ----------------------
+//
+// `exact_duplicate` (identical raw content) always takes precedence over
+// `possible_duplicate` (identical only after conservative whitespace
+// normalisation — e.g. a PDF re-extraction of the same posting). Either may
+// be null. Neither ever blocks a capture — the UI is expected to warn and
+// offer 'Open existing' / 'Capture anyway'.
+export type DuplicateRoleSummary = {
+  document_id: string
+  role_instance_id: string | null
+  title: string | null
+  organisation: string | null
+  posting_date: string | null
+}
+
+export type DuplicateCheckResult = {
+  exact_duplicate: DuplicateRoleSummary | null
+  possible_duplicate: DuplicateRoleSummary | null
+}
+
+export type IngestResult = {
+  id: string
+  document_id: string
+  duplicate_of_document_id: string | null
+  duplicate: DuplicateCheckResult
+  status: string
+}
+
+// --- Source-aware metadata (manual Edit + reviewable AI enrichment) --------
+
+export type RoleMetadataInput = {
+  title?: string | null
+  organisation?: string | null
+  location?: string | null
+  country?: string | null
+  remote_type?: string | null
+  employment_type?: string | null
+  seniority_level?: string | null
+  posting_date?: string | null
+}
+
+export type RoleMetadataProposal = RoleMetadataInput
+
+export type MetadataProposalResult = {
+  status: 'ok' | 'failed'
+  extraction_run_id: string
+  error: string | null
+  proposal: RoleMetadataProposal | null
+}
 
 export type MappingReviewStatus = 'unreviewed' | 'accepted' | 'rejected'
 
@@ -1584,7 +1634,7 @@ export const api = {
       concept_id?: string
       min_similarity?: number
       sort?: string
-      period?: 'recent' | 'all'
+      period?: 'recent' | 'all' | 'unknown_date'
       year?: number
       date_from?: string
       date_to?: string
@@ -1756,15 +1806,38 @@ export const api = {
   getSurfaceFormDetail: (value: string) => req<SurfaceFormDetail>(`/vocabulary/surface-form?value=${encodeURIComponent(value)}`),
 
   // --- Phase 2: source-aware ingestion + requirement claims -----------------
-  ingestText: (payload: { text: string; kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null }) =>
-    req<IngestResult>('/role-instances/ingest', { method: 'POST', body: JSON.stringify(payload) }),
-  ingestPdf: (file: File, params: { kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null } = {}) => {
+  ingestText: (payload: {
+    text: string
+    kind?: string
+    title?: string | null
+    organisation?: string | null
+    location?: string | null
+    country?: string | null
+    posting_date?: string | null
+    source_url?: string | null
+    source?: string | null
+  }) => req<IngestResult>('/role-instances/ingest', { method: 'POST', body: JSON.stringify(payload) }),
+  ingestPdf: (
+    file: File,
+    params: {
+      kind?: string
+      title?: string | null
+      organisation?: string | null
+      location?: string | null
+      country?: string | null
+      posting_date?: string | null
+      source_url?: string | null
+    } = {},
+  ) => {
     const form = new FormData()
     form.append('file', file)
     const qs = new URLSearchParams()
     if (params.kind) qs.set('kind', params.kind)
     if (params.title) qs.set('title', params.title)
     if (params.organisation) qs.set('organisation', params.organisation)
+    if (params.location) qs.set('location', params.location)
+    if (params.country) qs.set('country', params.country)
+    if (params.posting_date) qs.set('posting_date', params.posting_date)
     if (params.source_url) qs.set('source_url', params.source_url)
     const suffix = qs.toString() ? `?${qs}` : ''
     return fetch(`/api/role-instances/ingest/pdf${suffix}`, { method: 'POST', body: form }).then(async (r) => {
@@ -1772,6 +1845,19 @@ export const api = {
       return r.json() as Promise<IngestResult>
     })
   },
+  // Text-only PDF extraction (no persistence) — the first half of the PDF
+  // duplicate-check preflight: extract here, then checkDuplicate with the
+  // returned text, before ever calling ingestPdf/ingestText for real.
+  extractPdfText: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return fetch('/api/role-instances/pdf/extract-text', { method: 'POST', body: form }).then(async (r) => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`)
+      return (await r.json()) as { text: string }
+    })
+  },
+  checkDuplicate: (text: string, kind?: string) =>
+    req<DuplicateCheckResult>('/role-instances/duplicate-check', { method: 'POST', body: JSON.stringify({ text, kind }) }),
   extractRequirements: (roleId: string) =>
     req<ExtractionSummary>(`/role-instances/${roleId}/extract-requirements`, { method: 'POST' }),
   listRequirements: (roleId: string) => req<RequirementClaim[]>(`/role-instances/${roleId}/requirements`),
@@ -1780,6 +1866,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action }),
     }),
+
+  // --- Source-aware metadata: manual Edit + reviewable AI enrichment --------
+  proposeRoleMetadata: (roleId: string) =>
+    req<MetadataProposalResult>(`/role-instances/${roleId}/metadata/propose`, { method: 'POST' }),
+  updateRoleMetadata: (roleId: string, payload: RoleMetadataInput) =>
+    req<Role>(`/role-instances/${roleId}/metadata`, { method: 'PATCH', body: JSON.stringify(payload) }),
 
   // --- Phase 2: profile360 mapping review -----------------------------------
   listProfile360Claims: (limit = 50, offset = 0) =>

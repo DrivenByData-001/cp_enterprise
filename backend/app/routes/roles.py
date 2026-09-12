@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from ..db import build_role_view, db_cursor, flatten_role_instance, upsert_role_instance
+from ..db import build_role_view, db_cursor, delete_role_instance, flatten_role_instance, upsert_role_instance
 from ..document_processing import role_extraction_quality, role_extraction_quality_bulk
 from ..embeddings import cosine_similarity, ensure_profile_embedding, get_embedding, get_embeddings
 from ..models import JobPostingImport
@@ -58,7 +58,7 @@ def list_roles(
     concept_id: str | None = None,
     min_similarity: float | None = None,
     sort: str = Query("similarity", pattern="^(similarity|posting_date|captured_at|title)$"),
-    period: str = Query("recent", pattern="^(recent|all)$"),
+    period: str = Query("recent", pattern="^(recent|all|unknown_date)$"),
     year: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -103,6 +103,14 @@ def list_roles(
                 filters += " AND ri.posting_date <= %s"
                 params.append(date_to)
             applied_period = "range"
+        elif period == "unknown_date":
+            # A named, explicit filter for "posting date was never captured"
+            # (docs: source-aware ingest cleanup, problem #8) — distinct from
+            # 'recent', which also includes unknown-date roles alongside
+            # genuinely recent ones. This shows *only* the unknown-date rows,
+            # so they're findable on their own rather than merely not hidden.
+            filters += " AND ri.posting_date IS NULL"
+            applied_period = "unknown_date"
         elif period == "recent":
             filters += " AND (ri.posting_date IS NULL OR ri.posting_date >= (CURRENT_DATE - (%s || ' years')::interval))"
             params.append(DEFAULT_RECENT_YEARS)
@@ -216,11 +224,6 @@ def update_role(role_id: str, payload: JobPostingImport):
 @router.delete("/{role_id}")
 def delete_role(role_id: str):
     with db_cursor() as cur:
-        cur.execute("DELETE FROM jobber.role_instance WHERE id = %s", (role_id,))
-        if cur.rowcount == 0:
+        if not delete_role_instance(cur, role_id):
             raise HTTPException(404, "role not found")
-        cur.execute(
-            "DELETE FROM jobber.d_embedding WHERE owner_kind = 'role_instance' AND owner_id = %s",
-            (role_id,),
-        )
     return {"status": "deleted"}

@@ -17,6 +17,7 @@ Every id in this module is a UUID (as a `str`), matching the live production
 
 import hashlib
 import json
+import re
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -165,6 +166,98 @@ def to_json_param(value) -> Json | None:
 
 VALID_PROVENANCE_QUALITY = {"original", "legacy_extracted", "reconstructed", "unknown"}
 
+# Conservative, ASCII-only whitespace normalisation (source-aware ingest
+# duplicate-detection cleanup): a PDF re-extraction of the same underlying
+# posting routinely differs from an earlier capture only in line endings,
+# repeated whitespace, or leading/trailing whitespace — never in wording or
+# punctuation. Restricted to this explicit character class (not bare `\s`,
+# which in Python is Unicode-aware and would drift from the equivalent SQL
+# `regexp_replace` used to backfill historical rows in migration 0016) so
+# Python and Postgres always agree on what counts as "the same" text.
+_WHITESPACE_RE = re.compile(r"[ \t\r\n\f\v]+")
+
+
+def normalize_document_text(text: str | None) -> str:
+    """Collapse whitespace runs to a single space and trim. Never touches
+    case, wording, or punctuation — deliberately conservative so two
+    genuinely different postings are never conflated (see module docs on
+    duplicate detection)."""
+    return _WHITESPACE_RE.sub(" ", text or "").strip()
+
+
+def _normalized_content_hash(content_text: str | None) -> str | None:
+    normalized = normalize_document_text(content_text)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else None
+
+
+def _best_matching_role(cur, *, kind: str, normalized: bool, value: str) -> dict | None:
+    """One candidate document+role pair for a given hash value, or None.
+    Joins straight through to role_instance rather than looking the document
+    up first and its role second, so the ordering below can see both at
+    once: a document that still has a role_instance pointing to it is always
+    preferred over one that doesn't (`has_role DESC`), and only *then* by
+    earliest captured_at/created_at as a tiebreaker.
+
+    That ordering matters in exactly the case this cleanup exists for: once
+    a duplicate role_instance is deleted, its now-orphaned document is still
+    around (deleting a role never touches its immutable source), and a
+    third, later upload of the same posting must still match the surviving,
+    correctly-attributed role — not resurface the orphan just because it
+    happens to have an earlier/NULL `captured_at`. `normalized` picks the
+    hash column by a plain bool rather than interpolating a column name into
+    SQL."""
+    where_hash = "d.content_normalized_sha256 = %s" if normalized else "d.content_sha256 = %s"
+    cur.execute(
+        f"""
+        SELECT d.id AS document_id, ri.id AS role_id, ri.title, ri.organisation, ri.posting_date
+        FROM jobber.document d
+        LEFT JOIN jobber.role_instance ri ON ri.document_id = d.id
+        WHERE d.kind = %s AND {where_hash}
+        ORDER BY (ri.id IS NOT NULL) DESC, d.captured_at ASC NULLS LAST, ri.created_at ASC NULLS LAST
+        LIMIT 1
+        """,
+        (kind, value),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "document_id": str(row["document_id"]),
+        "role_instance_id": str(row["role_id"]) if row["role_id"] else None,
+        "title": row["title"],
+        "organisation": row["organisation"],
+        "posting_date": str(row["posting_date"]) if row["posting_date"] else None,
+    }
+
+
+def find_document_duplicates(cur, content_text: str, *, kind: str) -> dict:
+    """The duplicate-detection signal for a capture that has not (yet, or
+    ever) been persisted — usable both as a pre-persistence preflight check
+    (routes/role_instances.py's duplicate-check endpoint) and, informationally,
+    right after a document is actually created (`create_document` already
+    excludes the just-inserted row from its own exact-match check, so calling
+    this *before* create_document with the same cursor/transaction gives the
+    same answer). Scoped to documents of the same `kind` only, so a job
+    posting is never flagged against an unrelated narrative capture.
+
+    `exact_duplicate` (identical raw content_sha256) always takes precedence
+    over `possible_duplicate` (identical only after conservative whitespace
+    normalisation) — a document that matches exactly is never also reported
+    as merely possible. Either may be None. Purely a read — never persists
+    anything, never blocks a subsequent create_document call."""
+    exact = None
+    if content_text:
+        exact_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+        exact = _best_matching_role(cur, kind=kind, normalized=False, value=exact_hash)
+
+    possible = None
+    if exact is None:
+        normalized_hash = _normalized_content_hash(content_text)
+        if normalized_hash:
+            possible = _best_matching_role(cur, kind=kind, normalized=True, value=normalized_hash)
+
+    return {"exact_duplicate": exact, "possible_duplicate": possible}
+
 
 def create_document(
     cur,
@@ -190,6 +283,7 @@ def create_document(
             f"invalid provenance_quality {provenance_quality!r}, must be one of {VALID_PROVENANCE_QUALITY}"
         )
     content_sha256 = hashlib.sha256(content_text.encode("utf-8")).hexdigest() if content_text else None
+    content_normalized_sha256 = _normalized_content_hash(content_text)
     source_key = source_key or f"{kind}:{uuid.uuid4()}"
 
     duplicate_of = None
@@ -203,13 +297,14 @@ def create_document(
         """
         INSERT INTO jobber.document
             (source_key, kind, title, source, url, source_date, captured_at,
-             content_text, content_sha256, content_kind, provenance_quality, source_payload, notes)
-        VALUES (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s)
+             content_text, content_sha256, content_normalized_sha256, content_kind,
+             provenance_quality, source_payload, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
             source_key, kind, title, source, url, source_date,
-            content_text, content_sha256, content_kind, provenance_quality,
+            content_text, content_sha256, content_normalized_sha256, content_kind, provenance_quality,
             to_json_param(source_payload or {}), notes,
         ),
     )
@@ -461,3 +556,112 @@ def build_role_view(cur, role_id: str) -> dict | None:
     )
     role["_source_document_id"] = document_id
     return role
+
+
+# --- role_instance deletion --------------------------------------------------
+#
+# jobber.role_skill_observation, d_role_fit, role_context_enrichment, and
+# compensation_observation all reference role_instance with ON DELETE
+# CASCADE at the database level (confirmed directly against the live
+# schema) — a plain DELETE FROM role_instance already removes those.
+# requirement_claim also cascades on role_instance_id, but is handled
+# explicitly anyway (see below). jobber.extraction_run does NOT cascade: its
+# role_instance_id/result_role_instance_id foreign keys are NO ACTION, so a
+# naive DELETE FROM role_instance fails outright whenever any extraction was
+# ever attempted against that role — which is the normal case for anything
+# that went through source-aware ingest + extract-requirements. And
+# extraction_run itself is referenced (NO ACTION) by requirement_claim and
+# concept_proposal, which blocks *it* from being cleaned up in turn unless
+# those are handled first. See delete_role_instance's own docstring for the
+# full chain and why each reference needs a different treatment.
+
+_ROLE_METADATA_COLUMNS = {
+    "title", "organisation", "location", "country", "remote_type",
+    "employment_type", "seniority_level", "posting_date",
+}
+
+
+def delete_role_instance(cur, role_id: str) -> bool:
+    """Deletes one jobber.role_instance row and everything that exists only
+    to describe it. extraction_run needs two different treatments, not one:
+
+    - `result_role_instance_id` is an *output* linkage (which role a
+      document-subject job_posting_extract run produced) — the row is about
+      the document, still meaningful with no role behind it, so it is kept
+      and just nulled.
+    - `role_instance_id` is the *subject* reference on a role-subject run
+      (requirement_extract, role_metadata_enrich, role_context_generate):
+      extraction_run's own CHECK constraint requires this to be non-null
+      whenever subject_type='role_instance', so it cannot be nulled without
+      violating that invariant — a row that exists to describe an attempt
+      *about this role* has no honest form once the role is gone, so these
+      rows are deleted along with it (the same "you lose the derived history
+      tied to a deleted duplicate" the user already accepts for its
+      requirement_claim rows, which cascade the same way).
+
+    Deleting those role-subject extraction_run rows in turn requires two
+    things to happen first, in this order, both confirmed against the live
+    schema (not just the pre-Phase-2 migration set, which turned out to
+    still be missing one):
+
+    1. `jobber.requirement_claim.extraction_run_id` (NO ACTION) still points
+       at them for as long as the claim rows exist — and those rows only
+       cascade-delete once role_instance itself is deleted, which can't
+       happen yet (extraction_run.role_instance_id is what's still blocking
+       that). So requirement_claim rows for this role are deleted explicitly,
+       ahead of the role_instance DELETE that would otherwise have cascaded
+       them anyway.
+    2. `jobber.concept_proposal.extraction_run_id` (also NO ACTION) can point
+       at a role-subject run too — a proposal is about a *vocabulary term*,
+       not this role, and stays a legitimate curation candidate regardless
+       of what happens to the role that first surfaced it, so its rows are
+       kept, only the now-dangling run reference is nulled.
+
+    Returns False (nothing deleted) if role_id doesn't exist."""
+    cur.execute(
+        """
+        UPDATE jobber.concept_proposal SET extraction_run_id = NULL
+        WHERE extraction_run_id IN (
+            SELECT id FROM jobber.extraction_run WHERE subject_type = 'role_instance' AND role_instance_id = %s
+        )
+        """,
+        (role_id,),
+    )
+    cur.execute("DELETE FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+    cur.execute(
+        "DELETE FROM jobber.extraction_run WHERE subject_type = 'role_instance' AND role_instance_id = %s",
+        (role_id,),
+    )
+    cur.execute(
+        "UPDATE jobber.extraction_run SET result_role_instance_id = NULL WHERE result_role_instance_id = %s",
+        (role_id,),
+    )
+    cur.execute("DELETE FROM jobber.role_instance WHERE id = %s", (role_id,))
+    deleted = cur.rowcount > 0
+    if deleted:
+        cur.execute(
+            "DELETE FROM jobber.d_embedding WHERE owner_kind = 'role_instance' AND owner_id = %s",
+            (role_id,),
+        )
+    return deleted
+
+
+def update_role_metadata(cur, role_id: str, fields: dict) -> dict | None:
+    """Partial metadata-only update for a role_instance — the source-aware
+    counterpart to the legacy full-JobPostingImport overwrite
+    (`routes.roles.update_role` / `upsert_role_instance`): touches only the
+    given columns (restricted to `_ROLE_METADATA_COLUMNS` — title/
+    organisation/location/country/remote_type/employment_type/
+    seniority_level/posting_date), never skills, never the linked document,
+    and never clears a column that wasn't supplied. Used both by manual Edit
+    on a role with no `raw_json` and by 'Accept metadata' after a proposed
+    enrichment review (docs: source-aware ingest cleanup, problems #5/#7).
+    Returns the updated flattened role, or None if role_id doesn't exist."""
+    updates = {k: v for k, v in fields.items() if k in _ROLE_METADATA_COLUMNS}
+    if updates:
+        set_clause = ", ".join(f"{c} = %s" for c in updates)
+        cur.execute(
+            f"UPDATE jobber.role_instance SET {set_clause}, updated_at = now() WHERE id = %s",
+            [*updates.values(), role_id],
+        )
+    return build_role_view(cur, role_id)

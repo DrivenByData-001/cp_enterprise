@@ -1,12 +1,96 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type ExtractionSummary, type RequirementClaim } from '../lib/api'
+import { api, type ExtractionSummary, type RequirementClaim, type RoleMetadataInput } from '../lib/api'
+import RoleMetadataForm from '../components/RoleMetadataForm'
 
 const BASIS_LABEL: Record<string, string> = {
   stated: 'stated',
   implied: 'implied',
   inferred: 'inferred (no verbatim span — provenance too weak to trust one)',
   user_asserted: 'user-asserted',
+}
+
+// Reviewable, AI-assisted metadata enrichment (source-aware ingest cleanup,
+// problem #5): proposes title/organisation/location/... from the role's own
+// source document, but never writes anything until the user explicitly
+// accepts — editable in between, same posture as requirement claims below
+// ("nothing here was auto-accepted"). Placed on this page rather than a new
+// one, per the brief's own suggestion that this is the cleanest fit.
+function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
+  const [proposal, setProposal] = useState<RoleMetadataInput | null>(null)
+  const [proposing, setProposing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const propose = async () => {
+    setProposing(true)
+    setError(null)
+    setSaved(false)
+    try {
+      const result = await api.proposeRoleMetadata(roleId)
+      if (result.status === 'failed' || !result.proposal) {
+        setError(result.error ?? 'Metadata proposal failed.')
+      } else {
+        setProposal(result.proposal)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProposing(false)
+    }
+  }
+
+  const accept = async () => {
+    if (!proposal) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.updateRoleMetadata(roleId, proposal)
+      setSaved(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Metadata enrichment</h3>
+          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 560 }}>
+            Proposes title/employer/location/date/etc. from this role's own captured source — never invented, and
+            never authoritative until you accept it below. A posting date left blank in the source stays blank here
+            too; it is never filled in from the capture date.
+          </p>
+        </div>
+        {!proposal && (
+          <button className="primary" onClick={propose} disabled={proposing} style={{ flexShrink: 0 }}>
+            {proposing ? 'Proposing…' : 'Propose metadata from source'}
+          </button>
+        )}
+      </div>
+
+      {error && <p style={{ color: 'var(--critical)', fontSize: 13, marginTop: 10 }}>{error}</p>}
+
+      {proposal && (
+        <div style={{ marginTop: 12 }}>
+          <RoleMetadataForm value={proposal} onChange={setProposal} disabled={saving} />
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="primary" onClick={accept} disabled={saving}>
+              {saving ? 'Saving…' : 'Accept metadata'}
+            </button>
+            <button onClick={() => setProposal(null)} disabled={saving}>
+              Discard proposal
+            </button>
+            {saved && <span style={{ color: 'var(--good)', fontSize: 13 }}>Saved.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function RoleRequirements() {
@@ -53,6 +137,9 @@ export default function RoleRequirements() {
         ← Back to role
       </Link>
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Requirement claims</h1>
+
+      <MetadataEnrichmentPanel roleId={roleId} />
+
       <p className="secondary">
         Closed-vocabulary extraction against the canonical concept list (docs/11 §7.3). Every claim below carries its
         basis and, where trusted, a verbatim span from the source document — click through to see it. Nothing here

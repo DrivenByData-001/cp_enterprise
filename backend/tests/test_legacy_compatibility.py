@@ -96,6 +96,128 @@ def test_delete_role(client):
     assert client.get(f"/api/roles/{role_id}").status_code == 404
 
 
+def test_delete_role_with_extraction_run_history_succeeds(client, monkeypatch):
+    """Production cleanup regression (source-aware ingest cleanup): a role
+    that ever had requirement extraction attempted against it has
+    jobber.extraction_run rows referencing it (subject_type='role_instance')
+    via a foreign key with no ON DELETE cascade. Before this fix, deleting
+    such a role raised a ForeignKeyViolation instead of the 200 every other
+    role delete gets — exactly the shape of one of the two duplicate
+    production roles (~21 requirement claims, extraction attempted twice).
+
+    Those role-subject extraction_run rows cannot be preserved by nulling
+    their role_instance_id either — extraction_run's own CHECK constraint
+    requires it non-null whenever subject_type='role_instance' — so they are
+    deleted along with the role, the same accepted-loss shape as its
+    requirement_claim rows.
+
+    Mocks app.extraction.run_json_task with an *unresolved* surface form
+    (no seeded matching concept) so this actually exercises the production
+    shape end to end — both a requirement_claim row AND a concept_proposal
+    row referencing the same extraction_run, which turned out to be a second,
+    real production-only foreign key this fix also had to account for (an
+    unmocked AI call in a sandboxed test just fails fast on a missing API
+    key and never reaches either)."""
+    from app import ai, extraction
+    from app.models import RequirementExtractionResult, RequirementItem
+
+    def _fake_run(*, task, prompt_name, user_input, output_model):
+        run = ai.AITaskRun(
+            task=task, model="test-model", prompt_name=prompt_name, prompt_version="testversion",
+            started_at="2026-01-01T00:00:00+00:00", finished_at="2026-01-01T00:00:01+00:00",
+            status="ok", input_chars=len(user_input), output_chars=10,
+        )
+        output = RequirementExtractionResult(
+            requirements=[
+                RequirementItem(
+                    surface_form="Solvency II", requirement_type="required", basis="stated",
+                    evidence_span="Requires IFRS 17 and Solvency II.",
+                )
+            ]
+        )
+        return ai.AITaskResult(output=output, run=run)
+
+    monkeypatch.setattr(extraction, "run_json_task", _fake_run)
+
+    resp = client.post(
+        "/api/role-instances/ingest",
+        json={"text": "Life Actuarial Manager. Requires IFRS 17 and Solvency II.", "title": "Life Actuarial Manager"},
+    )
+    role_id = resp.json()["id"]
+
+    extraction_resp = client.post(f"/api/role-instances/{role_id}/extract-requirements")
+    assert extraction_resp.status_code == 200
+    assert extraction_resp.json()["proposals_created"] == 1  # no matching concept seeded — genuinely unresolved
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM jobber.extraction_run WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] > 0
+        cur.execute(
+            "SELECT count(*) AS n FROM jobber.concept_proposal WHERE extraction_run_id IN "
+            "(SELECT id FROM jobber.extraction_run WHERE role_instance_id = %s)",
+            (role_id,),
+        )
+        assert cur.fetchone()["n"] > 0
+
+    delete_resp = client.delete(f"/api/roles/{role_id}")
+    assert delete_resp.status_code == 200
+    assert client.get(f"/api/roles/{role_id}").status_code == 404
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM jobber.extraction_run WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 0
+        # requirement_claim rows cascade-deleted with the role (the user
+        # explicitly accepts losing these when deleting a duplicate).
+        cur.execute("SELECT count(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 0
+        # concept_proposal rows survive — a proposal is about the vocabulary
+        # term, not this role — only their now-dangling run reference is nulled.
+        cur.execute("SELECT count(*), count(extraction_run_id) AS with_run FROM jobber.concept_proposal WHERE surface_form = 'solvency ii'")
+        row = cur.fetchone()
+        assert row["count"] == 1
+        assert row["with_run"] == 0
+
+
+def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, monkeypatch):
+    """The other non-cascading extraction_run reference: result_role_instance_id
+    (set by the job_posting_extract/native-import pipeline, distinct from
+    the subject-side role_instance_id above) must also not block deletion —
+    exactly the shape of the retained production role's own extraction
+    history."""
+    from app import ai, document_processing
+    from app.models import Analysis, Job, JobPostingImport, Metadata
+
+    def _fake_run(**kwargs):
+        output = JobPostingImport(
+            metadata=Metadata(source="user_paste", extraction_status="ok"),
+            job=Job(title="Pricing Actuary", organisation="Aviva"),
+            skills=[], analysis=Analysis(summary="A pricing role."),
+        )
+        run = ai.AITaskRun(
+            task=kwargs["task"], model="test-model", prompt_name=kwargs["prompt_name"], prompt_version="testversion",
+            started_at="2026-01-01T00:00:00+00:00", finished_at="2026-01-01T00:00:01+00:00",
+            status="ok", input_chars=len(kwargs["user_input"]), output_chars=10,
+        )
+        return ai.AITaskResult(output=output, run=run)
+
+    monkeypatch.setattr(document_processing, "run_json_task", _fake_run)
+    role_id = client.post("/api/import/native", json={"text": "Pricing Actuary. Requires IFRS 17."}).json()["id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT count(*) AS n FROM jobber.extraction_run WHERE result_role_instance_id = %s", (role_id,),
+        )
+        assert cur.fetchone()["n"] > 0
+
+    assert client.delete(f"/api/roles/{role_id}").status_code == 200
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT count(*) AS n FROM jobber.extraction_run WHERE task = 'job_posting_extract' AND result_role_instance_id IS NULL",
+        )
+        assert cur.fetchone()["n"] > 0
+
+
 def test_target_import_listing_and_path(client):
     client.post("/api/import", json=LEGACY_POSTING)  # a real posting to serve as a stepping stone
     _seed_profile_snapshot("An actuary with reserving experience.")

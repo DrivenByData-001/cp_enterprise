@@ -33,6 +33,21 @@ def test_default_period_is_recent_and_includes_null_dates(client):
     assert old_id not in ids
 
 
+def test_period_unknown_date_returns_only_undated_roles(client):
+    """Source-aware ingest cleanup, problem #8: unknown posting dates must be
+    explicitly findable, distinct from 'recent' (which mixes them in
+    alongside genuinely recent dated roles)."""
+    with db.db_cursor() as cur:
+        dated_id = _role(cur, "Dated role", posting_date="2025-06-13")
+        undated_id = _role(cur, "Undated role", posting_date=None)
+
+    body = client.get("/api/roles", params={"period": "unknown_date"}).json()
+    ids = {r["id"] for r in body["items"]}
+    assert body["period"] == "unknown_date"
+    assert undated_id in ids
+    assert dated_id not in ids
+
+
 def test_period_all_includes_every_year(client):
     with db.db_cursor() as cur:
         old_id = _role(cur, "Very old role", posting_date="2008-01-01")

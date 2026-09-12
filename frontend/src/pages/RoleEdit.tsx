@@ -1,34 +1,92 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Role } from '../lib/api'
+import { api, type Role, type RoleMetadataInput } from '../lib/api'
+import RoleMetadataForm from '../components/RoleMetadataForm'
 
 type Result = { ok: boolean; message: string }
 
-export default function RoleEdit() {
-  const { id } = useParams()
+function metadataFromRole(role: Role): RoleMetadataInput {
+  return {
+    title: role.title,
+    organisation: role.organisation,
+    location: role.location,
+    country: role.country,
+    remote_type: role.remote_type,
+    employment_type: role.employment_type,
+    seniority_level: role.seniority_level,
+    posting_date: role.posting_date,
+  }
+}
+
+// Source-aware roles (captured via /api/role-instances/ingest, PDF or
+// pasted text) have no `raw_json` — there was never a full JobPostingImport
+// extraction to overwrite. Editing metadata for one of these goes through
+// the lighter PATCH /api/role-instances/{id}/metadata instead of the
+// legacy full-JSON overwrite below (source-aware ingest cleanup, problem
+// #7). Never touches the immutable source document, skills, or requirement
+// claims — reinterpreting the source stays a separate, explicit action
+// (Requirements page).
+function SourceAwareMetadataEditor({ role }: { role: Role }) {
   const navigate = useNavigate()
-  const [role, setRole] = useState<Role | null>(null)
-  const [text, setText] = useState('')
-  const [result, setResult] = useState<Result | null>(null)
+  const [metadata, setMetadata] = useState<RoleMetadataInput>(metadataFromRole(role))
   const [busy, setBusy] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!id) return
-    api
-      .getRole(id)
-      .then((r) => {
-        setRole(r)
-        setText(JSON.stringify(r.raw_json, null, 2))
-      })
-      .catch((e) => setLoadError(String(e)))
-  }, [id])
-
-  const isTarget = role?.node_type !== 'posting'
-  const promptName = isTarget ? 'prompts/decompose_target_role.md' : 'prompts/extract_job_posting.md'
+  const [result, setResult] = useState<Result | null>(null)
 
   const submit = async () => {
-    if (!role) return
+    setBusy(true)
+    setResult(null)
+    try {
+      await api.updateRoleMetadata(role.id, metadata)
+      setResult({ ok: true, message: 'Metadata saved.' })
+      setTimeout(() => navigate(`/roles/${role.id}`), 700)
+    } catch (e) {
+      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Metadata</h3>
+      <p className="secondary" style={{ marginTop: 0, fontSize: 13 }}>
+        This role was captured as an immutable source document rather than a full AI extraction, so there is no JSON
+        to overwrite here — correct the fields below directly. This never modifies the captured source text; re-running
+        requirement extraction against it stays a separate action on the{' '}
+        <Link to={`/role-instances/${role.id}/requirements`}>Requirements</Link> page.
+      </p>
+      {role.url && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          Source URL:{' '}
+          <a href={role.url} target="_blank" rel="noreferrer">
+            {role.url}
+          </a>{' '}
+          (read-only — tied to the immutable source document)
+        </p>
+      )}
+      <RoleMetadataForm value={metadata} onChange={setMetadata} disabled={busy} />
+      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <button className="primary" onClick={submit} disabled={busy}>
+          {busy ? 'Saving…' : 'Save changes'}
+        </button>
+        <button onClick={() => navigate(`/roles/${role.id}`)} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+      {result && <p style={{ marginTop: 16, color: result.ok ? 'var(--good)' : 'var(--critical)' }}>{result.message}</p>}
+    </div>
+  )
+}
+
+function LegacyJsonEditor({ role }: { role: Role }) {
+  const navigate = useNavigate()
+  const isTarget = role.node_type !== 'posting'
+  const promptName = isTarget ? 'prompts/decompose_target_role.md' : 'prompts/extract_job_posting.md'
+  const [text, setText] = useState(() => JSON.stringify(role.raw_json, null, 2))
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<Result | null>(null)
+
+  const submit = async () => {
     setBusy(true)
     setResult(null)
     try {
@@ -47,16 +105,8 @@ export default function RoleEdit() {
     }
   }
 
-  if (loadError) return <p style={{ color: 'var(--critical)' }}>{loadError}</p>
-  if (!role) return <p className="muted">Loading…</p>
-
   return (
-    <div>
-      <Link to={`/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
-        ← Back to {role.title}
-      </Link>
-
-      <h1 style={{ fontSize: 22, marginTop: 12 }}>Edit "{role.title}"</h1>
+    <>
       <p className="secondary">
         To add more info to this {isTarget ? 'target' : 'posting'} (e.g. you found extra detail, or want to
         re-research it with new supporting material), go back to Claude/ChatGPT with{' '}
@@ -85,6 +135,46 @@ export default function RoleEdit() {
 
       {result && (
         <p style={{ marginTop: 16, color: result.ok ? 'var(--good)' : 'var(--critical)' }}>{result.message}</p>
+      )}
+    </>
+  )
+}
+
+export default function RoleEdit() {
+  const { id } = useParams()
+  const [role, setRole] = useState<Role | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!id) return
+    api.getRole(id).then(setRole).catch((e) => setLoadError(String(e)))
+  }, [id])
+
+  if (loadError) return <p style={{ color: 'var(--critical)' }}>{loadError}</p>
+  if (!role) return <p className="muted">Loading…</p>
+
+  const isTarget = role.node_type !== 'posting'
+  const hasRawJson = role.raw_json != null
+
+  return (
+    <div>
+      <Link to={`/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
+        ← Back to {role.title}
+      </Link>
+
+      <h1 style={{ fontSize: 22, marginTop: 12 }}>Edit "{role.title}"</h1>
+
+      {hasRawJson && <LegacyJsonEditor role={role} />}
+
+      {!hasRawJson && !isTarget && <SourceAwareMetadataEditor role={role} />}
+
+      {!hasRawJson && isTarget && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <p className="secondary" style={{ margin: 0 }}>
+            This target has no structured data to edit as JSON yet, and a dedicated metadata editor for hand-entered
+            targets isn't available here yet.
+          </p>
+        </div>
       )}
     </div>
   )
