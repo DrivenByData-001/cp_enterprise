@@ -55,7 +55,7 @@ export default function Dashboard() {
   const [facetType, setFacetType] = useState('')
   const [facets, setFacets] = useState<Facet[]>([])
   const [conceptId, setConceptId] = useState<string>('')
-  const [period, setPeriod] = useState<'recent' | 'all' | 'year'>('recent')
+  const [period, setPeriod] = useState<'recent' | 'all' | 'year' | 'unknown_date'>('recent')
   const [year, setYear] = useState<number | ''>('')
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -148,7 +148,11 @@ export default function Dashboard() {
       {/* Temporal filter (docs/18 §3): defaults to "recent" so the ~2008-2025
           historical corpus doesn't drown out current roles day to day, while
           every historical year stays one click away — never hidden at the
-          persistence layer, only in this default view. */}
+          persistence layer, only in this default view. Labels are explicit
+          about *posting* year (source-aware ingest cleanup, problem #8):
+          this filters by when the role was posted, never by when it was
+          captured/uploaded — capture date is a separate, optional axis this
+          filter never substitutes for a missing posting date. */}
       <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16, padding: '8px 12px' }}>
         <span className="secondary" style={{ fontSize: 13 }}>
           Showing:
@@ -156,21 +160,32 @@ export default function Dashboard() {
         <select value={period} onChange={(e) => setPeriod(e.target.value as typeof period)}>
           <option value="recent">Recent (last few years)</option>
           <option value="all">All years{yearRange ? ` (${yearRange.min}–${yearRange.max})` : ''}</option>
-          <option value="year">A specific year…</option>
+          <option value="year">A specific posting year…</option>
+          <option value="unknown_date">Unknown posting date</option>
         </select>
         {period === 'year' && (
-          <select value={year} onChange={(e) => setYear(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Choose a year</option>
-            {availableYears.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </select>
+          <>
+            <span className="secondary" style={{ fontSize: 13 }}>
+              Posting year:
+            </span>
+            <select value={year} onChange={(e) => setYear(e.target.value ? Number(e.target.value) : '')}>
+              <option value="">Choose a year</option>
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </>
         )}
-        {period !== 'recent' && (
+        {(period === 'all' || period === 'year') && (
           <span className="muted" style={{ fontSize: 12 }}>
             Historical roles included — the full captured corpus spans {yearRange ? `${yearRange.min}–${yearRange.max}` : 'multiple years'}.
+          </span>
+        )}
+        {period === 'unknown_date' && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            Roles with no known posting date — never assumed to be the date they were captured.
           </span>
         )}
       </div>

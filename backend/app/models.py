@@ -259,6 +259,47 @@ class ClusterSplitRequest(BaseModel):
 # request/response models — kept here for consistency with JobPostingImport/
 # TargetImport above, which already serve the same dual purpose.
 
+class RoleMetadataUpdate(BaseModel):
+    """PATCH /api/role-instances/{id}/metadata — the source-aware counterpart
+    to the legacy full-JobPostingImport overwrite (PUT /api/roles/{id}),
+    used both for manual Edit on a role with no `raw_json` and for 'Accept
+    metadata' after a proposed enrichment review (source-aware ingest
+    cleanup, problems #5/#7). Every field optional; only supplied fields
+    change (app/db.py's update_role_metadata reads `exclude_unset`) — an
+    omitted field is left exactly as stored, and an explicit `null` clears
+    it. Never touches skills, the linked document, or requirement claims."""
+
+    title: Optional[str] = None
+    organisation: Optional[str] = None
+    location: Optional[str] = None
+    country: Optional[str] = None
+    remote_type: Optional[str] = None
+    employment_type: Optional[str] = None
+    seniority_level: Optional[str] = None
+    posting_date: Optional[str] = None
+
+
+class RoleMetadataProposal(BaseModel):
+    """AI output schema for the lightweight metadata-enrichment task
+    (app/metadata_enrichment.py, prompts/enrich_role_metadata.md) — a small,
+    focused sibling of JobPostingImport.Job that proposes only the fields a
+    source-aware capture leaves blank, never the full description/
+    requirements/skills extraction. Every field must come from the source
+    text itself (or stay null) — `posting_date` in particular must never be
+    filled from the capture/upload date, only from a date actually stated in
+    the source (enforced again deterministically in
+    metadata_enrichment.py, not just left to the prompt)."""
+
+    title: Optional[str] = None
+    organisation: Optional[str] = None
+    location: Optional[str] = None
+    country: Optional[str] = None
+    remote_type: Optional[str] = None
+    employment_type: Optional[str] = None
+    seniority_level: Optional[str] = None
+    posting_date: Optional[str] = None
+
+
 class RequirementItem(BaseModel):
     surface_form: str
     requirement_type: str  # required | preferred | contextual
