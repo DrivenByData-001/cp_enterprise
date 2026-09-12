@@ -3,14 +3,25 @@ import ConceptDetailsDrawer from '../ConceptDetailsDrawer'
 import { api, type ConceptType, type VocabularyGraphNode, type VocabularyGraphResponse } from '../../lib/api'
 import VocabularyMapControls from './VocabularyMapControls'
 import { DEFAULT_MAP_FILTERS, type VocabMapFilterState } from './vocabConstants'
-import VocabularyGraph from './VocabularyGraph'
-import VocabularyMapLegend from './VocabularyMapLegend'
-import VocabularyMapDetails from './VocabularyMapDetails'
+import VocabularyMapWorkspace from './VocabularyMapWorkspace'
+import VocabularyMapFullscreenOverlay from './VocabularyMapFullscreenOverlay'
+import type { GraphApi } from './VocabularyGraph'
 
 // Map-level filter state, API loading, node selection, and graph/detail
 // coordination (brief §21's `VocabularyMapView` responsibilities). No mutation
 // happens directly in this file — every write goes through the shared
 // ClusterActionsPanel / ConceptDetailsDrawer, exactly as the Review tab uses.
+//
+// Fullscreen + semantic zoom (vocab-graph-II brief): `isFullscreen` and
+// `detailsCollapsed` are the only two pieces of state this pass adds here.
+// Everything else fullscreen needs to preserve — filters, graph response,
+// selection, focus mode, node limit — already lived in this component before
+// fullscreen existed, so entering/exiting it is purely a render-mode switch:
+// exactly one of the embedded workspace or the fullscreen overlay is mounted
+// at a time (never both), so there is only ever one `VocabularyGraph`/React
+// Flow instance alive, and toggling never touches `filters`/`focusId`/
+// `refreshSignal` — the only things the data-fetch effect below depends on —
+// so it never causes an extra API call either.
 
 export default function VocabularyMapView({
   conceptTypes,
@@ -31,6 +42,9 @@ export default function VocabularyMapView({
   const [focusLabel, setFocusLabel] = useState<string>('')
   const [drawerConceptId, setDrawerConceptId] = useState<string | null>(null)
   const [refreshSignal, setRefreshSignal] = useState(0)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [detailsCollapsed, setDetailsCollapsed] = useState(false)
+  const [graphApi, setGraphApi] = useState<GraphApi | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -83,61 +97,54 @@ export default function VocabularyMapView({
     }
   }, [response])
 
+  const workspaceProps = {
+    response,
+    loading,
+    error,
+    focusId,
+    focusLabel,
+    onExitFocus: exitFocus,
+    selected,
+    onSelect: setSelected,
+    summary,
+    conceptTypes,
+    onChanged,
+    onOpenClusterReview,
+    onOpenConcept: setDrawerConceptId,
+    onFocus: (id: string) => enterFocus(id, selected?.label ?? id),
+    detailsCollapsed,
+    onGraphReady: setGraphApi,
+  }
+
   return (
     <div>
-      {!focusId && <VocabularyMapControls filters={filters} conceptTypes={conceptTypes} onChange={setFilters} />}
-
-      {focusId && (
-        <div className="card" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <span style={{ fontSize: 13 }}>
-            Similarity focus — nearest accepted concepts to <strong>{focusLabel}</strong>
-          </span>
-          <button onClick={exitFocus}>Back to map</button>
-        </div>
+      {!isFullscreen && (
+        <>
+          {!focusId && <VocabularyMapControls filters={filters} conceptTypes={conceptTypes} onChange={setFilters} />}
+          <VocabularyMapWorkspace mode="embedded" {...workspaceProps} onEnterFullscreen={() => setIsFullscreen(true)} />
+        </>
       )}
 
-      {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
-      {response?.meta.truncated && !focusId && (
-        <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
-          Showing the first {response.meta.returned_nodes} matching nodes. Narrow the filters or focus on a node to
-          explore further.
-        </p>
+      {isFullscreen && (
+        <VocabularyMapFullscreenOverlay onExit={() => setIsFullscreen(false)}>
+          <div className="vocab-map-fullscreen-topbar">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <h2 style={{ fontSize: 16, margin: 0 }}>Vocabulary Map</h2>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => graphApi?.fitView({ padding: 0.25 })}>Fit</button>
+                <button onClick={() => setDetailsCollapsed((v) => !v)} aria-label={detailsCollapsed ? 'Show details panel' : 'Hide details panel'}>
+                  {detailsCollapsed ? 'Show details' : 'Hide details'}
+                </button>
+                <button onClick={() => setIsFullscreen(false)} aria-label="Exit fullscreen">
+                  × Exit fullscreen
+                </button>
+              </div>
+            </div>
+            {!focusId && <VocabularyMapControls filters={filters} conceptTypes={conceptTypes} onChange={setFilters} />}
+          </div>
+          <VocabularyMapWorkspace mode="fullscreen" {...workspaceProps} />
+        </VocabularyMapFullscreenOverlay>
       )}
-
-      <div className="vocab-map-grid">
-        <div className="card" style={{ height: 'min(620px, 70vh)', minHeight: 420, padding: 0, overflow: 'hidden', position: 'relative' }}>
-          {loading && (
-            <div
-              style={{
-                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                zIndex: 5, background: 'color-mix(in srgb, var(--surface-1) 60%, transparent)',
-              }}
-            >
-              <span className="muted">Loading…</span>
-            </div>
-          )}
-          {response && !loading && response.nodes.length <= 1 && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span className="muted" style={{ fontSize: 13 }}>Nothing matches the current filters.</span>
-            </div>
-          )}
-          {response && (
-            <VocabularyGraph nodes={response.nodes} edges={response.edges} selectedId={selected?.id ?? null} onSelect={setSelected} />
-          )}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <VocabularyMapDetails
-            node={selected}
-            conceptTypes={conceptTypes}
-            summary={summary}
-            onChanged={onChanged}
-            onOpenClusterReview={onOpenClusterReview}
-            onOpenConcept={setDrawerConceptId}
-            onFocus={(id) => enterFocus(id, selected?.label ?? id)}
-          />
-          <VocabularyMapLegend />
-        </div>
-      </div>
 
       {drawerConceptId && (
         <ConceptDetailsDrawer
@@ -148,11 +155,6 @@ export default function VocabularyMapView({
           onNavigate={setDrawerConceptId}
         />
       )}
-
-      <p className="muted" style={{ fontSize: 11, marginTop: 12 }}>
-        Similarity links show semantically nearby terms; they are not automatic merge recommendations. Viewing the map
-        never changes curation state.
-      </p>
     </div>
   )
 }

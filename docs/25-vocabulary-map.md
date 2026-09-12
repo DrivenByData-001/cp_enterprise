@@ -1,8 +1,10 @@
 # 25 — Vocabulary Map
 
 **Status:** implemented — a read-only visual exploration/navigation layer over
-the existing vocabulary model, tested end-to-end (backend + browser). **Not
-attempted, on purpose:** any of the explicit non-goals below — no second
+the existing vocabulary model, tested end-to-end (backend + browser). A
+follow-up, frontend-only pass (§14–§17) added a fullscreen workspace and
+zoom-aware rendering detail on top of this, unchanged data model and all.
+**Not attempted, on purpose:** any of the explicit non-goals below — no second
 vocabulary store, no automatic merge/split/accept/reject, no graph database,
 no global similarity matrix. **Related:** `docs/18-consolidation-and-
 analytical-foundation.md` (the lexical clustering this pass never touches),
@@ -228,15 +230,17 @@ reimplemented:
 frontend/src/pages/Vocabulary.tsx                          Review/Map tab switch, shared heading, concept-type fetch
 frontend/src/components/vocabulary/VocabularyReviewView.tsx  the pre-existing Review page, moved here unchanged in behaviour
 frontend/src/components/vocabulary/ClusterActions.tsx        MergeTargetPicker, SplitClusterEditor, ClusterActionsPanel — shared
-frontend/src/components/vocabulary/VocabularyMapView.tsx     filter state, data loading, selection, focus-mode coordination
+frontend/src/components/vocabulary/VocabularyMapView.tsx     filter/fullscreen/details-collapsed state, data loading, selection, focus-mode coordination
 frontend/src/components/vocabulary/VocabularyMapControls.tsx View/Group by/Priority/Type/Search (debounced)/Min roles/Min obs./Limit/Reset
-frontend/src/components/vocabulary/VocabularyGraph.tsx       React Flow wrapper: radial layout, custom node/edge rendering, pan/zoom/selection
+frontend/src/components/vocabulary/VocabularyMapWorkspace.tsx  shared embedded/fullscreen layout (§14) — graph + details(+legend), one implementation for both modes
+frontend/src/components/vocabulary/VocabularyMapFullscreenOverlay.tsx  fixed-position fullscreen chrome (§14) — Escape/scroll-lock/focus-on-open only, layout-agnostic
+frontend/src/components/vocabulary/VocabularyGraph.tsx       React Flow wrapper: radial layout, custom node/edge rendering, pan/zoom/selection, semantic zoom (§15), hover tooltip
 frontend/src/components/vocabulary/VocabularyMapLegend.tsx   static legend, mirrors VocabularyGraph's actual styling exactly
 frontend/src/components/vocabulary/VocabularyMapDetails.tsx  dispatches by node kind
 frontend/src/components/vocabulary/SurfaceFormDetails.tsx    Word Details — fetches per-form evidence
 frontend/src/components/vocabulary/PendingClusterMapDetails.tsx  full cluster evidence + ClusterActionsPanel
 frontend/src/components/vocabulary/shared.tsx                 Badge/PriorityBandBadge/FlagBadges (shared with Review)
-frontend/src/components/vocabulary/vocabConstants.ts          BAND_COLOR/BAND_LABEL/FLAG_LABEL/filter-state type+default (plain constants only, kept out of the *.tsx files for Fast Refresh)
+frontend/src/components/vocabulary/vocabConstants.ts          BAND_COLOR/BAND_LABEL/FLAG_LABEL/filter-state type+default/ZoomBand+getZoomBand (§15) (plain constants only, kept out of the *.tsx files for Fast Refresh)
 ```
 
 `Vocabulary.tsx` fetches `conceptTypes` once and hands it to both tabs, so
@@ -487,3 +491,204 @@ byte equality. Confirmed separately in the browser smoke run: no data-
 affecting action was available anywhere on the Map surface beyond the
 existing, unmodified Accept/Merge/Reject/Split/Concept-edit controls
 reached through it.
+
+---
+
+## 14. Fullscreen mode
+
+A follow-up, frontend-only pass on top of everything above: a fullscreen
+workspace and zoom-aware rendering detail for the same graph, still no
+change to the vocabulary model, curation semantics, or backend API.
+
+**Overlay approach.** `VocabularyMapFullscreenOverlay.tsx` is a fixed,
+full-viewport in-app CSS layer (`position: fixed; inset: 0`, `z-index: 50`
+via `.vocab-map-fullscreen-overlay` in `index.css`) — not the browser
+Fullscreen API. This app never needs to escape browser chrome itself, so a
+plain overlay avoids `requestFullscreen()`'s permission prompt, vendor
+quirks, and the extra `document.fullscreenElement` state that would need
+reconciling with React state, for no loss of capability; it also composes
+directly with the existing `ConceptDetailsDrawer` (which sits at a higher
+z-index, 60/61, so opening Concept Details from inside fullscreen still
+layers correctly on top). Rendered inline in the component tree, the same
+convention that drawer already uses — no portal was needed.
+
+**Shared state, one graph instance.** Exactly one of the embedded workspace
+or the fullscreen overlay is mounted at a time — never both — so there is
+only ever one `VocabularyGraph`/React Flow instance alive. `VocabularyMapView`
+still owns every piece of state fullscreen needs to preserve (`filters`,
+`response`, `selected`, `focusId`/`focusLabel`); it now also owns
+`isFullscreen` and `detailsCollapsed`. Toggling fullscreen changes none of
+`filters`/`focusId`/`refreshSignal` — the only inputs the graph-loading
+effect depends on — so entering or exiting it never causes an extra
+`GET /api/vocabulary/graph` call. `VocabularyMapWorkspace.tsx` renders the
+graph, details panel, legend, focus banner, error/truncation notices, and
+footer note identically for `mode="embedded"` and `mode="fullscreen"`, so
+there is exactly one implementation of that layout, not two forks.
+
+**Resize handling.** Because embedded and fullscreen never coexist, entering
+or exiting fullscreen always *mounts a fresh React Flow instance inside an
+already-correctly-sized container* (the overlay is already full-viewport via
+CSS by the time it mounts) rather than resizing a live instance — sidestepping
+the classic "stale bounds after a CSS transition" React Flow pitfall
+entirely, with no `ResizeObserver` bookkeeping needed. `VocabularyGraph`
+exposes an `onReady(api)` callback (`{ fitView }`, deliberately not the raw,
+generically-typed `ReactFlowInstance`) fired from React Flow's own `onInit`,
+which the fullscreen top bar's **Fit** button calls directly — the same
+escape hatch the brief anticipated for a case an initial `fitView` alone
+doesn't cleanly cover (e.g. after collapsing/reopening details resizes the
+canvas without a remount). Embedded mode relies on React Flow's own built-in
+`<Controls/>` fit-view button, unchanged from before this pass.
+
+**Details panel.** `detailsCollapsed` is fullscreen-only: `VocabularyMapWorkspace`
+always shows details+legend in embedded mode regardless of its value, so
+returning from fullscreen never surprises the embedded view. In fullscreen,
+**Hide details**/**Show details** in the top bar toggles it; the underlying
+selection and panel content are never discarded, only hidden, and the grid
+collapses to a single column (`gridTemplateColumns: '1fr'`) so the graph
+reclaims the full width rather than leaving an empty column-track.
+
+**Node-limit behaviour.** Fullscreen reuses `VocabularyMapControls` verbatim
+in its own top bar (same component, same Limit `<select>` already offering
+100/200/300/500 in embedded mode too) — so "a larger limit selector" needed
+no new component. Entering/exiting fullscreen never touches `filters.limit`;
+changing it explicitly still goes through the exact same
+`GET /api/vocabulary/graph?...limit=N` call and the existing 500-row backend
+cap and truncation banner, both untouched.
+
+**Escape / keyboard / accessibility.** `Escape` is bound at `document` level
+(not scoped to a focused element) so it always exits regardless of what
+currently has focus. The overlay carries `role="dialog"`/`aria-modal="true"`/
+an `aria-label`, and moves focus into itself on open — without an
+all-or-nothing Tab-cycle trap, so it can never *actually* trap a user, only
+start their keyboard focus in the right place. Fullscreen's icon-only control
+(`⛶ Fullscreen`) and the Exit/Hide-details buttons all carry explicit
+`aria-label`s. Node meaning is still never conveyed by colour alone (shape +
+line-pattern distinctions from the base pass are unchanged).
+
+---
+
+## 15. Semantic zoom
+
+**Zoom bands.** A single source of threshold truth,
+`getZoomBand(zoom)`/`ZOOM_BAND_THRESHOLDS` in `vocabConstants.ts`:
+
+```
+far     zoom < 0.55
+medium  0.55 <= zoom < 1.05
+close   zoom >= 1.05
+```
+
+Read from React Flow's own viewport (`onMove`/`onInit`), never a second
+measurement mechanism. The band is cached in a ref and only pushed into
+React state when it actually *changes* — continuous panning/zooming inside
+one band costs nothing beyond React Flow's own rendering, and the radial
+layout (`computeRadialLayout`/`computeStarLayout`) is never recomputed from
+zoom: **semantic zoom changes rendering density only, never topology, and
+never the underlying vocabulary data.**
+
+**What changes per band** (`VocabularyGraph.tsx`'s node views):
+
+- **Far** — surface-form labels are unmounted entirely (not just visually
+  hidden — the label `<div>` isn't rendered at all); pending-cluster and
+  accepted-concept labels stay, along with group pills — matching the base
+  pass's existing "shape distinguishes kind" language, now also distinguishing
+  *how much text* survives.
+- **Medium** — surface-form labels reappear (this is the zoom band a fresh
+  `fitView` on a small/medium graph typically lands in — "the normal default
+  embedded experience" the brief asked for).
+- **Close** — cluster/concept/surface-form labels get a wider `max-width`
+  (140px → 220px) instead of a permanent second line, and hovering any
+  non-group node shows a compact tooltip.
+
+**Hover tooltip.** Close-zoom only, content derived solely from the
+already-loaded graph node (never a fetch triggered by hover or by a zoom
+threshold crossing) — a surface form's status/observation count, a pending
+cluster's priority band + role/observation counts, or an accepted concept's
+type/alias count. Position is captured once on `mouseenter` (not tracked on
+every `mousemove`), so hovering costs at most one extra render per node
+entered/left. `data-testid="node-tooltip"`/`"node-label"` exist purely to
+make this and the label-density rules assertable from tests without brittle
+style-string matching.
+
+**Performance.** Verified by construction, not just intent: the per-band
+node-data recompute (`rfNodes`'s `useMemo`) only runs when the zoom *band*
+changes (at most twice per continuous zoom gesture, thanks to the ref-guard
+above), the expensive layout computation has its own, zoom-independent
+`useMemo`, and no code path here calls the vocabulary API — zooming, panning,
+and hovering are all purely client-side rendering decisions over data the
+page already has.
+
+---
+
+## 16. Known limitations (fullscreen / semantic zoom pass)
+
+- **No dedicated frontend test framework existed before this pass.** A
+  minimal Vitest + React Testing Library setup was added (`vitest.config.ts`,
+  `npm test`) scoped narrowly to what jsdom can meaningfully exercise: the
+  `getZoomBand` threshold helper, and `VocabularyMapView`'s own state
+  transitions (fullscreen open/close/Escape, selection/filter/focus/node-limit
+  preservation, details collapse) with `VocabularyGraph` mocked out. Real
+  React Flow rendering — the actual zoom-band label/tooltip visual behaviour,
+  fit-view after a real resize — is not something jsdom exercises
+  meaningfully (no layout engine, no canvas), so that is covered by browser
+  smoke testing instead, per §17, exactly as the brief's own fallback
+  anticipated.
+- **The close-zoom tooltip is position-captured on hover-enter, not
+  cursor-tracked.** A deliberate simplification (brief explicitly allows a
+  "lightweight" tooltip): it stays anchored to where the pointer entered the
+  node rather than following every subsequent pixel of mouse movement, which
+  avoids extra renders per mouse-move at the cost of not sliding smoothly if
+  the pointer wanders far across a large node while it's open.
+- **No focus-trap cycling inside the fullscreen overlay** — only an
+  on-open focus move plus a document-level `Escape` handler. This is a
+  deliberate reading of the brief's own "does not trap the user" requirement
+  over "reasonably as practical" containment: a full Tab-cycle trap is more
+  machinery for the same accessibility outcome and a bigger risk of a bug
+  that *actually* traps someone.
+- Every known limitation from §12 (no raw-term-to-raw-term similarity,
+  approximate `total_nodes`, fixed per-cluster/per-concept fan-out caps, this
+  sandbox's lack of egress to the embedding host) is unchanged by this pass.
+
+---
+
+## 17. Validation (fullscreen / semantic zoom pass)
+
+**Frontend**: `tsc -b` clean, `oxlint` clean (exit 0, zero findings),
+`npm test` (new: Vitest) — 11 passed, 0 failed, covering `getZoomBand`'s
+thresholds and `VocabularyMapView`'s fullscreen/selection/filter/focus/
+node-limit/details-collapse state transitions. `npm run build` succeeds
+(the same pre-existing "chunk >500kB" advisory warning noted in §13,
+unchanged in nature — React Flow plus three.js's Space page).
+
+**Backend**: untouched — no backend file was modified by this pass, so the
+existing suite's pass/fail status (§13) is unaffected; it was not re-run
+solely for a frontend-only change.
+
+**Browser smoke test** (Playwright against this sandbox's pre-installed
+Chromium, a local backend + Vite dev server pair against a disposable seeded
+local Postgres — `local_baseline.sql` + auto-applied migrations, seed data
+created through the exact same `db.upsert_role_instance`/
+`vocabulary_bootstrap.compute_cluster_keys` helpers `test_vocabulary_graph.py`
+itself uses, with the same deterministic-pseudo-embedding stub that file's
+`_stub_embeddings` fixture uses for this sandbox's lack of huggingface.co
+egress): login → Vocabulary → Map → select a pending cluster → **Fullscreen**
+→ selection and the Limit filter (300) both survive the transition → zoom out
+via React Flow's own zoom control until surface-form label elements are
+absent from the DOM while cluster labels remain (far band) → zoom back in
+until surface-form labels reappear (medium band) → zoom in further and hover
+a node until a tooltip renders (close band) → **Hide details** collapses the
+panel and **Show details** restores it with the same selection → explicitly
+raising the node limit to 500 fires exactly one new `limit=500` graph
+request → **View similarity neighbourhood** enters focus mode while staying
+fullscreen, **Back to map** exits it while staying fullscreen → `Escape`
+closes fullscreen → the embedded view still shows the limit-500 state →
+re-enter fullscreen → **Fit** re-fits the view → zero console errors, zero
+page errors across the whole run. Screenshots retained for the deliverable
+report.
+
+**Data safety**: unaffected — this pass adds no new mutation path; every
+control it introduces (fullscreen, zoom, hover, details-collapse, Fit) is
+either pure client-side rendering or a call to the exact same read-only
+`GET /api/vocabulary/graph` the base pass already used and already proved
+never writes anything (§13's `test_graph_and_surface_form_endpoints_perform_
+no_writes`, unaffected by this pass).

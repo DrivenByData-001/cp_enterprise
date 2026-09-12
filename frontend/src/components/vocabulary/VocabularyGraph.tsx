@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
@@ -9,10 +9,18 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
+  type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { VocabularyGraphEdge, VocabularyGraphNode } from '../../lib/api'
-import { BAND_COLOR, CONCEPT_COLOR, GROUP_COLOR } from './vocabConstants'
+import { BAND_COLOR, BAND_LABEL, CONCEPT_COLOR, GROUP_COLOR, getZoomBand, type ZoomBand } from './vocabConstants'
+
+// A minimal, generic-free view of the React Flow instance for callers that
+// only ever need to re-fit the view externally (the fullscreen top bar's
+// [Fit] button, brief §17) — avoids exposing `ReactFlowInstance<NodeData>`'s
+// full, invariant-in-practice generic surface across the component boundary.
+export type GraphApi = { fitView: (options?: { padding?: number }) => void }
 
 // The graph-library wrapper (docs/25 §"Graph library"). Purely presentation —
 // no API calls happen here; it only turns already-fetched nodes/edges into a
@@ -107,19 +115,27 @@ function computeStarLayout(nodes: VocabularyGraphNode[], centerId: string): Map<
 
 // --- custom node rendering (brief §10/§24 — shape + colour, never colour alone) --
 
-type NodeData = { vocabNode: VocabularyGraphNode; selected: boolean }
+type NodeData = { vocabNode: VocabularyGraphNode; selected: boolean; zoomBand: ZoomBand }
 
 function selectionStyle(selected: boolean): React.CSSProperties {
   return selected ? { outline: '3px solid var(--series-1)', outlineOffset: 2 } : {}
 }
 
-function NodeLabel({ children }: { children: React.ReactNode }) {
+// Semantic zoom's label-density rules (vocab-graph-II brief §11): far zoom
+// hides surface-form labels entirely (cluster/concept labels stay, passed
+// via `hidden` per call site); close zoom allows a wider label instead of a
+// permanent second line — richer detail past that is tooltip-only (§9/§10),
+// so topology/layout is never touched by zoom, only this rendering.
+function NodeLabel({ children, hidden, wide }: { children: React.ReactNode; hidden?: boolean; wide?: boolean }) {
+  if (hidden) return null
   return (
     <div
+      data-testid="node-label"
+      data-wide={wide ? 'true' : 'false'}
       style={{
         position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
         marginTop: 4, fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap',
-        maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center', pointerEvents: 'none',
+        maxWidth: wide ? 220 : 140, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center', pointerEvents: 'none',
       }}
     >
       {children}
@@ -159,7 +175,9 @@ function ClusterNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `2.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel>{n.label}</NodeLabel>
+      {/* Cluster labels stay visible at every zoom band (far zoom's "only
+          cluster/concept labels" rule, brief §7) — only surface forms hide. */}
+      <NodeLabel wide={data.zoomBand === 'close'}>{n.label}</NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
@@ -179,7 +197,7 @@ function ConceptNodeView({ data }: NodeProps<Node<NodeData>>) {
           opacity: n.status === 'active' ? 1 : 0.55, ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel>{n.label}</NodeLabel>
+      <NodeLabel wide={data.zoomBand === 'close'}>{n.label}</NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
@@ -199,8 +217,59 @@ function SurfaceFormNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `1.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel>{n.label}</NodeLabel>
+      {/* Far zoom prioritises structure and hides raw-word text entirely
+          (brief §7/§11) — the whole reason semantic zoom exists. */}
+      <NodeLabel hidden={data.zoomBand === 'far'} wide={data.zoomBand === 'close'}>
+        {n.label}
+      </NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+    </div>
+  )
+}
+
+// --- close-zoom hover tooltip (brief §10) — compact, derived only from
+// already-loaded node data, never a fetch triggered by hover or zoom. ------
+
+function tooltipContent(n: VocabularyGraphNode): { title: string; lines: string[] } | null {
+  if (n.kind === 'surface_form') {
+    const lines = [n.status === 'accepted' ? 'Accepted surface form' : 'Pending surface form']
+    if (n.observation_count != null) lines.push(`${n.observation_count} observation${n.observation_count === 1 ? '' : 's'}`)
+    return { title: n.label, lines }
+  }
+  if (n.kind === 'pending_cluster') {
+    const lines: string[] = []
+    if (n.priority_band) lines.push(`${BAND_LABEL[n.priority_band]} priority`)
+    const counts = [
+      n.role_count != null ? `${n.role_count} role${n.role_count === 1 ? '' : 's'}` : null,
+      n.observation_count != null ? `${n.observation_count} observation${n.observation_count === 1 ? '' : 's'}` : null,
+    ].filter((s): s is string => s !== null)
+    if (counts.length) lines.push(counts.join(' · '))
+    return { title: n.label, lines }
+  }
+  if (n.kind === 'concept') {
+    const lines = [n.type_code]
+    if (n.alias_count !== undefined) lines.push(`${n.alias_count} alias${n.alias_count === 1 ? '' : 'es'}`)
+    return { title: n.label, lines }
+  }
+  return null
+}
+
+function NodeTooltip({ x, y, content }: { x: number; y: number; content: { title: string; lines: string[] } }) {
+  return (
+    <div
+      className="card"
+      data-testid="node-tooltip"
+      style={{
+        position: 'absolute', left: x + 14, top: y + 14, zIndex: 20, pointerEvents: 'none',
+        padding: '6px 10px', maxWidth: 220, fontSize: 12, boxShadow: '0 4px 16px rgba(0, 0, 0, 0.18)',
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: content.lines.length ? 2 : 0 }}>{content.title}</div>
+      {content.lines.map((line, i) => (
+        <div key={i} className="muted" style={{ fontSize: 11 }}>
+          {line}
+        </div>
+      ))}
     </div>
   )
 }
@@ -238,11 +307,13 @@ function GraphCanvas({
   edges,
   selectedId,
   onSelect,
+  onReady,
 }: {
   nodes: VocabularyGraphNode[]
   edges: VocabularyGraphEdge[]
   selectedId: string | null
   onSelect: (node: VocabularyGraphNode | null) => void
+  onReady?: (api: GraphApi) => void
 }) {
   const focusCenter = nodes.find((n) => 'focus' in n && (n as { focus?: boolean }).focus)?.id ?? null
 
@@ -252,18 +323,45 @@ function GraphCanvas({
     [nodes, edges, focusCenter],
   )
 
+  // Semantic zoom (brief §5/§6): tracked from React Flow's own viewport, never
+  // a separate polling/measurement mechanism. `zoomBandRef` lets the
+  // high-frequency `onMove` callback skip `setState` (and the re-render it
+  // would cause) unless the *band* actually changed — continuous panning/
+  // zooming inside one band costs nothing beyond React Flow's own rendering,
+  // and topology/layout (`positions` above) is never recomputed from zoom.
+  const [zoomBand, setZoomBand] = useState<ZoomBand>('medium')
+  const zoomBandRef = useRef<ZoomBand>('medium')
+
+  const syncZoomBand = useCallback((zoom: number) => {
+    const band = getZoomBand(zoom)
+    if (band !== zoomBandRef.current) {
+      zoomBandRef.current = band
+      setZoomBand(band)
+    }
+  }, [])
+
+  const handleInit = useCallback(
+    (instance: ReactFlowInstance<Node<NodeData>, Edge>) => {
+      syncZoomBand(instance.getViewport().zoom)
+      onReady?.({ fitView: (options) => instance.fitView(options) })
+    },
+    [syncZoomBand, onReady],
+  )
+
+  const handleMove = useCallback((_event: unknown, viewport: Viewport) => syncZoomBand(viewport.zoom), [syncZoomBand])
+
   const rfNodes: Node<NodeData>[] = useMemo(
     () =>
       nodes.map((n) => ({
         id: n.id,
         type: n.kind,
         position: positions.get(n.id) ?? { x: 0, y: 0 },
-        data: { vocabNode: n, selected: n.id === selectedId },
+        data: { vocabNode: n, selected: n.id === selectedId, zoomBand },
         draggable: false,
         selectable: n.kind !== 'group',
         connectable: false,
       })),
-    [nodes, positions, selectedId],
+    [nodes, positions, selectedId, zoomBand],
   )
 
   const rfEdges: Edge[] = useMemo(
@@ -287,25 +385,53 @@ function GraphCanvas({
 
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
+  // Hover tooltip (brief §9/§10) — close-zoom only, position captured once on
+  // enter (not tracked on every mousemove) so hovering never costs more than
+  // one extra render, and content comes straight from the already-loaded
+  // node — no fetch is ever triggered by hover or by zoom.
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null)
+
+  const handleNodeMouseEnter = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      const original = nodeById.get(node.id)
+      if (!original || original.kind === 'group') return
+      const rect = containerRef.current?.getBoundingClientRect()
+      setHover({ id: node.id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) })
+    },
+    [nodeById],
+  )
+  const handleNodeMouseLeave = useCallback(() => setHover(null), [])
+
+  const hoveredNode = hover ? nodeById.get(hover.id) : null
+  const hoveredTooltip = zoomBand === 'close' && hoveredNode ? tooltipContent(hoveredNode) : null
+
   return (
-    <ReactFlow
-      nodes={rfNodes}
-      edges={rfEdges}
-      nodeTypes={NODE_TYPES}
-      onNodeClick={(_evt, node) => {
-        const original = nodeById.get(node.id)
-        if (original && original.kind !== 'group') onSelect(original)
-      }}
-      onPaneClick={() => onSelect(null)}
-      fitView
-      fitViewOptions={{ padding: 0.25 }}
-      minZoom={0.15}
-      maxZoom={2.5}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background gap={24} size={1} color="var(--gridline)" />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <ReactFlow
+        nodes={rfNodes}
+        edges={rfEdges}
+        nodeTypes={NODE_TYPES}
+        onNodeClick={(_evt, node) => {
+          const original = nodeById.get(node.id)
+          if (original && original.kind !== 'group') onSelect(original)
+        }}
+        onPaneClick={() => onSelect(null)}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onInit={handleInit}
+        onMove={handleMove}
+        fitView
+        fitViewOptions={{ padding: 0.25 }}
+        minZoom={0.15}
+        maxZoom={2.5}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background gap={24} size={1} color="var(--gridline)" />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+      {hover && hoveredTooltip && <NodeTooltip x={hover.x} y={hover.y} content={hoveredTooltip} />}
+    </div>
   )
 }
 
@@ -314,6 +440,7 @@ export default function VocabularyGraph(props: {
   edges: VocabularyGraphEdge[]
   selectedId: string | null
   onSelect: (node: VocabularyGraphNode | null) => void
+  onReady?: (api: GraphApi) => void
 }) {
   return (
     <ReactFlowProvider>
