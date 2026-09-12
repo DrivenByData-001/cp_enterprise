@@ -118,18 +118,30 @@ q=<search text>
 min_role_count=<n>
 min_observation_count=<n>
 country=<country>  seniority=<level>  observed_from=<date>  observed_to=<date>   (pending only — reuses list_clusters' own semantics)
-limit=<n>                               (default 300, max 500 — a total *node* budget)
+limit=<n>                               (default 300, max 500 — a strict total-node budget)
 include_similarity=true|false           (default true — pending clusters' own stored nearest-concept edge)
 include_ontology=true|false             (default true — real accepted concept_edge rows among rendered concepts)
-focus=<node id>                         (switches into similarity-focus mode; every other filter is ignored)
+focus=<cluster:.../concept:.../surface_form:...>   (switches into similarity-focus mode; every other filter is ignored)
 similarity_limit=<n>                    (default 8, max 20; focus mode only)
 ```
 
+`limit` bounds `returned_nodes` in full — clusters/concepts/surface forms
+*and* group nodes *and* the synthetic root — never just the "primary" items.
+One slot is always reserved for root; each subgraph call accounts for its
+own group nodes' cost against the remainder before adding either (see
+`build_graph`/`_pending_subgraph`/`_accepted_subgraph`), so `returned_nodes
+<= limit` always holds — verified by
+`test_result_limit_is_a_strict_total_node_bound_including_groups_and_root`.
+
 `focus` accepts `cluster:<cluster_key>`, `concept:<concept_id>`, or
-`surface_form:<literal text>` — a deliberately separate, simple grammar from
-the graph's own node `id`s (a surface-form node's graph id is owner-scoped
-for uniqueness within one response; similarity lookup only ever needs the
-literal text).
+`surface_form:<literal text>` — **not** necessarily a node `id` copied
+verbatim from a prior response. `cluster:`/`concept:` values do match those
+nodes' own graph `id`s directly, but a surface-form node's graph `id` is
+owner-scoped for uniqueness within one response (e.g.
+`surface:<cluster_key>:<text>` or `surface:<concept_id>:<text>`) — for
+that node, `focus` takes the literal surface-form text alone
+(`surface_form:<text>`), since similarity lookup only ever needs the text,
+never which cluster/concept it happened to appear under.
 
 Response shape (`meta`/`nodes`/`edges`), matching the brief's suggested
 schema (§17) with field names adapted to this app's real data:
@@ -284,12 +296,16 @@ is never accidentally scrambled and never fights a re-fetch's fresh layout.
 ## 9. Filtering, scale, and performance
 
 The full corpus is never sent to the browser. `limit` (default 300, max 500)
-bounds real vocabulary nodes (clusters/concepts/surface forms); the handful
-of presentation-only group/root scaffold nodes (bounded by the small, fixed
-set of priority bands or concept types — never growing with corpus size) sit
-outside that budget, by design. When more matches exist than fit,
-`meta.truncated: true` and the UI shows *"Showing the first N matching
-nodes. Narrow the filters or focus on a node to explore further."*
+is a strict bound on `returned_nodes` — clusters/concepts/surface forms *and*
+the presentation-only group/root scaffold nodes all count against it, so a
+response never carries more than `limit` nodes in total. Each subgraph
+builder accounts for a group node's cost the first time that group is
+needed (a group shared by several clusters/concepts is paid for once, not
+once per member), and one slot is always reserved for the synthetic root —
+see `_pending_subgraph`/`_accepted_subgraph`/`build_graph` in
+`vocabulary_graph.py`. When more matches exist than fit, `meta.truncated:
+true` and the UI shows *"Showing the first N matching nodes. Narrow the
+filters or focus on a node to explore further."*
 
 Per the brief's explicit "do not" list (§25), this pass never:
 
@@ -302,8 +318,10 @@ Per the brief's explicit "do not" list (§25), this pass never:
 - issues one SQL query per graph node (pending: one `list_clusters` call +
   one bulk nearest-concept lookup; accepted: one count + one page query + one
   bulk alias query + one bulk proposal-occurrence lookup + one bulk ontology-
-  edge query — a fixed, small number of queries regardless of how many
-  clusters/concepts are returned, verified directly by
+  edge query; similarity focus: one `nearest_concepts` call + one
+  `_bulk_concepts` lookup for every neighbour's metadata, never one query per
+  neighbour — a fixed, small number of queries regardless of how many
+  clusters/concepts/neighbours are returned, verified directly by
   `test_graph_query_count_does_not_scale_linearly_with_cluster_count`: total
   query count stays well under 3× when the seeded cluster count grows 12×);
 - calls an AI provider, or regenerates a *concept's* embedding, during a

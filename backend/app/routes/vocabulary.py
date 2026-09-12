@@ -105,9 +105,19 @@ def vocabulary_graph_endpoint(
     """Vocabulary Map graph projection (docs/25-vocabulary-map.md) — a
     bounded, server-filtered, read-only reshaping of the exact same
     vocabulary state the Review tab curates. Never mutates anything: see
-    app/vocabulary_graph.py for the full architecture. `focus` (a node id
-    from a prior response) switches into the bounded local similarity-
-    neighbourhood mode (brief §6.4) and ignores every other filter."""
+    app/vocabulary_graph.py for the full architecture.
+
+    `focus` switches into the bounded local similarity-neighbourhood mode
+    (brief §6.4) and ignores every other filter. It accepts one of
+    `cluster:<cluster_key>`, `concept:<concept_id>`, or
+    `surface_form:<literal text>` — this is *not* always identical to a
+    node `id` from a prior response: a surface-form node's own graph `id`
+    is owner-scoped for uniqueness within one response (e.g.
+    `surface:<cluster_key>:<text>`), whereas `focus` for that same node
+    takes the literal surface-form text alone (`surface_form:<text>`), since
+    similarity lookup only ever needs the text, not which cluster/concept it
+    came from. `cluster:`/`concept:` focus values *do* match those nodes'
+    own graph `id`s directly."""
     with db_cursor() as cur:
         if focus:
             return vocabulary_graph.build_similarity_focus(

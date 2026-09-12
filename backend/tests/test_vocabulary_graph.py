@@ -47,6 +47,22 @@ def _edges_with(body, **kwargs):
     return [e for e in body["edges"] if all(e.get(k) == v for k, v in kwargs.items())]
 
 
+def _count_queries(fn):
+    calls = {"n": 0}
+    original = psycopg.Cursor.execute
+
+    def counting_execute(self, *args, **kwargs):
+        calls["n"] += 1
+        return original(self, *args, **kwargs)
+
+    psycopg.Cursor.execute = counting_execute
+    try:
+        fn()
+    finally:
+        psycopg.Cursor.execute = original
+    return calls["n"]
+
+
 def _snapshot_counts(cur):
     cur.execute("SELECT status, COUNT(*) AS n FROM jobber.concept_proposal GROUP BY status ORDER BY status")
     proposal_statuses = [dict(r) for r in cur.fetchall()]
@@ -310,16 +326,67 @@ def test_result_limit_and_truncated_metadata(client):
 
     small = client.get("/api/vocabulary/graph", params={"status": "pending", "limit": 3}).json()
     assert small["meta"]["truncated"] is True
-    # `limit` bounds real vocabulary nodes (clusters/concepts/surface forms);
-    # the handful of presentation-only group/root scaffold nodes (brief
-    # §10.4: "not persisted vocabulary concepts") sit outside that budget.
-    real_nodes = [n for n in small["nodes"] if n["kind"] in ("pending_cluster", "concept", "surface_form")]
-    assert len(real_nodes) <= 3
+    # `limit` is a strict bound on `returned_nodes` — group nodes and the
+    # synthetic root count against it too, not just clusters/concepts/
+    # surface forms (docs/25 §9).
+    assert len(small["nodes"]) <= 3
+    assert small["meta"]["returned_nodes"] == len(small["nodes"])
     assert small["meta"]["total_nodes"] >= 10
 
     large = client.get("/api/vocabulary/graph", params={"status": "pending", "limit": 500}).json()
     assert large["meta"]["truncated"] is False
     assert sum(1 for n in large["nodes"] if n["kind"] == "pending_cluster") == 10
+    assert len(large["nodes"]) <= 500
+    assert large["meta"]["returned_nodes"] == len(large["nodes"])
+
+
+def test_result_limit_is_a_strict_total_node_bound_including_groups_and_root(client):
+    """Regression test: group nodes (one per distinct priority band touched)
+    and the synthetic root used to be appended *after* the node-budget
+    accounting, so a response could carry slightly more than `limit` nodes.
+    Seed clusters spanning four distinct priority bands so four group nodes
+    plus root would be created — enough to have exceeded a small `limit`
+    under the old accounting."""
+    with db.db_cursor() as cur:
+        _role(cur, "Sparse role", [_skill("Sparse Term")])  # sparse: 1 role
+        for i in range(3):
+            _role(cur, f"Low role {i}", [_skill("Low Term")], posting_date="2021-01-01")
+        for i in range(4):
+            _role(cur, f"Medium role {i}", [_skill("Medium Term")], posting_date="2021-01-01")
+        for i in range(6):
+            _role(
+                cur, f"High role {i}", [_skill("High Term")],
+                posting_date=f"{2019 + i}-01-01",
+                country=["UK", "Ireland", "UK", "US", "UK", "Canada"][i],
+                seniority_level=["junior", "mid", "senior", "mid", "senior", "junior"][i],
+            )
+        vb.compute_cluster_keys(cur)
+
+    for limit in (1, 2, 3, 4, 5, 6, 500):
+        body = client.get("/api/vocabulary/graph", params={"status": "pending", "limit": limit}).json()
+        assert len(body["nodes"]) <= limit, f"limit={limit} produced {len(body['nodes'])} nodes"
+        assert body["meta"]["returned_nodes"] == len(body["nodes"])
+        assert _node_by_id(body, "root") is not None  # root always present, always inside the bound
+
+
+def test_limit_one_is_not_falsely_reported_as_truncated_when_nothing_matches(client):
+    """A budget of exactly 0 real-item slots (limit=1, reserved for root)
+    must not be reported as `truncated` when there was genuinely nothing to
+    show — the old shortcut (`if node_budget <= 0: return ..., True, 0`)
+    always claimed truncation regardless of whether anything matched."""
+    resp = client.get("/api/vocabulary/graph", params={"status": "pending", "limit": 1, "q": "no-such-term-anywhere"})
+    body = resp.json()
+    assert body["nodes"] == [{"id": "root", "kind": "group", "label": "Pending", "count": 0}]
+    assert body["meta"]["truncated"] is False
+
+    with db.db_cursor() as cur:
+        _role(cur, "Role", [_skill("Some Term")], posting_date="2021-01-01")
+        vb.compute_cluster_keys(cur)
+
+    resp2 = client.get("/api/vocabulary/graph", params={"status": "pending", "limit": 1})
+    body2 = resp2.json()
+    assert len(body2["nodes"]) == 1
+    assert body2["meta"]["truncated"] is True  # a real cluster existed but couldn't fit
 
 
 # --- no writes (brief §30.13) -----------------------------------------------
@@ -488,21 +555,6 @@ def test_graph_query_count_does_not_scale_linearly_with_cluster_count(client):
                 _role(cur, f"Role {i}", [_skill(f"Term {i}")], posting_date="2021-01-01")
             vb.compute_cluster_keys(cur)
 
-    def _count_queries(fn):
-        calls = {"n": 0}
-        original = psycopg.Cursor.execute
-
-        def counting_execute(self, *args, **kwargs):
-            calls["n"] += 1
-            return original(self, *args, **kwargs)
-
-        psycopg.Cursor.execute = counting_execute
-        try:
-            fn()
-        finally:
-            psycopg.Cursor.execute = original
-        return calls["n"]
-
     _seed(5)
     small_count = _count_queries(lambda: client.get("/api/vocabulary/graph", params={"status": "pending", "limit": 500}))
 
@@ -512,3 +564,42 @@ def test_graph_query_count_does_not_scale_linearly_with_cluster_count(client):
     # A per-node query pattern would scale ~linearly with cluster count
     # (5 -> 65 clusters, 13x); a handful of grouped/bulk queries should not.
     assert large_count < small_count * 3
+
+
+def test_similarity_focus_bulk_fetches_neighbour_concepts_not_per_neighbour(client):
+    """Regression test: `_focus_on_cluster`/`_focus_on_concept`/
+    `_focus_on_surface_form` used to fetch each neighbour concept's metadata
+    with its own `SELECT ... WHERE id = %s` after `nearest_concepts` — safely
+    bounded by `similarity_limit`, but unnecessary given `_bulk_concepts`
+    already exists. Query count for one focus request must not scale with
+    how many neighbours it actually returns."""
+    from app.concept_linking import ensure_concept_embeddings
+
+    with db.db_cursor() as cur:
+        center_id = _active_concept(cur, "Focus Center Concept", type_code="knowledge")
+        for i in range(18):
+            _active_concept(cur, f"Neighbour {i}", type_code="knowledge")
+        ensure_concept_embeddings(cur)
+
+    few_count = _count_queries(
+        lambda: client.get("/api/vocabulary/graph", params={"focus": f"concept:{center_id}", "similarity_limit": 2})
+    )
+    many_count = _count_queries(
+        lambda: client.get("/api/vocabulary/graph", params={"focus": f"concept:{center_id}", "similarity_limit": 18})
+    )
+    # A per-neighbour query pattern would scale directly with similarity_limit
+    # (2 -> 18 neighbours, 9x); one bulk lookup regardless of neighbour count
+    # should not.
+    assert many_count < few_count + 3
+
+    # And the response itself is still correct: bulk-fetched rows preserve
+    # similarity ordering, active-concept status, and similarity scores.
+    body = client.get(
+        "/api/vocabulary/graph", params={"focus": f"concept:{center_id}", "similarity_limit": 5}
+    ).json()
+    neighbour_nodes = [n for n in body["nodes"] if n["id"] != f"concept:{center_id}"]
+    assert 0 < len(neighbour_nodes) <= 5
+    sim_edges = [e for e in body["edges"] if e["relation"] == "similar_to"]
+    assert len(sim_edges) == len(neighbour_nodes)
+    similarities = [e["similarity"] for e in sim_edges]
+    assert similarities == sorted(similarities, reverse=True)  # nearest first, preserved from nearest_concepts

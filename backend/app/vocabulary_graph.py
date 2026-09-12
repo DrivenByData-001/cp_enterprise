@@ -143,8 +143,11 @@ def _pending_subgraph(
     country, seniority, observed_from, observed_to, node_budget: int, include_similarity: bool,
     current_year: int | None, type_labels: dict[str, str],
 ) -> tuple[list[dict], list[dict], bool, int]:
-    if node_budget <= 0:
-        return [], [], True, 0
+    # `node_budget` is always >= 0 (build_graph never passes a negative
+    # value) — a budget of exactly 0 flows through the normal path below
+    # (list_clusters(limit=0) still returns a correct `total`), rather than
+    # a hardcoded early "truncated" that would be wrong when nothing
+    # actually matched.
 
     # The one call that does all filtering/sorting/pagination — identical
     # logic the Review tab's queue uses (docs/19 §4). `limit=node_budget` is
@@ -172,6 +175,35 @@ def _pending_subgraph(
         if node_count >= node_budget:
             truncated_by_budget = True
             break
+
+        gid = None
+        group_label = None
+        if group_by != "none":
+            if group_by == "priority":
+                band_key = c["priority_band"] or "sparse"
+                gid = f"group:priority:{band_key}"
+                group_label = band_key.title()
+            else:
+                type_key = c.get("suggested_type") or "unclassified"
+                gid = f"group:type:{type_key}"
+                group_label = type_labels.get(type_key, type_key.title() if type_key == "unclassified" else type_key)
+
+        # A brand-new group node costs one extra unit of the same node
+        # budget the cluster itself does — accounted for *before* either is
+        # added, so `returned_nodes` (which includes group/root nodes) can
+        # never exceed `limit` (docs/25 §9).
+        needs_new_group = gid is not None and gid not in group_nodes
+        cost = 1 + (1 if needs_new_group else 0)
+        if node_count + cost > node_budget:
+            truncated_by_budget = True
+            break
+
+        if needs_new_group:
+            group_nodes[gid] = _group_node(gid, group_label, 0)
+            node_count += 1
+        if gid is not None:
+            group_nodes[gid]["count"] += 1
+
         cluster_id = f"cluster:{c['cluster_key']}"
         nodes.append({
             "id": cluster_id,
@@ -188,18 +220,7 @@ def _pending_subgraph(
             "target": {"type": "cluster_review", "id": c["cluster_key"]},
         })
         node_count += 1
-
-        if group_by != "none":
-            if group_by == "priority":
-                band_key = c["priority_band"] or "sparse"
-                gid = f"group:priority:{band_key}"
-                label = band_key.title()
-            else:
-                type_key = c.get("suggested_type") or "unclassified"
-                gid = f"group:type:{type_key}"
-                label = type_labels.get(type_key, type_key.title() if type_key == "unclassified" else type_key)
-            group_nodes.setdefault(gid, _group_node(gid, label, 0))
-            group_nodes[gid]["count"] += 1
+        if gid is not None:
             edges.append(_edge(gid, cluster_id, "contains"))
 
         for sf in sorted(c["surface_forms"])[:SURFACE_FORMS_PER_CLUSTER_LIMIT]:
@@ -248,8 +269,10 @@ def _proposal_occurrence_lookup(cur, concept_ids: list[str]) -> dict[tuple[str, 
 def _accepted_subgraph(
     cur, *, group_by: str, type_code, q, node_budget: int, include_ontology: bool, type_labels: dict[str, str],
 ) -> tuple[list[dict], list[dict], bool, int]:
-    if node_budget <= 0:
-        return [], [], True, 0
+    # `node_budget` is always >= 0 — a budget of exactly 0 flows through the
+    # normal path (the SQL LIMIT 0 still returns a correct `total_matching`
+    # count from the separate COUNT query below), same reasoning as
+    # _pending_subgraph.
     if group_by not in ("type", "none"):
         group_by = "type"  # "priority" is meaningless for accepted concepts
 
@@ -299,15 +322,28 @@ def _accepted_subgraph(
         if node_count >= node_budget:
             truncated_by_budget = True
             break
+
+        gid = f"group:type:{row['type_code']}" if group_by == "type" else None
+
+        # Same group-cost accounting as _pending_subgraph — a brand-new
+        # group node costs one extra unit of the shared node budget.
+        needs_new_group = gid is not None and gid not in group_nodes
+        cost = 1 + (1 if needs_new_group else 0)
+        if node_count + cost > node_budget:
+            truncated_by_budget = True
+            break
+
+        if needs_new_group:
+            group_nodes[gid] = _group_node(gid, type_labels.get(row["type_code"], row["type_code"]), 0)
+            node_count += 1
+        if gid is not None:
+            group_nodes[gid]["count"] += 1
+
         concept_id = str(row["id"])
         aliases = aliases_by_concept.get(concept_id, [])
         nodes.append(_concept_node(concept_id, row, alias_count=len(aliases)))
         node_count += 1
-
-        if group_by == "type":
-            gid = f"group:type:{row['type_code']}"
-            group_nodes.setdefault(gid, _group_node(gid, type_labels.get(row["type_code"], row["type_code"]), 0))
-            group_nodes[gid]["count"] += 1
+        if gid is not None:
             edges.append(_edge(gid, f"concept:{concept_id}", "contains"))
 
         for alias_row in aliases[:ALIASES_PER_CONCEPT_LIMIT]:
@@ -359,9 +395,10 @@ def build_graph(
     current_year: int | None = None,
 ) -> dict:
     """The bounded, server-filtered Vocabulary Map graph (docs/25). Never
-    writes anything. `limit` is a total *node* budget (not a cluster/concept
-    count) shared across whichever branch(es) `status` selects — see module
-    docstring."""
+    writes anything. `limit` is a strict total *node* budget — it bounds
+    `returned_nodes` including group nodes and the synthetic root, not just
+    clusters/concepts/surface forms — shared across whichever branch(es)
+    `status` selects. See module docstring."""
     if status not in _STATUSES:
         raise HTTPException(400, f"status must be one of {_STATUSES}")
     if group_by is not None and group_by not in _GROUP_BY:
@@ -374,8 +411,14 @@ def build_graph(
     truncated = False
     total_matching = 0
 
+    # One slot is always reserved for the synthetic root added below; each
+    # subgraph call accounts for its own group nodes' cost against the
+    # remainder, so `len(nodes)` after both branches is guaranteed <=
+    # `item_budget`, and `item_budget + 1 (root) == limit`.
+    item_budget = max(0, limit - 1)
+
     if status in ("pending", "combined"):
-        budget = limit if status == "pending" else limit // 2
+        budget = item_budget if status == "pending" else item_budget // 2
         p_nodes, p_edges, p_trunc, p_total = _pending_subgraph(
             cur, group_by=group_by or "priority", band=band, type_code=type_code, q=q,
             min_role_count=min_role_count, min_observation_count=min_observation_count,
@@ -389,7 +432,7 @@ def build_graph(
         total_matching += p_total
 
     if status in ("accepted", "combined"):
-        budget = limit if status == "accepted" else max(0, limit - len(nodes))
+        budget = item_budget if status == "accepted" else max(0, item_budget - len(nodes))
         a_nodes, a_edges, a_trunc, a_total = _accepted_subgraph(
             cur, group_by=group_by or "type", type_code=type_code, q=q, node_budget=budget,
             include_ontology=include_ontology, type_labels=type_labels,
@@ -492,9 +535,10 @@ def _focus_on_cluster(cur, cluster_key: str, similarity_limit: int) -> dict:
     # the existing bounded kNN cascade (concept_linking.nearest_concepts),
     # never a fabricated cluster-to-cluster score. Documented limitation,
     # docs/25 §"Similarity semantics".
-    for concept_id, similarity in _safe_nearest_concepts(cur, summary["suggested_canonical_label"], limit=similarity_limit):
-        cur.execute("SELECT canonical_name, type_code, status FROM jobber.concept WHERE id = %s", (concept_id,))
-        row = cur.fetchone()
+    neighbours = _safe_nearest_concepts(cur, summary["suggested_canonical_label"], limit=similarity_limit)
+    neighbour_rows = _bulk_concepts(cur, {cid for cid, _ in neighbours})
+    for concept_id, similarity in neighbours:
+        row = neighbour_rows.get(concept_id)
         if not row:
             continue
         nid = f"concept:{concept_id}"
@@ -526,10 +570,10 @@ def _focus_on_concept(cur, concept_id: str, similarity_limit: int, include_ontol
         (cid, sim) for cid, sim in _safe_nearest_concepts(cur, query_text, limit=similarity_limit + 1) if cid != str(concept_id)
     ][:similarity_limit]
 
+    neighbour_rows = _bulk_concepts(cur, {cid for cid, _ in neighbours})
     neighbour_ids = []
     for cid, similarity in neighbours:
-        cur.execute("SELECT canonical_name, type_code, status FROM jobber.concept WHERE id = %s", (cid,))
-        row = cur.fetchone()
+        row = neighbour_rows.get(cid)
         if not row:
             continue
         nodes.append(_concept_node(cid, row))
@@ -553,9 +597,10 @@ def _focus_on_surface_form(cur, value: str, similarity_limit: int) -> dict:
         "target": {"type": "surface_form", "value": normalized},
     }]
     edges: list[dict] = []
-    for concept_id, similarity in _safe_nearest_concepts(cur, normalized, limit=similarity_limit):
-        cur.execute("SELECT canonical_name, type_code, status FROM jobber.concept WHERE id = %s", (concept_id,))
-        row = cur.fetchone()
+    neighbours = _safe_nearest_concepts(cur, normalized, limit=similarity_limit)
+    neighbour_rows = _bulk_concepts(cur, {cid for cid, _ in neighbours})
+    for concept_id, similarity in neighbours:
+        row = neighbour_rows.get(concept_id)
         if not row:
             continue
         nodes.append(_concept_node(concept_id, row))
