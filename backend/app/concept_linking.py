@@ -93,22 +93,35 @@ def nearest_concept(cur, surface_form: str, limit: int = 1) -> tuple[str, float]
     return results[0] if results else None
 
 
-def nearest_concepts(cur, surface_form: str, limit: int = 10, type_codes: list[str] | None = None) -> list[tuple[str, float]]:
+def nearest_concepts(
+    cur, surface_form: str, limit: int = 10, type_codes: list[str] | None = None, *, backfill: bool = True
+) -> list[tuple[str, float]]:
     """Top-`limit` active concepts nearest to `surface_form` by embedding
     cosine similarity, optionally restricted to a set of concept types. This
     is the candidate-retrieval half of §7.3's cascade; the adjudication half
     (present the surface form + these candidates to a model, it may only pick
-    from the list or decline) is `app/extraction.py::adjudicate_concept`."""
+    from the list or decline) is `app/extraction.py::adjudicate_concept`.
+
+    `backfill=False` skips `ensure_concept_embeddings` (below) — for a
+    read-only caller (the Vocabulary Map's similarity focus,
+    app/vocabulary_graph.py) that must never compute/persist a new embedding
+    as a side effect of a GET request (brief: "no AI calls during graph GET
+    requests... never regenerate embeddings during ordinary graph
+    rendering"). A concept with no embedding yet simply cannot be suggested
+    as a neighbour until the existing backfill script/an embedding-computing
+    write path runs — never fabricated, never computed inline here."""
     vec = embed_text(surface_form)
     if not vec:
         return []
 
-    # A concept can be active with no d_embedding row yet (just curated, or
-    # created since the last Pass B run) — without this, such a concept could
-    # never be retrieved as a candidate here, and every extraction task built
-    # on this cascade (requirement extraction, profile360 mapping) would
-    # silently treat it as nonexistent instead of proposing/using it.
-    ensure_concept_embeddings(cur)
+    if backfill:
+        # A concept can be active with no d_embedding row yet (just curated,
+        # or created since the last Pass B run) — without this, such a
+        # concept could never be retrieved as a candidate here, and every
+        # extraction task built on this cascade (requirement extraction,
+        # profile360 mapping) would silently treat it as nonexistent instead
+        # of proposing/using it.
+        ensure_concept_embeddings(cur)
 
     clauses = ["status = 'active'"]
     params: list = []

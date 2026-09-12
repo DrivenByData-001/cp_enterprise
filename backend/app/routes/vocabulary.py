@@ -15,6 +15,7 @@ anything unless a human calls one of these endpoints directly.
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import vocabulary_curation as curation
+from .. import vocabulary_graph
 from ..db import db_cursor
 from ..models import (
     ClusterAcceptRequest,
@@ -80,6 +81,56 @@ def accepted_overview():
     call; deliberately not an ontology dashboard."""
     with db_cursor() as cur:
         return curation.get_accepted_overview(cur)
+
+
+@router.get("/graph")
+def vocabulary_graph_endpoint(
+    status: str = Query("pending", pattern="^(pending|accepted|combined)$"),
+    group_by: str | None = Query(None, pattern="^(priority|type|none)$"),
+    band: str | None = Query(None, pattern="^(high|medium|low|sparse)$"),
+    type_code: str | None = None,
+    q: str | None = None,
+    min_role_count: int | None = Query(None, ge=0),
+    min_observation_count: int | None = Query(None, ge=0),
+    country: str | None = None,
+    seniority: str | None = None,
+    observed_from: str | None = None,
+    observed_to: str | None = None,
+    limit: int = Query(vocabulary_graph.DEFAULT_NODE_LIMIT, ge=1, le=vocabulary_graph.MAX_NODE_LIMIT),
+    focus: str | None = None,
+    similarity_limit: int = Query(vocabulary_graph.DEFAULT_SIMILARITY_LIMIT, ge=1, le=vocabulary_graph.MAX_SIMILARITY_LIMIT),
+    include_similarity: bool = True,
+    include_ontology: bool = True,
+):
+    """Vocabulary Map graph projection (docs/25-vocabulary-map.md) — a
+    bounded, server-filtered, read-only reshaping of the exact same
+    vocabulary state the Review tab curates. Never mutates anything: see
+    app/vocabulary_graph.py for the full architecture. `focus` (a node id
+    from a prior response) switches into the bounded local similarity-
+    neighbourhood mode (brief §6.4) and ignores every other filter."""
+    with db_cursor() as cur:
+        if focus:
+            return vocabulary_graph.build_similarity_focus(
+                cur, focus=focus, similarity_limit=similarity_limit, include_ontology=include_ontology
+            )
+        return vocabulary_graph.build_graph(
+            cur, status=status, group_by=group_by, band=band, type_code=type_code, q=q,
+            min_role_count=min_role_count, min_observation_count=min_observation_count,
+            country=country, seniority=seniority, observed_from=observed_from, observed_to=observed_to,
+            limit=limit, include_similarity=include_similarity, include_ontology=include_ontology,
+        )
+
+
+@router.get("/surface-form")
+def surface_form_detail(value: str):
+    """Single-surface-form evidence (brief §13/§19) — a query parameter
+    rather than a path segment because raw surface-form text can contain
+    characters (slashes, punctuation) awkward for a URL path. Pure read."""
+    with db_cursor() as cur:
+        detail = vocabulary_graph.get_surface_form_detail(cur, value)
+    if detail is None:
+        raise HTTPException(404, "unknown surface form")
+    return detail
 
 
 @router.get("/clusters")

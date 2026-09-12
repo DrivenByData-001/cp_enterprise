@@ -183,3 +183,16 @@ textarea {
     width: 100vw;
   }
 }
+
+/* Vocabulary Map (docs/25-vocabulary-map.md) — graph canvas + details panel. */
+.vocab-map-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .vocab-map-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -494,6 +494,130 @@ export type ClusterSplitResult = {
   resulting_clusters: ClusterSplitResultGroup[]
 }
 
+// --- Vocabulary Map (docs/25-vocabulary-map.md) -----------------------------
+//
+// A read-only visual/navigation projection over the exact same vocabulary
+// state the Review tab curates — never a second vocabulary model. Node kinds
+// are a discriminated union on `kind`; `target` says what clicking a node
+// should open (cluster review, Concept Details, or Word Details).
+
+export type VocabTarget =
+  | { type: 'cluster_review'; id: string }
+  | { type: 'concept'; id: string }
+  | { type: 'surface_form'; value: string }
+
+export type VocabGraphGroupNode = {
+  id: string
+  kind: 'group'
+  label: string
+  count: number
+}
+
+export type VocabGraphPendingClusterNode = {
+  id: string
+  kind: 'pending_cluster'
+  label: string
+  cluster_key: string
+  priority_band: PriorityBand | null
+  priority_score: number | null
+  surface_count: number
+  observation_count: number | null
+  role_count: number | null
+  country_count: number
+  flags: string[]
+  target: { type: 'cluster_review'; id: string }
+  focus?: boolean
+}
+
+export type VocabGraphConceptNode = {
+  id: string
+  kind: 'concept'
+  label: string
+  type_code: string
+  status: string
+  alias_count?: number
+  target: { type: 'concept'; id: string }
+  focus?: boolean
+}
+
+export type VocabGraphSurfaceFormNode = {
+  id: string
+  kind: 'surface_form'
+  label: string
+  status: 'pending' | 'accepted'
+  observation_count?: number | null
+  target: { type: 'surface_form'; value: string } | { type: 'concept'; id: string }
+  focus?: boolean
+}
+
+export type VocabularyGraphNode = VocabGraphGroupNode | VocabGraphPendingClusterNode | VocabGraphConceptNode | VocabGraphSurfaceFormNode
+export type VocabularyGraphNodeKind = VocabularyGraphNode['kind']
+export type VocabularyGraphRelation = 'contains' | 'member_of' | 'maps_to' | 'alias_of' | 'similar_to' | 'ontology'
+
+export type VocabularyGraphEdge = {
+  source: string
+  target: string
+  relation: VocabularyGraphRelation
+  similarity?: number
+  ontology_relation?: string
+}
+
+export type VocabularyGraphMeta = {
+  total_nodes: number
+  returned_nodes: number
+  returned_edges: number
+  truncated: boolean
+  status?: 'pending' | 'accepted' | 'combined'
+  group_by?: 'priority' | 'type' | 'none'
+  mode?: 'similarity_focus'
+  focus?: string
+  similarity_limit?: number
+  filters?: Record<string, unknown>
+}
+
+export type VocabularyGraphResponse = {
+  meta: VocabularyGraphMeta
+  nodes: VocabularyGraphNode[]
+  edges: VocabularyGraphEdge[]
+}
+
+export type VocabularyGraphFilters = {
+  status?: 'pending' | 'accepted' | 'combined'
+  group_by?: 'priority' | 'type' | 'none'
+  band?: PriorityBand
+  type_code?: string
+  q?: string
+  min_role_count?: number
+  min_observation_count?: number
+  country?: string
+  seniority?: string
+  observed_from?: string
+  observed_to?: string
+  limit?: number
+  include_similarity?: boolean
+  include_ontology?: boolean
+}
+
+export type SurfaceFormDetail = {
+  surface_form: string
+  normalised_surface_form: string
+  status: string
+  cluster_key: string | null
+  cluster_key_locked: boolean
+  suggested_type: string | null
+  observation_count: number | null
+  role_count: number | null
+  years: number[]
+  countries: string[]
+  seniority_levels: string[]
+  career_tracks: string[]
+  example_roles: ClusterExampleRole[]
+  nearest_concept: { id: string; canonical_name: string; similarity: number | null } | null
+  resolved_concept: { id: string; canonical_name: string; type_code: string } | null
+  resolved_at?: string | null
+  alias_origin?: string | null
+}
+
 export type RequirementClaim = {
   id: string
   requirement_type: 'required' | 'preferred' | 'contextual'
@@ -1613,6 +1737,23 @@ export const api = {
     req<ClusterSplitPreviewResult>('/vocabulary/clusters/split/preview', { method: 'POST', body: JSON.stringify(payload) }),
   splitVocabCluster: (payload: { cluster_key: string; groups: ClusterSplitGroupInput[] }) =>
     req<ClusterSplitResult>('/vocabulary/clusters/split', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // --- Vocabulary Map (read-only graph projection) --------------------------
+  getVocabularyGraph: (filters: VocabularyGraphFilters = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<VocabularyGraphResponse>(`/vocabulary/graph${suffix}`)
+  },
+  getVocabularySimilarityFocus: (focus: string, opts: { similarity_limit?: number; include_ontology?: boolean } = {}) => {
+    const qs = new URLSearchParams({ focus })
+    if (opts.similarity_limit !== undefined) qs.set('similarity_limit', String(opts.similarity_limit))
+    if (opts.include_ontology !== undefined) qs.set('include_ontology', String(opts.include_ontology))
+    return req<VocabularyGraphResponse>(`/vocabulary/graph?${qs}`)
+  },
+  getSurfaceFormDetail: (value: string) => req<SurfaceFormDetail>(`/vocabulary/surface-form?value=${encodeURIComponent(value)}`),
 
   // --- Phase 2: source-aware ingestion + requirement claims -----------------
   ingestText: (payload: { text: string; kind?: string; title?: string | null; organisation?: string | null; source_url?: string | null }) =>
