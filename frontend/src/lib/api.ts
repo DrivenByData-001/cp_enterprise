@@ -1175,6 +1175,253 @@ export interface ExtractionResult {
   error?: string
 }
 
+// --- Market analytics (docs/25) ---------------------------------------------
+//
+// A read-only analytical layer over *every* accepted compensation
+// observation, whether or not it carries an archetype assignment — a
+// separate consumer of the same evidence `economics_engine`'s archetype
+// benchmarks/Gap Value read from (see backend/app/market_analytics.py).
+// `reported_p50`/`reported_mean`/range fields are always kept as the source
+// actually reported them; a `derived_range_midpoint` is always separately
+// labelled and never substitutes for a missing median.
+
+export interface MarketAnalyticsFacetValue {
+  value: string | number
+  label: string
+  count: number
+}
+
+export interface MarketAnalyticsFacets {
+  markets: MarketAnalyticsFacetValue[]
+  currencies: MarketAnalyticsFacetValue[]
+  components: MarketAnalyticsFacetValue[]
+  pay_periods: MarketAnalyticsFacetValue[]
+  practice_groups: MarketAnalyticsFacetValue[]
+  providers: MarketAnalyticsFacetValue[]
+  source_kinds: MarketAnalyticsFacetValue[]
+  years: MarketAnalyticsFacetValue[]
+}
+
+export interface MarketAnalyticsCoverage {
+  accepted_observation_count: number
+  distinct_source_document_count: number
+  distinct_provider_count: number
+  earliest_period: string | null
+  latest_period: string | null
+  with_reported_median_count: number
+  with_reported_mean_count: number
+  with_range_count: number
+  with_sample_size_count: number
+  archetype_linked_count: number
+  not_archetype_linked_count: number
+}
+
+// One row of PQE/experience progression evidence — never aggregated or
+// interpolated across bands; `band` carries the raw reported band label for
+// whichever axis this series represents.
+export interface MarketAnalyticsPoint {
+  observation_id: string
+  provider: string | null
+  document_id: string | null
+  document_title: string | null
+  report_date: string | null
+  market_id: string | null
+  market_label: string | null
+  geography_reported: string | null
+  raw_role_label: string | null
+  practice_reported: string | null
+  practice_group: string
+  band: string
+  component: string
+  pay_period: string
+  currency: string
+  reported_p50: number | null
+  reported_mean: number | null
+  amount_min: number | null
+  amount_max: number | null
+  reported_sample_size: number | null
+  source_kind: string | null
+  source_quality: string | null
+  archetype_concept_id: string | null
+}
+
+export interface MarketComparisonContext {
+  document_id: string
+  provider: string | null
+  document_title: string | null
+  report_date: string | null
+  component?: string
+  pay_period: string
+  currency: string
+  band_type: 'pqe' | 'experience' | null
+  band: string | null
+  practice_group?: string
+  practice_reported?: string | null
+}
+
+export interface MarketPracticeComparisonItem {
+  observation_id: string
+  practice_reported: string | null
+  practice_group: string
+  reported_p50: number | null
+  reported_mean: number | null
+  amount_min: number | null
+  amount_max: number | null
+  reported_sample_size: number | null
+  source_kind: string | null
+  source_quality: string | null
+}
+
+// A same-document/component/pay-period/currency/band context in which two
+// or more distinct practice areas can be honestly compared — never a
+// cross-provider average.
+export interface MarketPracticeComparison {
+  context: MarketComparisonContext
+  practices: MarketPracticeComparisonItem[]
+}
+
+export interface MarketComponentComparisonItem {
+  observation_id: string
+  component: string
+  reported_p50: number | null
+  reported_mean: number | null
+  amount_min: number | null
+  amount_max: number | null
+  reported_sample_size: number | null
+  source_kind: string | null
+  source_quality: string | null
+}
+
+// Base vs total-package evidence for the same document/practice/band — never
+// day-rate vs annual.
+export interface MarketComponentComparison {
+  context: MarketComparisonContext
+  components: MarketComponentComparisonItem[]
+}
+
+export interface MarketRoleRange {
+  observation_id: string
+  raw_role_label: string | null
+  provider: string | null
+  document_id: string | null
+  document_title: string | null
+  report_date: string | null
+  market_id: string | null
+  market_label: string | null
+  geography_reported: string | null
+  practice_reported: string | null
+  practice_group: string
+  seniority_band_reported: string | null
+  experience_band: string | null
+  pqe_band: string | null
+  amount_min: number | null
+  amount_max: number | null
+  // Computed only for sorting/positioning — never a reported statistic.
+  derived_range_midpoint: number | null
+  reported_p50: number | null
+  reported_mean: number | null
+  component: string
+  pay_period: string
+  currency: string
+  reported_sample_size: number | null
+  source_kind: string | null
+  source_quality: string | null
+  archetype_concept_id: string | null
+}
+
+export interface MarketTrendContext {
+  provider: string | null
+  market_id: string | null
+  geography_reported: string | null
+  currency: string
+  component: string
+  pay_period: string
+  practice_group: string
+  band_type: 'pqe' | 'experience'
+  band: string
+  statistic: 'median' | 'mean' | 'range'
+}
+
+export interface MarketTrendPoint {
+  period: string
+  value?: number | null
+  amount_min?: number | null
+  amount_max?: number | null
+  observation_id: string
+  reported_sample_size: number | null
+}
+
+// Emitted only when >=2 exactly comparable periods exist — see
+// backend/app/market_analytics.py::build_trends. Absence is expected with a
+// sparse corpus, never filled in with a misleading single-point line.
+export interface MarketTrendSeries {
+  context: MarketTrendContext
+  points: MarketTrendPoint[]
+}
+
+export interface MarketEvidenceRow {
+  observation_id: string
+  provider: string | null
+  document_id: string | null
+  document_title: string | null
+  report_date: string | null
+  market_id: string | null
+  market_label: string | null
+  geography_reported: string | null
+  practice_reported: string | null
+  practice_group: string
+  raw_role_label: string | null
+  seniority_band_reported: string | null
+  experience_band: string | null
+  pqe_band: string | null
+  component: string
+  pay_period: string
+  currency: string
+  reported_p50: number | null
+  reported_mean: number | null
+  amount_min: number | null
+  amount_max: number | null
+  reported_sample_size: number | null
+  source_kind: string | null
+  source_quality: string | null
+  basis: string
+  archetype_concept_id: string | null
+}
+
+export interface MarketAnalyticsEvidencePage {
+  total: number
+  limit: number
+  offset: number
+  items: MarketEvidenceRow[]
+}
+
+export interface MarketAnalyticsSummary {
+  coverage: MarketAnalyticsCoverage
+  facets: MarketAnalyticsFacets
+  pqe_series: MarketAnalyticsPoint[]
+  experience_series: MarketAnalyticsPoint[]
+  practice_comparisons: MarketPracticeComparison[]
+  component_comparisons: MarketComponentComparison[]
+  role_ranges: MarketRoleRange[]
+  trends: MarketTrendSeries[]
+  evidence_rows: MarketAnalyticsEvidencePage
+}
+
+export interface MarketAnalyticsFiltersInput {
+  market_id?: string
+  currency?: string
+  component?: string
+  pay_period?: string
+  practice_group?: string
+  provider?: string
+  source_kind?: string
+  employment_basis?: string
+  period_from?: string
+  period_to?: string
+  evidence_limit?: number
+  evidence_offset?: number
+}
+
 // --- Phase 4: accepted vocabulary overview ----------------------------------
 
 export interface AcceptedVocabularyOverview {
@@ -1559,6 +1806,14 @@ export const api = {
     })
   },
   extractMarketData: (documentId: string) => req<ExtractionResult>(`/market-data/documents/${documentId}/extract`, { method: 'POST' }),
+  getMarketAnalyticsSummary: (filters: MarketAnalyticsFiltersInput = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<MarketAnalyticsSummary>(`/market-data/analytics/summary${suffix}`)
+  },
   listDraftCompensationObservations: (reviewStatus: 'unreviewed' | 'accepted' | 'rejected' = 'unreviewed') =>
     req<CompensationObservation[]>(`/market-data/compensation-observations?review_status=${reviewStatus}`),
   reviewCompensationObservation: (id: string, action: 'accept' | 'reject') =>

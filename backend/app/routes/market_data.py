@@ -7,9 +7,11 @@ upload a selectable-text PDF (no OCR), stored as an immutable document
 """
 
 import io
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, UploadFile
 
+from .. import market_analytics
 from ..db import create_document, db_cursor
 from ..market_data_processing import (
     DOCUMENT_KIND,
@@ -21,6 +23,15 @@ from ..market_data_processing import (
 from ..models import CompensationObservationCorrect, CompensationObservationReview, MarketDataIngest
 
 router = APIRouter(prefix="/api/market-data", tags=["market-data"])
+
+
+def _parse_date_param(value: str | None, field_name: str) -> date | None:
+    if value is None or value == "":
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(422, f"{field_name} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from None
 
 
 def _document_row(row) -> dict:
@@ -220,3 +231,43 @@ def correct_observation(observation_id: str, payload: CompensationObservationCor
         if cur.rowcount == 0:
             raise HTTPException(404, "compensation observation not found")
     return {"id": observation_id, "status": "updated"}
+
+
+# --- Market analytics (docs/25) ---------------------------------------------
+#
+# A read-only analytical layer over *every* accepted compensation
+# observation, whether or not it carries an archetype assignment — see
+# app/market_analytics.py's module docstring. Never rebuilds anything, never
+# writes, and never requires an archetype filter.
+
+@router.get("/analytics/summary")
+def market_analytics_summary(
+    market_id: str | None = None,
+    currency: str | None = None,
+    component: str | None = None,
+    pay_period: str | None = None,
+    practice_group: str | None = None,
+    provider: str | None = None,
+    source_kind: str | None = None,
+    employment_basis: str | None = None,
+    period_from: str | None = None,
+    period_to: str | None = None,
+    evidence_limit: int = 100,
+    evidence_offset: int = 0,
+):
+    filters = market_analytics.MarketAnalyticsFilters(
+        market_id=market_id or None,
+        currency=currency or None,
+        component=component or None,
+        pay_period=pay_period or None,
+        practice_group=practice_group or None,
+        provider=provider or None,
+        source_kind=source_kind or None,
+        employment_basis=employment_basis or None,
+        period_from=_parse_date_param(period_from, "period_from"),
+        period_to=_parse_date_param(period_to, "period_to"),
+    )
+    with db_cursor() as cur:
+        return market_analytics.build_market_analytics_summary(
+            cur, filters, evidence_limit=evidence_limit, evidence_offset=evidence_offset
+        )

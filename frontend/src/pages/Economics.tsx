@@ -14,20 +14,8 @@ import {
   type Phase4Readiness,
   type TitleGroup,
 } from '../lib/api'
-
-// Money formatting has no existing precedent elsewhere in this app
-// (RoleDetail.tsx prints raw numbers) — introduced here since Economics is
-// the first page whose whole point is showing compensation figures
-// legibly. Never more precise than the underlying evidence: always rounded
-// to the nearest whole unit, never a decimal a source didn't state.
-function formatMoney(amount: number | null | undefined, currency: string): string {
-  if (amount === null || amount === undefined) return '—'
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
-  } catch {
-    return `${Math.round(amount).toLocaleString()} ${currency}`
-  }
-}
+import { MarketSummary } from '../components/economics/MarketSummary'
+import { formatMoney } from '../lib/money'
 
 function EvidenceQualityBadge({ quality }: { quality: string }) {
   const colors: Record<string, string> = {
@@ -588,6 +576,16 @@ function MarketDataDocumentDetailView({ documentId, onClose }: { documentId: str
   }
 
   if (!doc) return <p className="muted">Loading…</p>
+
+  // Curated/initial reports can carry accepted observations with no AI
+  // extraction run behind them (docs/25 §9) — that must never read as
+  // "unfinished". Only a document with *no* observations and *no* run keeps
+  // extraction as the obvious primary next action; once accepted evidence
+  // exists, a fresh extraction is optional and clearly secondary.
+  const hasRuns = doc.extraction_runs.length > 0
+  const acceptedCount = doc.observations.filter((o) => o.review_status === 'accepted').length
+  const extractLabel = hasRuns ? 'Re-run AI extraction' : acceptedCount > 0 ? 'Run AI extraction (optional)' : 'Run AI extraction'
+
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -600,10 +598,15 @@ function MarketDataDocumentDetailView({ documentId, onClose }: { documentId: str
         {doc.source} · captured {doc.captured_at || doc.created_at}
       </p>
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
-      <button type="button" disabled={extracting} onClick={extract}>
-        {doc.extraction_runs.length > 0 ? 'Re-run extraction' : 'Run AI extraction'}
+      {!hasRuns && acceptedCount > 0 && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          {acceptedCount} accepted observation{acceptedCount === 1 ? '' : 's'} loaded — this report already contributes to market analytics.
+        </p>
+      )}
+      <button type="button" className={!hasRuns && acceptedCount > 0 ? 'secondary' : ''} disabled={extracting} onClick={extract}>
+        {extractLabel}
       </button>
-      {doc.extraction_runs.length > 0 && (
+      {hasRuns && (
         <p className="muted" style={{ fontSize: 12 }}>
           Last run: {doc.extraction_runs[0].status}
         </p>
@@ -674,7 +677,9 @@ function MarketDataTab() {
 
   return (
     <div>
-      <section className="card">
+      <MarketSummary />
+
+      <section className="card" style={{ marginTop: 24 }}>
         <h3 style={{ fontSize: 14, marginTop: 0 }}>Capture a salary report</h3>
         {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
         <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
