@@ -21,10 +21,29 @@ vi.mock('../../lib/api', () => ({
 // A minimal stand-in for the real graph canvas: one button per selectable
 // node, reporting clicks back through the exact same `onSelect` contract the
 // real VocabularyGraph uses. This isolates VocabularyMapView/Workspace/
-// Overlay's own state logic from React Flow's rendering entirely.
+// Overlay's own state logic from React Flow's rendering entirely. Real pan/
+// zoom pixel behaviour is not something jsdom exercises meaningfully (no
+// layout engine, no canvas) — that is covered by browser smoke testing
+// instead; what *is* practical and worth a regression test here is the
+// state-plumbing contract itself: whatever `onViewportChange` last reported
+// must come back as the next mount's `initialViewport`. `data-initial-
+// viewport` and the two `pan-*` buttons below exist only to make that
+// contract assertable without touching React Flow at all.
 vi.mock('./VocabularyGraph', () => ({
-  default: ({ nodes, selectedId, onSelect }: { nodes: { id: string; kind: string; label: string }[]; selectedId: string | null; onSelect: (n: unknown) => void }) => (
-    <div data-testid="mock-graph">
+  default: ({
+    nodes,
+    selectedId,
+    onSelect,
+    initialViewport,
+    onViewportChange,
+  }: {
+    nodes: { id: string; kind: string; label: string }[]
+    selectedId: string | null
+    onSelect: (n: unknown) => void
+    initialViewport?: { x: number; y: number; zoom: number } | null
+    onViewportChange?: (v: { x: number; y: number; zoom: number }) => void
+  }) => (
+    <div data-testid="mock-graph" data-initial-viewport={initialViewport ? JSON.stringify(initialViewport) : ''}>
       {nodes
         .filter((n) => n.kind !== 'group')
         .map((n) => (
@@ -32,6 +51,12 @@ vi.mock('./VocabularyGraph', () => ({
             {n.label}
           </button>
         ))}
+      <button data-testid="pan-a" onClick={() => onViewportChange?.({ x: 111, y: 222, zoom: 1.4 })}>
+        simulate pan A
+      </button>
+      <button data-testid="pan-b" onClick={() => onViewportChange?.({ x: 333, y: 444, zoom: 0.6 })}>
+        simulate pan B
+      </button>
     </div>
   ),
 }))
@@ -181,5 +206,27 @@ describe('VocabularyMapView fullscreen', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByText(/similarity focus/i)).toBeTruthy()
+  })
+
+  it('carries the last-known React Flow viewport across fullscreen entry and exit', async () => {
+    renderMapView()
+    const embeddedGraph = await screen.findByTestId('mock-graph')
+    // Nothing reported yet — the very first mount has no remembered viewport
+    // (VocabularyGraph falls back to its own `fitView` in that case).
+    expect(embeddedGraph.dataset.initialViewport).toBe('')
+
+    fireEvent.click(within(embeddedGraph).getByTestId('pan-a'))
+
+    openFullscreen()
+    const dialog = await screen.findByRole('dialog')
+    const fullscreenGraph = within(dialog).getByTestId('mock-graph')
+    expect(fullscreenGraph.dataset.initialViewport).toBe(JSON.stringify({ x: 111, y: 222, zoom: 1.4 }))
+
+    fireEvent.click(within(fullscreenGraph).getByTestId('pan-b'))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const embeddedGraphAgain = screen.getByTestId('mock-graph')
+    expect(embeddedGraphAgain.dataset.initialViewport).toBe(JSON.stringify({ x: 333, y: 444, zoom: 0.6 }))
   })
 })

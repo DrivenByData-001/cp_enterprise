@@ -308,12 +308,18 @@ function GraphCanvas({
   selectedId,
   onSelect,
   onReady,
+  initialViewport,
+  onViewportChange,
 }: {
   nodes: VocabularyGraphNode[]
   edges: VocabularyGraphEdge[]
   selectedId: string | null
   onSelect: (node: VocabularyGraphNode | null) => void
   onReady?: (api: GraphApi) => void
+  /** Last-known `{x, y, zoom}` from a previous mount (brief follow-up: carry
+   * pan/zoom across the embedded/fullscreen remount, not just selection). */
+  initialViewport?: Viewport | null
+  onViewportChange?: (viewport: Viewport) => void
 }) {
   const focusCenter = nodes.find((n) => 'focus' in n && (n as { focus?: boolean }).focus)?.id ?? null
 
@@ -342,13 +348,21 @@ function GraphCanvas({
 
   const handleInit = useCallback(
     (instance: ReactFlowInstance<Node<NodeData>, Edge>) => {
-      syncZoomBand(instance.getViewport().zoom)
+      const viewport = instance.getViewport()
+      syncZoomBand(viewport.zoom)
+      onViewportChange?.(viewport)
       onReady?.({ fitView: (options) => instance.fitView(options) })
     },
-    [syncZoomBand, onReady],
+    [syncZoomBand, onViewportChange, onReady],
   )
 
-  const handleMove = useCallback((_event: unknown, viewport: Viewport) => syncZoomBand(viewport.zoom), [syncZoomBand])
+  const handleMove = useCallback(
+    (_event: unknown, viewport: Viewport) => {
+      syncZoomBand(viewport.zoom)
+      onViewportChange?.(viewport)
+    },
+    [syncZoomBand, onViewportChange],
+  )
 
   const rfNodes: Node<NodeData>[] = useMemo(
     () =>
@@ -421,8 +435,12 @@ function GraphCanvas({
         onNodeMouseLeave={handleNodeMouseLeave}
         onInit={handleInit}
         onMove={handleMove}
-        fitView
+        // Restore a remembered viewport across the embedded/fullscreen
+        // remount instead of re-fitting; only auto-fit on the very first
+        // mount, before anything has been reported yet.
+        fitView={!initialViewport}
         fitViewOptions={{ padding: 0.25 }}
+        defaultViewport={initialViewport ?? undefined}
         minZoom={0.15}
         maxZoom={2.5}
         proOptions={{ hideAttribution: true }}
@@ -441,6 +459,8 @@ export default function VocabularyGraph(props: {
   selectedId: string | null
   onSelect: (node: VocabularyGraphNode | null) => void
   onReady?: (api: GraphApi) => void
+  initialViewport?: Viewport | null
+  onViewportChange?: (viewport: Viewport) => void
 }) {
   return (
     <ReactFlowProvider>

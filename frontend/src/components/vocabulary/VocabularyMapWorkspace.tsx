@@ -1,3 +1,4 @@
+import type { Viewport } from '@xyflow/react'
 import type { ConceptType, VocabularyGraphNode, VocabularyGraphResponse } from '../../lib/api'
 import VocabularyGraph, { type GraphApi } from './VocabularyGraph'
 import VocabularyMapDetails, { type VocabularyMapSummaryCounts } from './VocabularyMapDetails'
@@ -34,6 +35,8 @@ export default function VocabularyMapWorkspace({
   onFocus,
   detailsCollapsed,
   onGraphReady,
+  initialViewport,
+  onViewportChange,
   onEnterFullscreen,
 }: {
   mode: 'embedded' | 'fullscreen'
@@ -53,6 +56,10 @@ export default function VocabularyMapWorkspace({
   onFocus: (focusId: string) => void
   detailsCollapsed: boolean
   onGraphReady?: (api: GraphApi) => void
+  /** Last-known React Flow viewport, carried across the embedded/fullscreen
+   * remount (VocabularyMapView owns the ref; null on the very first mount). */
+  initialViewport?: Viewport | null
+  onViewportChange?: (viewport: Viewport) => void
   /** Present only in embedded mode — draws the graph-corner ⛶ control. */
   onEnterFullscreen?: () => void
 }) {
@@ -128,7 +135,15 @@ export default function VocabularyMapWorkspace({
             </div>
           )}
           {response && (
-            <VocabularyGraph nodes={response.nodes} edges={response.edges} selectedId={selected?.id ?? null} onSelect={onSelect} onReady={onGraphReady} />
+            <VocabularyGraph
+              nodes={response.nodes}
+              edges={response.edges}
+              selectedId={selected?.id ?? null}
+              onSelect={onSelect}
+              onReady={onGraphReady}
+              initialViewport={initialViewport}
+              onViewportChange={onViewportChange}
+            />
           )}
           {onEnterFullscreen && (
             <button

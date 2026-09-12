@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Viewport } from '@xyflow/react'
 import ConceptDetailsDrawer from '../ConceptDetailsDrawer'
 import { api, type ConceptType, type VocabularyGraphNode, type VocabularyGraphResponse } from '../../lib/api'
 import VocabularyMapControls from './VocabularyMapControls'
@@ -22,6 +23,14 @@ import type { GraphApi } from './VocabularyGraph'
 // Flow instance alive, and toggling never touches `filters`/`focusId`/
 // `refreshSignal` — the only things the data-fetch effect below depends on —
 // so it never causes an extra API call either.
+//
+// The React Flow viewport (pan/zoom) is carried across that same remount via
+// `viewportRef` below — a plain ref, not state: `onMove` fires continuously
+// while panning/zooming, and writing to a ref costs nothing per tick (no
+// re-render), whereas the *next* render only happens when some other state
+// change (e.g. the fullscreen toggle) needs it — by which point the ref
+// already holds the latest value. The new instance then restores it via
+// `defaultViewport` instead of running `fitView` again.
 
 export default function VocabularyMapView({
   conceptTypes,
@@ -45,6 +54,7 @@ export default function VocabularyMapView({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [detailsCollapsed, setDetailsCollapsed] = useState(false)
   const [graphApi, setGraphApi] = useState<GraphApi | null>(null)
+  const viewportRef = useRef<Viewport | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -114,6 +124,10 @@ export default function VocabularyMapView({
     onFocus: (id: string) => enterFocus(id, selected?.label ?? id),
     detailsCollapsed,
     onGraphReady: setGraphApi,
+    initialViewport: viewportRef.current,
+    onViewportChange: (viewport: Viewport) => {
+      viewportRef.current = viewport
+    },
   }
 
   return (
