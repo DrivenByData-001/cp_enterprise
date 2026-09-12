@@ -120,6 +120,14 @@ kept for reproducibility.
   stated; a gap-value ranking is a counterfactual about structural
   opportunity, never a claim that you've acquired the capability. See
   `docs/24-phase4-economics-and-vocabulary-overview.md`.
+- **Market analytics uses every accepted market observation, not just
+  archetype-linked ones.** The Market Data tab's Market Summary section
+  (PQE/experience progression, same-context practice and base-vs-total-
+  package comparisons, named-role recruiter ranges, and conservative
+  trend detection) reads all accepted `compensation_observation` evidence
+  regardless of archetype mapping — a second, independent consumer of the
+  same evidence archetype benchmarks/Gap Value already read. See
+  `docs/26-market-analytics-implementation-overview.md`.
 - **Target-role decomposition is still manual**, on purpose (see
   `docs/13-ai-task-layer.md` §1): paste `prompts/decompose_target_role.md`
   into Claude/ChatGPT, paste the resulting JSON into the Add Target page.
