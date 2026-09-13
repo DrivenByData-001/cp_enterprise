@@ -151,4 +151,3 @@ describe('Comparison next steps', () => {
     expect(api.assertCapability).not.toHaveBeenCalled()
   })
 })
-

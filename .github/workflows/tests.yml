@@ -45,4 +45,3 @@ jobs:
       - name: Require the disposable Postgres service
         run: python -c "import os, psycopg; psycopg.connect(os.environ['TEST_DATABASE_URL']).close()"
       - run: pytest backend/tests backend/unit_tests -q
-

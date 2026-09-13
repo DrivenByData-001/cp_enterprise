@@ -40,4 +40,3 @@ def test_repeated_claims_do_not_inflate_coverage_or_progress():
 def test_evidenced_target_and_unrelated_roles_not_recommended():
     assert assess_candidate([requirement("A")], [requirement("A")], {"A": "evidenced"})["assessment"] == "target_evidenced"
     assert assess_candidate([requirement("A")], [requirement("B")], {"A": "evidenced", "B": "not_found"})["assessment"] == "no_target_progress"
-

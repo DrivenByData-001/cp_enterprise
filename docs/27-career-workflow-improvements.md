@@ -42,4 +42,3 @@ Migration 0018 adds development_action and its role index, adds a role/concept r
 - Frontend regressions cover stale filter responses, URL state, retries, PDF preview, per-file retries, editable target review, manual fallback and comparison actions.
 - CI runs backend tests, frontend tests, lint and the production build.
 - Browser smoke checks use mocked API data at desktop and mobile sizes; live AI output quality is not assessed by these tests.
-
