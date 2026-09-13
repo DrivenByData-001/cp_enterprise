@@ -35,7 +35,7 @@ export default function ComparisonActions({ item, roleId, actions, onChanged }: 
       <label>Example or notes<textarea rows={3} value={note} maxLength={10000} onChange={e => setNote(e.target.value)} placeholder="What did you do, where, and what was the outcome?" /></label>
       <p className="muted">An example is a personal assertion until supporting evidence is reviewed. Assertions apply to this concept across all roles.</p>
       <div className="actions">
-        {!asserted && item.status === 'not_found' && <button onClick={() => act(() => api.assertCapability(item.concept.id, note.trim() || undefined), 'Personal assertion saved.')}>I have done this</button>}
+        {!asserted && item.status !== 'evidenced' && <button onClick={() => act(() => api.assertCapability(item.concept.id, note.trim() || undefined), 'Personal assertion saved.')}>I have done this</button>}
         {asserted && <>
           <button onClick={() => act(() => api.assertCapability(item.concept.id, note.trim() || undefined), 'Example saved.')}>Save example</button>
           <button onClick={() => act(() => api.retractAssertion(item.concept.id), 'Assertion removed from all role comparisons.')}>Undo assertion</button>
@@ -63,4 +63,3 @@ export default function ComparisonActions({ item, roleId, actions, onChanged }: 
     </li>)}</ul>}
   </div>
 }
-

@@ -115,3 +115,22 @@ def test_path_works_without_embeddings_and_prefers_reachable_bridge(client, monk
     assert path["stepping_stones"][0]["assessment"] == "potential_step"
     assert next(r for r in path["stepping_stones"] if r["id"] == empty)["assessment"] == "insufficient_evidence"
 
+
+def test_assertion_notes_remain_retractable_with_stronger_mapped_evidence(client):
+    from app.capability_engine import atomic_concept_evidence
+    with db.db_cursor() as cur:
+        cid, rid = concept(cur, 'Python'), role(cur)
+        claim(cur, rid, cid)
+    assert client.post('/api/comparison/assert', json={'concept_id': cid, 'note': 'My example'}).status_code == 200
+    # Capability coverage and atomic mapping precedence are unchanged; the
+    # comparison presents the assertion independently so the UI can undo it.
+    with db.db_cursor() as cur:
+        cur.execute("INSERT INTO profile360.claims (claim_text) VALUES ('Python example') RETURNING id")
+        source = cur.fetchone()['id']
+        cur.execute("INSERT INTO jobber.profile360_claim_mapping (profile360_claim_id, jobber_concept_id, mapping_basis, review_status) VALUES (%s, %s, 'curator_asserted', 'accepted')", (source, cid))
+        assert atomic_concept_evidence(cur, cid)['status'] == 'evidenced'
+    item = client.get(f'/api/comparison/role/{rid}').json()['items'][0]
+    assert item['status'] == 'evidenced'
+    assert item['person_side']['assertion']['note'] == 'My example'
+    assert client.delete(f'/api/comparison/assert/{cid}').status_code == 200
+    assert client.get(f'/api/comparison/role/{rid}').json()['items'][0]['status'] == 'evidenced'

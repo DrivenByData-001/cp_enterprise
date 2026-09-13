@@ -132,6 +132,18 @@ def compare_role(role_instance_id: str):
         claim_ids = [item["requirement_claim_id"] for item in trace_items if item["requirement_claim_id"]]
         docs_by_claim = _requirement_documents(cur, claim_ids)
 
+        # Keep personal notes retractable even when stronger mapped evidence wins
+        # the status. Reading this separately never changes the engine's judgment.
+        concept_ids = list({item["concept"]["id"] for item in trace_items})
+        cur.execute("SELECT id, jobber_concept_id, note, created_at, promoted_to_profile360_at "
+                    "FROM jobber.person_capability_assertion WHERE jobber_concept_id = ANY(%s::uuid[])", (concept_ids,))
+        assertions = {}
+        for row in cur.fetchall():
+            assertion = dict(row)
+            key = str(assertion.pop("jobber_concept_id"))
+            assertion["id"] = str(assertion["id"])
+            assertions[key] = assertion
+
         items = []
         for item in trace_items:
             role_side = {
@@ -154,6 +166,7 @@ def compare_role(role_instance_id: str):
                 }
             else:
                 person_side = {"mappings": [], "assertion": None, "component_of": [], "coverage": detail["coverage"]}
+            person_side["assertion"] = assertions.get(item["concept"]["id"])
             items.append({"concept": item["concept"], "status": item["status"], "role_side": role_side, "person_side": person_side})
 
     counts = {
