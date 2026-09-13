@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, type Facet, type Role, type YearRange } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
+import { rememberRoleList } from '../lib/roleNavigation'
 
 const TRACKS = ['actuarial', 'data_science', 'quant', 'risk', 'finance', 'mixed', 'other']
 const PAGE_SIZE = 20
@@ -51,6 +52,7 @@ export default function Dashboard() {
   const [total, setTotal] = useState(0)
   const [yearRange, setYearRange] = useState<YearRange>(null)
   const [params, setParams] = useSearchParams()
+  useEffect(() => { rememberRoleList(params.toString()) }, [params])
   const track = params.get('track') ?? ''
   const sort = params.get('sort') ?? 'similarity'
   const facetType = params.get('facet') ?? ''

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type TeamSizeEstimate } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
+import { roleListUrl } from '../lib/roleNavigation'
 
 // --- Day-in-the-Life / Role Context enrichment (docs/21) --------------------
 //
@@ -302,7 +303,7 @@ export default function RoleDetail() {
     setDeleteError(null)
     try {
       await api.deleteRole(role.id)
-      navigate(isTarget ? '/targets' : location.state?.returnTo ?? '/')
+      navigate(isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl())
     } catch (e) { setDeleteError(e instanceof Error ? e.message : String(e)) }
     finally { setDeleting(false) }
   }
@@ -310,7 +311,7 @@ export default function RoleDetail() {
   return (
     <div>
       {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
-      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? '/'} className="muted" style={{ fontSize: 13 }}>
+      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 13 }}>
         ← Back to {isTarget ? 'targets' : 'roles'}
       </Link>
 
@@ -352,7 +353,7 @@ export default function RoleDetail() {
             {role.similarity !== null ? `${Math.round(role.similarity! * 100)}%` : '—'}
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
-            {isTarget ? 'current alignment' : 'similarity to profile'}
+            {isTarget ? 'narrative similarity' : 'similarity to profile'}
           </div>
         </div>
       </div>
@@ -401,7 +402,7 @@ export default function RoleDetail() {
             <article key={step.id} className="card" style={{ marginTop: 8 }}>
               <Link to={`/roles/${step.id}`}><strong>{step.title}</strong></Link>
               <p>{step.organisation ?? 'Unknown employer'} · {step.posting_date ?? 'Posting date unknown'}</p>
-              <strong>{step.assessment === 'potential_step' ? 'Potential development step' : 'More evidence needed before recommending'}</strong>
+              <strong>{{ potential_step: 'Potential development step', target_evidenced: 'Target requirements already evidenced', no_target_progress: 'No mapped progress toward target gaps', not_an_intermediate_step: 'Not a more reachable intermediate step', needs_evidence: 'Person-side evidence needed', insufficient_evidence: 'More requirement evidence needed' }[step.assessment] ?? 'Review evidence'}</strong>
               <p>{step.explanation}</p>
               <p>Evidence coverage: {step.evidenced_requirements}/{step.requirements_total}. Required evidence missing: {step.missing_required.length}; unverified: {step.unverified_required.length}.</p>
               {step.target_gaps_addressed.length > 0 && <p>Target requirements this role involves: {step.target_gaps_addressed.join(', ')}.</p>}

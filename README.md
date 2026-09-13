@@ -1,5 +1,7 @@
 # Career Navigator
 
+The latest workflow improvements are described in [Career workflow improvements](docs/27-career-workflow-improvements.md): guided posting import, form-based target creation, consistent concept filters, evidence-based intermediate roles, and actionable comparison.
+
 A personal career navigation tool. Treats the job market as a multidimensional
 space: your career narrative and captured job postings are embedded into the
 same vector space, so "closest roles to me" and "gap to a target role" become
@@ -128,9 +130,10 @@ kept for reproducibility.
   regardless of archetype mapping — a second, independent consumer of the
   same evidence archetype benchmarks/Gap Value already read. See
   `docs/26-market-analytics-implementation-overview.md`.
-- **Target-role decomposition is still manual**, on purpose (see
-  `docs/13-ai-task-layer.md` §1): paste `prompts/decompose_target_role.md`
-  into Claude/ChatGPT, paste the resulting JSON into the Add Target page.
+- **Target-role decomposition is reviewable in the app.** Enter a title,
+  real/imagined role choice, description and optional supporting material.
+  Generate an editable AI draft or continue manually; Save target creates
+  the role after review. Advanced JSON import remains available.
 - **Everything else is mechanical**: rank by similarity to your profile, see
   it on a 2D/3D map.
 
@@ -176,7 +179,10 @@ see `docs/20-render-deployment.md` §8 for the full design and
    narrative itself is authored in profile360's own tool, not here) and its
    history. It gets embedded on demand for every similarity computation
    elsewhere in this app (Dashboard/Space/Targets).
-2. **Import** — two independent paths, both fine to use:
+2. **Import** — the main flow is Add posting → Review details → Review
+   requirements → Compare. Preview PDF text before capture; edit details
+   manually or request AI suggestions. Advanced imports remain available:
+
    - *Source-aware ingest* — paste raw text (or upload a selectable-text PDF)
      to capture it as an immutable document + `role_instance`, then extract
      reviewable requirement claims against the canonical vocabulary from the
@@ -214,9 +220,10 @@ see `docs/20-render-deployment.md` §8 for the full design and
     app does not track that — see docs/24 §2). Below a 5-observation
     threshold, no monetary figure is shown at all. See
     `docs/24-phase4-economics-and-vocabulary-overview.md`.
-5. **Targets** — a role you're navigating towards, real or imagined. Give
-   `prompts/decompose_target_role.md` (plus supporting material) to
-   Claude/ChatGPT, paste the resulting JSON into the Add Target page.
+5. **Targets** — define a real or imagined role in the Add Target form,
+   optionally generate an AI draft, then review and edit before saving.
+   Its path ranks potential intermediate roles using evidence coverage and
+   target evidence gaps, with reasons and insufficient-evidence states.
 6. **Editing** — any posting or target can be edited from its detail page (a
    full overwrite of the legacy flat fields, not a merge — re-embeds it).
 6a. **Day in the Life** (a role's detail page) — generate an on-demand,
