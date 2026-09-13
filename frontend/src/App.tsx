@@ -1,4 +1,4 @@
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './useAuth'
 import Dashboard from './pages/Dashboard'
 import RoleDetail from './pages/RoleDetail'
@@ -21,58 +21,26 @@ import Economics from './pages/Economics'
 
 function App() {
   const { logout } = useAuth()
+  const { pathname } = useLocation()
+  const groups = [
+    { label: 'Explore roles', links: [['/', 'Roles'], ['/space', 'Role map'], ['/trends', 'Trends'], ['/economics', 'Economics'], ['/targets', 'Targets']] },
+    { label: 'My evidence', links: [['/profile', 'Profile overview'], ['/profile360', 'Evidence and mappings'], ['/coverage', 'Capability coverage'], ['/episodes', 'Career history'], ['/preferences', 'Preferences']] },
+    { label: 'Manage vocabulary', links: [['/vocabulary', 'Vocabulary'], ['/capabilities', 'Capability catalogue']] },
+  ]
 
   return (
     <div className="app-shell">
-      <nav className="nav">
-        <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
-          Dashboard
-        </NavLink>
-        <NavLink to="/space" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Space
-        </NavLink>
-        <NavLink to="/trends" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Trends
-        </NavLink>
-        <NavLink to="/economics" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Economics
-        </NavLink>
-        <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Targets
-        </NavLink>
-        <NavLink to="/episodes" className={({ isActive }) => (isActive ? 'active' : '')}>
-          History
-        </NavLink>
-        <NavLink to="/vocabulary" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Vocabulary
-        </NavLink>
-        <NavLink to="/capabilities" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Capabilities
-        </NavLink>
-        <NavLink to="/coverage" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Coverage
-        </NavLink>
-        <NavLink to="/profile360" className={({ isActive }) => (isActive ? 'active' : '')}>
-          profile360
-        </NavLink>
-        <NavLink to="/preferences" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Preferences
-        </NavLink>
-        <NavLink to="/import" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Import
-        </NavLink>
-        <NavLink to="/profile" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Profile
-        </NavLink>
-        <button
-          type="button"
-          onClick={logout}
-          style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
-          title="Sign out of Career Navigator"
-        >
-          Log out
-        </button>
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <header className="site-header"><strong>Career Navigator</strong></header>
+      <nav className="nav" aria-label="Main navigation">
+        {groups.map(group => <details key={group.label} className="nav-group">
+          <summary className={group.links.some(([path]) => pathname === path || (path !== '/' && pathname.startsWith(path + '/'))) ? 'active' : ''}>{group.label}</summary>
+          <div className="nav-menu">{group.links.map(([path, label]) => <NavLink key={path} to={path} end={path === '/'} onClick={e => e.currentTarget.closest('details')?.removeAttribute('open')} className={({ isActive }) => isActive ? 'active' : ''}>{label}</NavLink>)}</div>
+        </details>)}
+        <NavLink to="/import" className={({ isActive }) => isActive ? 'active' : ''}>Add posting</NavLink>
+        <button type="button" onClick={logout} title="Sign out of Career Navigator">Log out</button>
       </nav>
+      <main id="main-content">
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/space" element={<Space />} />
@@ -92,7 +60,9 @@ function App() {
         <Route path="/roles/:id/edit" element={<RoleEdit />} />
         <Route path="/role-instances/:id/requirements" element={<RoleRequirements />} />
         <Route path="/comparison/:id" element={<Comparison />} />
+        <Route path="*" element={<div><h1>Page not found</h1><NavLink to="/">Return to roles</NavLink></div>} />
       </Routes>
+      </main>
     </div>
   )
 }

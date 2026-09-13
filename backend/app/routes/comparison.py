@@ -9,13 +9,76 @@ as the headline result.
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+from datetime import date
+from typing import Literal
+from uuid import UUID
 
 from .. import capability_engine
 from ..db import db_cursor, instance_type_to_app_kind
 from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
+
+
+class DevelopmentActionInput(BaseModel):
+    concept_id: UUID
+    title: str = Field(min_length=1, max_length=500)
+    note: str = Field(default="", max_length=10000)
+    due_date: date | None = None
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("An action title is required")
+        return value.strip()
+
+
+class DevelopmentActionUpdate(BaseModel):
+    status: Literal["open", "done"]
+
+
+@router.get("/role/{role_id}/actions")
+def list_actions(role_id: UUID):
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.development_action WHERE role_instance_id = %s ORDER BY created_at, id", (role_id,))
+        return cur.fetchall()
+
+
+@router.post("/role/{role_id}/actions")
+def create_action(role_id: UUID, payload: DevelopmentActionInput):
+    with db_cursor() as cur:
+        cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_id,))
+        if not cur.fetchone():
+            raise HTTPException(404, "Role not found")
+        cur.execute("SELECT id FROM jobber.concept WHERE id = %s AND status = 'active'", (payload.concept_id,))
+        if not cur.fetchone():
+            raise HTTPException(400, "Choose an active concept")
+        cur.execute("""INSERT INTO jobber.development_action (role_instance_id, concept_id, title, note, due_date)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+                    (role_id, payload.concept_id, payload.title, payload.note, payload.due_date))
+        return cur.fetchone()
+
+
+@router.patch("/role/{role_id}/actions/{action_id}")
+def update_action(role_id: UUID, action_id: UUID, payload: DevelopmentActionUpdate):
+    with db_cursor() as cur:
+        cur.execute("UPDATE jobber.development_action SET status = %s, updated_at = now() "
+                    "WHERE id = %s AND role_instance_id = %s RETURNING *", (payload.status, action_id, role_id))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Action not found on this role")
+        return row
+
+
+@router.delete("/role/{role_id}/actions/{action_id}")
+def delete_action(role_id: UUID, action_id: UUID):
+    with db_cursor() as cur:
+        cur.execute("DELETE FROM jobber.development_action WHERE id = %s AND role_instance_id = %s", (action_id, role_id))
+        if not cur.rowcount:
+            raise HTTPException(404, "Action not found on this role")
+    return {"status": "deleted"}
 
 
 def _requirement_documents(cur, requirement_claim_ids: list[str]) -> dict[str, dict | None]:

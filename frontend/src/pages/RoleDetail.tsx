@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type TeamSizeEstimate } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 
@@ -277,6 +277,9 @@ function ExtractionQualityNotice({ role }: { role: Role }) {
 export default function RoleDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -295,13 +298,19 @@ export default function RoleDetail() {
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${role.title}"? This can't be undone.`)) return
-    await api.deleteRole(role.id)
-    navigate(isTarget ? '/targets' : '/')
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await api.deleteRole(role.id)
+      navigate(isTarget ? '/targets' : location.state?.returnTo ?? '/')
+    } catch (e) { setDeleteError(e instanceof Error ? e.message : String(e)) }
+    finally { setDeleting(false) }
   }
 
   return (
     <div>
-      <Link to={isTarget ? '/targets' : '/'} className="muted" style={{ fontSize: 13 }}>
+      {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
+      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? '/'} className="muted" style={{ fontSize: 13 }}>
         ← Back to {isTarget ? 'targets' : 'roles'}
       </Link>
 
@@ -361,7 +370,7 @@ export default function RoleDetail() {
       <ExtractionQualityNotice role={role} />
 
       {!isTarget && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+        <div className="form-grid" style={{ marginTop: 16 }}>
           <div className="card">
             <h3 style={{ marginTop: 0, fontSize: 14 }}>Salary</h3>
             {role.salary_min || role.salary_max ? (
@@ -384,46 +393,26 @@ export default function RoleDetail() {
       )}
 
       {isTarget && role.path && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginTop: 0, fontSize: 14 }}>Path from where you are now</h3>
-          <p className="secondary" style={{ marginTop: 0 }}>
-            {role.path.profile_to_target_similarity !== null
-              ? `Your current profile is ${Math.round(role.path.profile_to_target_similarity * 100)}% aligned with this target already.`
-              : 'Save a profile narrative to see your alignment with this target.'}
-          </p>
-          {role.path.stepping_stones.length > 0 ? (
-            <>
-              <strong style={{ fontSize: 13 }}>Closest captured roles — real stepping stones toward this target</strong>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                {role.path.stepping_stones.map((s) => (
-                  <Link
-                    key={s.id}
-                    to={`/roles/${s.id}`}
-                    className="secondary"
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      border: '1px solid var(--border)',
-                      borderRadius: 8,
-                      padding: '6px 10px',
-                      fontSize: 13,
-                      textDecoration: 'none',
-                    }}
-                  >
-                    <span>
-                      {s.title} {s.organisation ? `· ${s.organisation}` : ''}
-                    </span>
-                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      {Math.round(s.similarity_to_target * 100)}%
-                    </span>
-                  </Link>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="muted">No captured postings yet to use as stepping stones toward this target.</p>
-          )}
-        </div>
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2 style={{ fontSize: 18 }}>Potential steps toward this target</h2>
+          <p className="secondary">{role.path.method}</p>
+          <p className="muted">Assessed {role.path.candidates_assessed} captured roles. Missing evidence does not mean missing ability.</p>
+          {role.path.stepping_stones.map((step) => (
+            <article key={step.id} className="card" style={{ marginTop: 8 }}>
+              <Link to={`/roles/${step.id}`}><strong>{step.title}</strong></Link>
+              <p>{step.organisation ?? 'Unknown employer'} · {step.posting_date ?? 'Posting date unknown'}</p>
+              <strong>{step.assessment === 'potential_step' ? 'Potential development step' : 'More evidence needed before recommending'}</strong>
+              <p>{step.explanation}</p>
+              <p>Evidence coverage: {step.evidenced_requirements}/{step.requirements_total}. Required evidence missing: {step.missing_required.length}; unverified: {step.unverified_required.length}.</p>
+              {step.target_gaps_addressed.length > 0 && <p>Target requirements this role involves: {step.target_gaps_addressed.join(', ')}.</p>}
+              {step.missing_required.length > 0 && <p>Investigate: {step.missing_required.join(', ')}.</p>}
+              {step.unverified_required.length > 0 && <p>Verify: {step.unverified_required.join(', ')}.</p>}
+              {step.legacy_requirements > 0 && <p className="muted">Includes {step.legacy_requirements} legacy requirements; verify them against the source.</p>}
+              <Link to={`/comparison/${step.id}`}>Review evidence and plan next steps</Link>
+            </article>
+          ))}
+          {role.path.stepping_stones.length === 0 && <Link to="/import">Add postings to explore possible steps</Link>}
+        </section>
       )}
 
       {isTarget && role.feasibility_note && role.is_plausible !== false && (
@@ -593,8 +582,8 @@ export default function RoleDetail() {
           <Link to={`/roles/${role.id}/edit`}>
             <button>Edit</button>
           </Link>
-          <button onClick={handleDelete} style={{ color: 'var(--critical)' }}>
-            Delete {isTarget ? 'target' : 'role'}
+          <button disabled={deleting} onClick={handleDelete} style={{ color: 'var(--critical)' }}>
+            {deleting ? 'Deleting…' : `Delete ${isTarget ? 'target' : 'role'}`}
           </button>
         </div>
       </div>

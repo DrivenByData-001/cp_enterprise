@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, type ExtractionSummary, type RequirementClaim, type RoleMetadataInput } from '../lib/api'
+import ImportSteps from '../components/ImportSteps'
 import RoleMetadataForm from '../components/RoleMetadataForm'
 
 const BASIS_LABEL: Record<string, string> = {
@@ -41,6 +42,17 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
     }
   }
 
+  const manual = async () => {
+    setProposing(true); setError(null); setSaved(false)
+    try {
+      const role = await api.getRole(roleId)
+      setProposal({ title: role.title, organisation: role.organisation, location: role.location,
+        country: role.country, posting_date: role.posting_date, remote_type: role.remote_type,
+        employment_type: role.employment_type, seniority_level: role.seniority_level })
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setProposing(false) }
+  }
+
   const accept = async () => {
     if (!proposal) return
     setSaving(true)
@@ -59,7 +71,7 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
     <div className="card" style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Metadata enrichment</h3>
+          <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Review role details</h3>
           <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 560 }}>
             Proposes title/employer/location/date/etc. from this role's own captured source — never invented, and
             never authoritative until you accept it below. A posting date left blank in the source stays blank here
@@ -68,19 +80,20 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
         </div>
         {!proposal && (
           <button className="primary" onClick={propose} disabled={proposing} style={{ flexShrink: 0 }}>
-            {proposing ? 'Proposing…' : 'Propose metadata from source'}
+            {proposing ? 'Proposing…' : 'Suggest details from the source'}
           </button>
         )}
       </div>
 
-      {error && <p style={{ color: 'var(--critical)', fontSize: 13, marginTop: 10 }}>{error}</p>}
+      {!proposal && <button onClick={manual} disabled={proposing}>Edit details manually</button>}
+      {error && <p role="alert" style={{ color: 'var(--critical)', fontSize: 13, marginTop: 10 }}>{error}</p>}
 
       {proposal && (
         <div style={{ marginTop: 12 }}>
-          <RoleMetadataForm value={proposal} onChange={setProposal} disabled={saving} />
+          <RoleMetadataForm value={proposal} onChange={value => { setProposal(value); setSaved(false) }} disabled={saving} />
           <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="primary" onClick={accept} disabled={saving}>
-              {saving ? 'Saving…' : 'Accept metadata'}
+              {saving ? 'Saving…' : 'Save details'}
             </button>
             <button onClick={() => setProposal(null)} disabled={saving}>
               Discard proposal
@@ -96,6 +109,10 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
 export default function RoleRequirements() {
   const { id } = useParams()
   const roleId = id ?? ''
+  const [params, setParams] = useSearchParams()
+  const detailsStep = params.get('step') === 'details'
+  const [busyClaim, setBusyClaim] = useState<string | null>(null)
+  const [retry, setRetry] = useState(0)
   const [claims, setClaims] = useState<RequirementClaim[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -105,12 +122,13 @@ export default function RoleRequirements() {
   const reload = () => api.listRequirements(roleId).then(setClaims)
 
   useEffect(() => {
-    setLoading(true)
-    reload()
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roleId])
+    let current = true
+    setLoading(true); setClaims([]); setError(null); setLastRun(null)
+    api.listRequirements(roleId).then(rows => { if (current) setClaims(rows) })
+      .catch(e => { if (current) setError(String(e)) })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false }
+  }, [roleId, retry])
 
   const runExtraction = async () => {
     setExtracting(true)
@@ -127,8 +145,12 @@ export default function RoleRequirements() {
   }
 
   const review = async (claimId: string, action: 'accept' | 'reject') => {
-    await api.reviewRequirement(roleId, claimId, action)
-    await reload()
+    setBusyClaim(claimId); setError(null)
+    try {
+      await api.reviewRequirement(roleId, claimId, action)
+      setClaims(rows => rows.map(row => row.id === claimId ? { ...row, review_status: action === 'accept' ? 'accepted' : 'rejected' } : row))
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusyClaim(null) }
   }
 
   return (
@@ -136,18 +158,20 @@ export default function RoleRequirements() {
       <Link to={`/roles/${roleId}`} className="muted" style={{ fontSize: 13 }}>
         ← Back to role
       </Link>
-      <h1 style={{ fontSize: 22, marginTop: 12 }}>Requirement claims</h1>
-
-      <MetadataEnrichmentPanel roleId={roleId} />
+      <ImportSteps step={detailsStep ? 1 : 2} />
+      <h1 style={{ fontSize: 22, marginTop: 12 }}>{detailsStep ? 'Review role details' : 'Review requirements'}</h1>
+      <div hidden={!detailsStep}><MetadataEnrichmentPanel key={roleId} roleId={roleId} /></div>
+      {detailsStep ? <button className="primary" onClick={() => setParams({})}>Continue to requirements</button> :
+        <button onClick={() => setParams({ step: 'details' })}>Back to role details</button>}
+      <div hidden={detailsStep}>
 
       <p className="secondary">
-        Closed-vocabulary extraction against the canonical concept list (docs/11 §7.3). Every claim below carries its
-        basis and, where trusted, a verbatim span from the source document — click through to see it. Nothing here
-        was auto-accepted; review each before treating it as confirmed.
+        Extract requirements from the advert, then accept or reject each suggestion. Quotes show what the source
+        says; inferred requirements are labelled separately. Review suggestions before relying on the comparison.
       </p>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="primary" onClick={runExtraction} disabled={extracting}>
+        <button className="primary" onClick={runExtraction} disabled={extracting || busyClaim !== null}>
           {extracting ? 'Extracting…' : 'Extract requirements with AI'}
         </button>
         {lastRun && (
@@ -159,7 +183,8 @@ export default function RoleRequirements() {
         )}
       </div>
 
-      {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
+      {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
+      {error && <button onClick={() => setRetry(retry + 1)}>Reload requirements</button>}
       {loading && <p className="muted">Loading…</p>}
 
       {!loading && claims.length === 0 && (
@@ -200,14 +225,17 @@ export default function RoleRequirements() {
                 </span>
                 {c.review_status === 'unreviewed' && (
                   <>
-                    <button onClick={() => review(c.id, 'accept')}>Accept</button>
-                    <button onClick={() => review(c.id, 'reject')}>Reject</button>
+                    <button disabled={busyClaim !== null || extracting} onClick={() => review(c.id, 'accept')}>Accept</button>
+                    <button disabled={busyClaim !== null || extracting} onClick={() => review(c.id, 'reject')}>Reject</button>
                   </>
                 )}
               </div>
             </div>
           </div>
         ))}
+      </div>
+      <p>{claims.filter(c => c.review_status === 'unreviewed').length} requirement(s) still need review.</p>
+      <Link to={`/comparison/${roleId}`}>Continue to comparison</Link>
       </div>
     </div>
   )

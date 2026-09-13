@@ -4,41 +4,11 @@ from ..db import build_role_view, db_cursor, delete_role_instance, flatten_role_
 from ..document_processing import role_extraction_quality, role_extraction_quality_bulk
 from ..embeddings import cosine_similarity, ensure_profile_embedding, get_embedding, get_embeddings
 from ..models import JobPostingImport
+from ..role_requirements import REQUIREMENT_EVIDENCE_SQL
+from ..stepping_stones import path_to_target as _path_to_target
 from .import_routes import posting_columns
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
-
-
-def _path_to_target(cur, target_id: str, target_vec: list[float], profile_vec: list[float]) -> dict:
-    """Rank real postings as stepping-stones between the profile and a target's embedding."""
-    cur.execute(
-        "SELECT id, title, organisation, career_track FROM jobber.role_instance "
-        "WHERE instance_type = 'observed_posting' AND id != %s",
-        (target_id,),
-    )
-    candidates = cur.fetchall()
-    vec_by_id = get_embeddings(cur, "role_instance", [str(c["id"]) for c in candidates])
-
-    stepping_stones = []
-    for c in candidates:
-        sim_to_target = cosine_similarity(target_vec, vec_by_id.get(str(c["id"]), []))
-        if sim_to_target is None:
-            continue
-        stepping_stones.append(
-            {
-                "id": str(c["id"]),
-                "title": c["title"],
-                "organisation": c["organisation"],
-                "career_track": c["career_track"],
-                "similarity_to_target": sim_to_target,
-            }
-        )
-    stepping_stones.sort(key=lambda s: -s["similarity_to_target"])
-
-    return {
-        "profile_to_target_similarity": cosine_similarity(profile_vec, target_vec) if profile_vec else None,
-        "stepping_stones": stepping_stones[:5],
-    }
 
 
 # docs/18 §3 (Dashboard temporal filter): the historical corpus (~2008-2025)
@@ -87,7 +57,7 @@ def list_roles(
             filters += " AND ri.career_track = %s"
             params.append(career_track)
         if concept_id is not None:
-            filters += " AND ri.id IN (SELECT role_instance_id FROM jobber.role_skill_observation WHERE canonical_concept_id = %s)"
+            filters += " AND ri.id IN (SELECT role_instance_id FROM (" + REQUIREMENT_EVIDENCE_SQL + ") evidence WHERE concept_id = %s AND concept_status = 'active')"
             params.append(concept_id)
 
         applied_period = "all"
@@ -185,7 +155,7 @@ def get_role(role_id: str):
         _, profile_vec = ensure_profile_embedding(cur)
         role_vec = get_embedding(cur, "role_instance", role_id)
 
-        if role["node_type"] != "posting" and role_vec:
+        if role["node_type"] != "posting":
             role["path"] = _path_to_target(cur, role_id, role_vec, profile_vec)
 
         # The authoritative ok/partial signal (docs/18 §5) — None for a role

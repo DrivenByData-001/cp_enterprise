@@ -228,3 +228,36 @@ textarea {
 body.scroll-locked {
   overflow: hidden;
 }
+
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.form-stack { display: flex; flex-direction: column; gap: 12px; }
+fieldset { min-width: 0; border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+legend { font-weight: 600; padding: 0 6px; }
+label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+label input, label textarea, label select { width: 100%; min-width: 0; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.workflow-steps { display: flex; flex-wrap: wrap; padding: 0; list-style: none; gap: 8px; }
+.workflow-steps li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); }
+.workflow-steps [aria-current=step] { border-color: var(--series-1); color: var(--text-primary); font-weight: 650; }
+.action-list { padding-left: 20px; }
+.action-list li { margin: 12px 0; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+:focus-visible { outline: 3px solid var(--series-1); outline-offset: 3px; }
+[role=alert] { color: var(--critical); overflow-wrap: anywhere; }
+.site-header { margin-bottom: 16px; font-size: 18px; }
+.nav { overflow: visible; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+.nav-group { position: relative; }
+.nav-group summary { cursor: pointer; padding: 8px 12px; border-radius: 8px; }
+.nav-group summary.active { background: var(--surface-1); border: 1px solid var(--border); }
+.nav-menu { position: absolute; top: 100%; left: 0; min-width: 210px; z-index: 30; display: flex; flex-direction: column; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px; box-shadow: 0 8px 20px #0002; }
+.skip-link { position: absolute; top: -80px; background: var(--surface-1); padding: 12px; z-index: 100; }
+.skip-link:focus { top: 8px; }
+main { min-width: 0; }
+.card { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .app-shell { padding: 16px; }
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .nav-group { flex: 1 1 100%; }
+  .nav-menu { position: static; min-width: 0; box-shadow: none; }
+  h1 { font-size: 24px; }
+}

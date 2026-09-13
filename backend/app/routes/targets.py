@@ -1,10 +1,32 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
 from ..db import create_document, db_cursor, flatten_role_instance, upsert_role_instance
 from ..embeddings import cosine_similarity, embed_text, ensure_profile_embedding, get_embeddings, role_embedding_text, set_embedding
 from ..models import TargetImport
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
+
+
+class TargetPreviewInput(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    organisation: str | None = Field(default=None, max_length=300)
+    is_imagined: bool = False
+    description: str = Field(default="", max_length=10000)
+    supporting_material: str = Field(default="", max_length=40000)
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("A target title is required")
+        return value.strip()
+
+
+@router.post("/preview")
+def target_preview(payload: TargetPreviewInput):
+    from ..target_preview import preview_target
+    return preview_target(payload)
 
 
 def _compose_target_text(target) -> str:
