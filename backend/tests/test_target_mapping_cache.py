@@ -55,6 +55,9 @@ def test_unmapped_requirement_prevents_complete_readiness(client):
     assert path['target_mapping']['unresolved'] == 1
     assert not path['target_mapping']['complete']
     assert path['stepping_stones'][0]['assessment'] == 'incomplete_target_mapping'
+    comparison = client.get(f'/api/comparison/role/{target}').json()
+    assert comparison['target_mapping']['unresolved'] == 1
+    assert comparison['fit_score'] is None
     assert path['target_mapping']['items'][1]['concept_id'] is None or path['target_mapping']['items'][0]['concept_id'] is None
     forced = client.post('/api/targets/resolve-requirements', json=[{'name': 'Python', 'mapping_reviewed': True, 'concept_id': None}]).json()[0]
     assert forced['mapping_status'] == 'unmapped' and forced['concept_id'] is None
@@ -110,6 +113,38 @@ def test_concept_deprecation_invalidates_mapping_and_cached_result(client):
         cur.execute("UPDATE jobber.concept SET status = 'deprecated' WHERE id = %s", (cid,))
     path = client.get(f'/api/roles/{target}').json()['path']
     assert not path['target_mapping']['complete'] and not path['metrics']['cache_hit']
+
+
+def test_evidence_review_capability_rules_and_requirements_invalidate_cache(client):
+    from test_capability_engine import _capability, _claim, _claim_mapping, _component_edge
+    with db.db_cursor() as cur:
+        cap = _capability(cur, 'Risk analysis')
+        atom = concept(cur, 'Python')
+        source = _claim(cur, 'Analysed risk', depth='applied')
+        _claim_mapping(cur, source, cap, review_status='unreviewed')
+    target = save_target(client, [{'name': 'Risk analysis', 'requirement_type': 'required'}])
+    def status():
+        path = client.get(f'/api/roles/{target}').json()['path']
+        with db.db_cursor() as cur:
+            cur.execute('SELECT status FROM jobber.d_target_evidence WHERE concept_id = %s', (cap,))
+            return path, cur.fetchone()['status']
+    assert status()[1] == 'partial'
+    assert status()[0]['metrics']['cache_hit']
+    with db.db_cursor() as cur:
+        cur.execute("UPDATE jobber.profile360_claim_mapping SET review_status = 'accepted' WHERE jobber_concept_id = %s", (cap,))
+        cur.execute("UPDATE jobber.capability_detail SET min_depth = 'applied' WHERE concept_id = %s", (cap,))
+    path, evidence = status()
+    assert not path['metrics']['cache_hit'] and evidence == 'evidenced'
+    with db.db_cursor() as cur:
+        _component_edge(cur, atom, cap)
+    assert status()[0]['metrics']['concepts_evaluated'] == 1
+    with db.db_cursor() as cur:
+        # Accepted claims become authoritative; the old observation is visible
+        # as excluded, rather than silently disappearing behind claim precedence.
+        claim(cur, target, atom)
+    path, _ = status()
+    assert path['target_mapping']['unresolved'] == 1
+    assert any(i['mapping_status'] == 'excluded' for i in path['target_mapping']['items'])
 
 
 class CountingCursor:

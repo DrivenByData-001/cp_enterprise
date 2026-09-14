@@ -8,6 +8,8 @@ intentional Unmapped decision. AI preview output never sets reviewed mappings.
 Changing wording in the editor clears the previous selection for fresh review.
 
 Creation and saved-target editing show Mapped or Unmapped beside each requirement.
+Mapping checks use one debounced request for the whole draft; obsolete responses
+are ignored and unrelated edits do not trigger another check.
 Saved target analysis also lists every observation, including inactive/unmapped
 concepts and observations excluded by authoritative requirement claims. The page
 shows mapped/total counts. Incomplete mapping withholds target readiness and
@@ -57,6 +59,6 @@ thresholds. GitHub Actions prints the benchmark and retains its JUnit artifact;
 compare cold/warm times on equivalent runners. This guards the role-by-concept
 engine-call regression independently of machine speed.
 
-Deploy migration 0019 with the matching backend/frontend after 0018. No background
+Deploy migrations **0018 + 0019**, in order, with the matching backend/frontend. No background
 service or production profile write is required. Clearing either cache is safe;
 the next request rebuilds it. Never clear the revision row while the app is serving.

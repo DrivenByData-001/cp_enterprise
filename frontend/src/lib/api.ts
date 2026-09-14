@@ -920,6 +920,7 @@ export type ComparisonItem = {
 export type GapConcept = { id: string; canonical_name: string; type_code: string }
 
 export type ComparisonResult = {
+  target_mapping?: TargetPath['target_mapping']
   role: { id: string; title: string; kind: string }
   items: ComparisonItem[]
   counts: Record<ComparisonStatus, number>

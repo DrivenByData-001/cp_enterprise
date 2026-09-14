@@ -8,10 +8,22 @@ vi.mock('../lib/api', () => ({ api: { resolveTargetRequirements: vi.fn(), listCo
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 const initial: TargetDraft = { metadata: {}, target: { title: 'Target', is_imagined: false,
   typical_tasks: [], skill_decomposition: [], technical_subjects: [] }, skills: [{ name: 'CM', requirement_type: 'required' }] }
-function Editor() {
-  const [value, setValue] = useState(initial)
+function Editor({ draft = initial }: { draft?: TargetDraft }) {
+  const [value, setValue] = useState(draft)
   return <><TargetDraftEditor value={value} onChange={setValue} /><output data-testid="draft">{JSON.stringify(value.skills)}</output></>
 }
+
+it('batches all draft requirements into one mapping request', async () => {
+  vi.mocked(api.resolveTargetRequirements).mockImplementation(async skills => skills.map(s => ({
+    name: s.name, concept_id: null, canonical_name: null, mapping_status: 'unmapped',
+  })))
+  render(<Editor draft={{ ...initial, skills: [{ name: 'A' }, { name: 'B' }, { name: 'C' }] }} />)
+  await waitFor(() => expect(screen.getAllByText('Unmapped — excluded from analysis; needs review.')).toHaveLength(3))
+  expect(api.resolveTargetRequirements).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(api.resolveTargetRequirements).mock.calls[0][0]).toHaveLength(3)
+  fireEvent.change(screen.getByLabelText('Target title'), { target: { value: 'Other title' } })
+  expect(api.resolveTargetRequirements).toHaveBeenCalledTimes(1)
+})
 
 it('shows canonical resolution and confirms reviewed mappings for different wording', async () => {
   vi.mocked(api.resolveTargetRequirements).mockImplementation(async skills => [{ name: skills[0].name,

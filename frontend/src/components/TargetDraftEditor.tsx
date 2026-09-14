@@ -1,10 +1,27 @@
-import type { TargetDraft } from '../lib/api'
+import { useEffect, useState } from 'react'
+import { api, type TargetDraft, type TargetRequirementMapping } from '../lib/api'
 import TargetRequirementPicker from './TargetRequirementPicker'
 
 export default function TargetDraftEditor({ value, onChange, disabled = false }: {
   value: TargetDraft; onChange: (value: TargetDraft) => void; disabled?: boolean
 }) {
   const target = value.target
+  const [mappings, setMappings] = useState<TargetRequirementMapping[]>([])
+  const [mappingError, setMappingError] = useState('')
+  const [retry, setRetry] = useState(0)
+  // One debounced batch for the draft, independent of unrelated field edits.
+  const mappingInput = JSON.stringify(value.skills.map(({ name, concept_id, mapping_reviewed }) => ({ name, concept_id, mapping_reviewed })))
+  useEffect(() => {
+    let active = true
+    setMappings([]); setMappingError('')
+    const skills: TargetDraft['skills'] = JSON.parse(mappingInput)
+    if (!skills.length) return
+    const timer = setTimeout(() => {
+      api.resolveTargetRequirements(skills).then(rows => { if (active) setMappings(rows) })
+        .catch(e => { if (active) setMappingError(String(e)) })
+    }, 200)
+    return () => { active = false; clearTimeout(timer) }
+  }, [mappingInput, retry])
   const update = (patch: Partial<TargetDraft['target']>) => onChange({ ...value, target: { ...target, ...patch } })
   return <fieldset disabled={disabled} className="form-stack">
     <legend>Review and edit your target</legend>
@@ -44,7 +61,7 @@ export default function TargetDraftEditor({ value, onChange, disabled = false }:
     <p className="secondary">Review these separately from descriptive examples. Search and select a vocabulary concept to confirm different wording. Unmapped requirements can be saved, but prevent a complete target assessment.</p>
     {value.skills.map((skill, index) => <div className="form-grid" key={index}>
       <label>Requirement {index + 1}<input value={skill.name} onChange={e => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? { ...s, name: e.target.value, concept_id: null, mapping_reviewed: false } : s) })} /></label>
-      <TargetRequirementPicker skill={skill} onChange={updated => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? updated : s) })} />
+      <TargetRequirementPicker skill={skill} mapping={mappings[index] ?? null} error={mappingError} onRetry={() => setRetry(n => n + 1)} onChange={updated => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? updated : s) })} />
       <label>Priority<select value={skill.requirement_type ?? ''} onChange={e => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? { ...s, requirement_type: e.target.value || null } : s) })}>
         <option value="">Unspecified</option><option value="required">Required</option><option value="preferred">Preferred</option><option value="contextual">Contextual</option>
       </select></label>

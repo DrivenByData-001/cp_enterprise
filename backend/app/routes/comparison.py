@@ -17,6 +17,8 @@ from uuid import UUID
 from .. import capability_engine
 from ..db import db_cursor, instance_type_to_app_kind
 from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
+from ..role_requirements import load_role_requirements
+from ..target_mapping import target_mapping_summary
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
 
@@ -122,6 +124,8 @@ def compare_role(role_instance_id: str):
             "title": role["title"],
             "kind": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
         }
+        mapping = (target_mapping_summary(cur, role_instance_id, load_role_requirements(cur, role_instance_id))
+                   if role["kind"] != "posting" else None)
 
         try:
             fit = capability_engine.derive_role_fit(cur, role_instance_id)
@@ -180,11 +184,12 @@ def compare_role(role_instance_id: str):
         "role": role,
         "items": items,
         "counts": counts,
+        "target_mapping": mapping,
         # Structural summary (brief §17/§18) — shown before, and separate
         # from, fit_score in the UI.
         "blocking_gaps": fit["blocking_gaps"],
         "unverified_required": fit["unverified_required"],
-        "fit_score": fit["fit_score"],
+        "fit_score": None if mapping is not None and not mapping["complete"] else fit["fit_score"],
         "embedding_similarity": fit["embedding_similarity"],
         "engine_version": capability_engine.ENGINE_VERSION,
     }
