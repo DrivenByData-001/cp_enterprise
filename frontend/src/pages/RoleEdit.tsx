@@ -147,13 +147,18 @@ function SavedTargetEditor({ role }: { role: Role }) {
     const raw = role.raw_json as Partial<TargetDraft> | null
     const target = raw?.target
     return {
-      metadata: raw?.metadata ?? { source: 'user_defined' },
-      target: { ...target, title: target?.title ?? role.title, is_imagined: target?.is_imagined ?? false,
+      metadata: raw?.metadata ?? { source: 'user_defined', notes_for_user: role.extraction_notes },
+      target: { ...target, title: target?.title ?? role.title, is_imagined: target?.is_imagined ?? role.node_type === 'target_imagined',
         description: target?.description ?? role.description, organisation: target?.organisation ?? role.organisation,
+        summary: target?.summary ?? role.summary, career_track: target?.career_track ?? role.career_track,
+        seniority_level: target?.seniority_level ?? role.seniority_level,
+        grounding_note: target?.grounding_note ?? role.grounding_note,
+        feasibility_note: target?.feasibility_note ?? role.feasibility_note,
+        is_plausible: target?.is_plausible ?? role.is_plausible,
         typical_tasks: target?.typical_tasks ?? role.typical_tasks ?? [],
         skill_decomposition: target?.skill_decomposition ?? role.skill_decomposition ?? [],
         technical_subjects: target?.technical_subjects ?? role.technical_subjects ?? [] },
-      skills: raw?.skills ?? (role.path?.target_mapping?.items ?? []).map(item => ({
+      skills: raw?.skills ?? role.skills?.map(skill => ({ ...skill, concept_id: skill.resolved_concept_id, mapping_reviewed: true })) ?? (role.path?.target_mapping?.items ?? []).map(item => ({
         name: item.name, concept_id: item.concept_id, mapping_reviewed: true,
       })),
     }
