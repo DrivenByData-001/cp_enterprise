@@ -92,8 +92,6 @@ function computeRadialLayout(nodes: VocabularyGraphNode[], edges: VocabularyGrap
       const r = d * RING_SPACING
       positions.set(n.id, { x: r * Math.cos(a), y: r * Math.sin(a) })
     } else {
-      // Should not normally occur (the backend wires every node to root),
-      // but never drop a node silently — place any orphan on an outer ring.
       const a = (orphanIndex / Math.max(1, orphanCount)) * Math.PI * 2
       orphanIndex += 1
       const r = (Math.max(...depth.values(), 0) + 1) * RING_SPACING
@@ -113,19 +111,12 @@ function computeStarLayout(nodes: VocabularyGraphNode[], centerId: string): Map<
   return positions
 }
 
-// --- custom node rendering (brief §10/§24 — shape + colour, never colour alone) --
-
 type NodeData = { vocabNode: VocabularyGraphNode; selected: boolean; zoomBand: ZoomBand }
 
 function selectionStyle(selected: boolean): React.CSSProperties {
   return selected ? { outline: '3px solid var(--series-1)', outlineOffset: 2 } : {}
 }
 
-// Semantic zoom's label-density rules (vocab-graph-II brief §11): far zoom
-// hides surface-form labels entirely (cluster/concept labels stay, passed
-// via `hidden` per call site); close zoom allows a wider label instead of a
-// permanent second line — richer detail past that is tooltip-only (§9/§10),
-// so topology/layout is never touched by zoom, only this rendering.
 function NodeLabel({ children, hidden, wide }: { children: React.ReactNode; hidden?: boolean; wide?: boolean }) {
   if (hidden) return null
   return (
@@ -175,8 +166,6 @@ function ClusterNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `2.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      {/* Cluster labels stay visible at every zoom band (far zoom's "only
-          cluster/concept labels" rule, brief §7) — only surface forms hide. */}
       <NodeLabel wide={data.zoomBand === 'close'}>{n.label}</NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
@@ -187,6 +176,7 @@ function ConceptNodeView({ data }: NodeProps<Node<NodeData>>) {
   const n = data.vocabNode
   if (n.kind !== 'concept') return null
   const size = 30
+  const close = data.zoomBand === 'close'
   return (
     <div style={{ position: 'relative', width: size, height: size }}>
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -197,7 +187,14 @@ function ConceptNodeView({ data }: NodeProps<Node<NodeData>>) {
           opacity: n.status === 'active' ? 1 : 0.55, ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel wide={data.zoomBand === 'close'}>{n.label}</NodeLabel>
+      <NodeLabel wide={close}>
+        <span>{n.label}</span>
+        {close && (
+          <span data-testid="concept-close-detail" style={{ display: 'block', marginTop: 2, fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>
+            {n.type_code}{n.alias_count !== undefined ? ` · ${n.alias_count} alias${n.alias_count === 1 ? '' : 'es'}` : ''}
+          </span>
+        )}
+      </NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
@@ -217,8 +214,6 @@ function SurfaceFormNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `1.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      {/* Far zoom prioritises structure and hides raw-word text entirely
-          (brief §7/§11) — the whole reason semantic zoom exists. */}
       <NodeLabel hidden={data.zoomBand === 'far'} wide={data.zoomBand === 'close'}>
         {n.label}
       </NodeLabel>
@@ -226,9 +221,6 @@ function SurfaceFormNodeView({ data }: NodeProps<Node<NodeData>>) {
     </div>
   )
 }
-
-// --- close-zoom hover tooltip (brief §10) — compact, derived only from
-// already-loaded node data, never a fetch triggered by hover or zoom. ------
 
 function tooltipContent(n: VocabularyGraphNode): { title: string; lines: string[] } | null {
   if (n.kind === 'surface_form') {
@@ -281,8 +273,6 @@ const NODE_TYPES = {
   surface_form: SurfaceFormNodeView,
 }
 
-// --- edge styling (brief §11/§24 — line pattern distinguishes relation, not just colour) --
-
 function edgeStyleFor(relation: VocabularyGraphEdge['relation']): { stroke: string; strokeWidth: number; strokeDasharray?: string; opacity?: number } {
   switch (relation) {
     case 'contains':
@@ -316,8 +306,6 @@ function GraphCanvas({
   selectedId: string | null
   onSelect: (node: VocabularyGraphNode | null) => void
   onReady?: (api: GraphApi) => void
-  /** Last-known `{x, y, zoom}` from a previous mount (brief follow-up: carry
-   * pan/zoom across the embedded/fullscreen remount, not just selection). */
   initialViewport?: Viewport | null
   onViewportChange?: (viewport: Viewport) => void
 }) {
@@ -325,16 +313,9 @@ function GraphCanvas({
 
   const positions = useMemo(
     () => (focusCenter ? computeStarLayout(nodes, focusCenter) : computeRadialLayout(nodes, edges)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [nodes, edges, focusCenter],
   )
 
-  // Semantic zoom (brief §5/§6): tracked from React Flow's own viewport, never
-  // a separate polling/measurement mechanism. `zoomBandRef` lets the
-  // high-frequency `onMove` callback skip `setState` (and the re-render it
-  // would cause) unless the *band* actually changed — continuous panning/
-  // zooming inside one band costs nothing beyond React Flow's own rendering,
-  // and topology/layout (`positions` above) is never recomputed from zoom.
   const [zoomBand, setZoomBand] = useState<ZoomBand>('medium')
   const zoomBandRef = useRef<ZoomBand>('medium')
 
@@ -398,11 +379,6 @@ function GraphCanvas({
   )
 
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
-
-  // Hover tooltip (brief §9/§10) — close-zoom only, position captured once on
-  // enter (not tracked on every mousemove) so hovering never costs more than
-  // one extra render, and content comes straight from the already-loaded
-  // node — no fetch is ever triggered by hover or by zoom.
   const containerRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null)
 
@@ -435,9 +411,6 @@ function GraphCanvas({
         onNodeMouseLeave={handleNodeMouseLeave}
         onInit={handleInit}
         onMove={handleMove}
-        // Restore a remembered viewport across the embedded/fullscreen
-        // remount instead of re-fitting; only auto-fit on the very first
-        // mount, before anything has been reported yet.
         fitView={!initialViewport}
         fitViewOptions={{ padding: 0.25 }}
         defaultViewport={initialViewport ?? undefined}
