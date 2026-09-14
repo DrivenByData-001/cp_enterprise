@@ -464,7 +464,8 @@ def upsert_role_instance(cur, role_id: str | None, columns: dict, skills: list[d
     from .concept_linking import exact_match_concept_id, normalize_name
 
     for skill in skills:
-        canonical_concept_id = exact_match_concept_id(cur, normalize_name(skill["name"]))
+        canonical_concept_id = (skill["_resolved_concept_id"] if "_resolved_concept_id" in skill
+                                else exact_match_concept_id(cur, normalize_name(skill["name"])))
         cur.execute(
             "INSERT INTO jobber.role_skill_observation "
             "(role_instance_id, surface_form, category, importance, requirement_type, observation_basis, canonical_concept_id) "

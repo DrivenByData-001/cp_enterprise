@@ -43,6 +43,7 @@ export type SteppingStone = {
 }
 
 export type TargetPath = {
+  target_mapping?: { total: number; mapped: number; unresolved: number; complete: boolean; items: TargetRequirementMapping[] }
   profile_to_target_similarity: number | null
   stepping_stones: SteppingStone[]
   candidates_assessed: number
@@ -58,8 +59,10 @@ export type TargetDraft = {
     skill_decomposition: SkillDecompositionItem[]; technical_subjects: TechnicalSubjectItem[]
     grounding_note?: string | null; feasibility_note?: string | null; is_plausible?: boolean | null
   }
-  skills: { name: string; category?: string | null; requirement_type?: string | null; importance?: number | null }[]
+  skills: { name: string; category?: string | null; requirement_type?: string | null; importance?: number | null; concept_id?: string | null; mapping_reviewed?: boolean }[]
 }
+
+export type TargetRequirementMapping = { name: string; concept_id: string | null; canonical_name: string | null; mapping_status: 'mapped' | 'unmapped' | 'excluded' }
 
 export type DevelopmentAction = {
   id: string; concept_id: string; role_instance_id: string; title: string; note: string
@@ -1751,6 +1754,8 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : ''
     return req<Concept[]>(`/concepts${suffix}`)
   },
+  resolveTargetRequirements: (skills: TargetDraft['skills']) =>
+    req<TargetRequirementMapping[]>('/targets/resolve-requirements', { method: 'POST', body: JSON.stringify(skills) }),
   createConcept: (payload: ConceptInput) =>
     req<{ id: string; status: string }>('/concepts', { method: 'POST', body: JSON.stringify(payload) }),
   getConcept: (id: string) => req<Concept>(`/concepts/${id}`),

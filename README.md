@@ -224,8 +224,13 @@ see `docs/20-render-deployment.md` §8 for the full design and
    optionally generate an AI draft, then review and edit before saving.
    Its path ranks potential intermediate roles using evidence coverage and
    target evidence gaps, with reasons and insufficient-evidence states.
-6. **Editing** — any posting or target can be edited from its detail page (a
-   full overwrite of the legacy flat fields, not a merge — re-embeds it).
+6. **Editing** — source-aware postings without legacy JSON use a metadata
+   form that preserves captured source text and requirement evidence. Postings
+   with legacy JSON use full replacement of their flat fields and skill
+   observations, followed by re-embedding. Targets use an editable form with
+   vocabulary selection; advanced full-JSON replacement remains available.
+   Target saves replace their editable fields and observations, preserving
+   separate requirement claims. See `docs/28-target-mapping-and-performance.md`.
 6a. **Day in the Life** (a role's detail page) — generate an on-demand,
     persisted occupational-context sketch for that role — typical day/week,
     team, manager dynamic, stakeholders, career progression — with every

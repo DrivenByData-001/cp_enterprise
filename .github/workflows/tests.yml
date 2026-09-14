@@ -44,4 +44,17 @@ jobs:
       - run: pip install -r backend/requirements.txt
       - name: Require the disposable Postgres service
         run: python -c "import os, psycopg; psycopg.connect(os.environ['TEST_DATABASE_URL']).close()"
-      - run: pytest backend/tests backend/unit_tests -q
+      - run: pytest backend/tests backend/unit_tests -q --junitxml=backend-test-results.xml -o junit_family=legacy
+      - name: Report target-path benchmark
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          for prop in ET.parse('backend-test-results.xml').iter('property'):
+              if prop.get('name') == 'target_path_benchmark':
+                  print('TARGET_PATH_BENCHMARK ' + prop.get('value'))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: backend-test-results.xml

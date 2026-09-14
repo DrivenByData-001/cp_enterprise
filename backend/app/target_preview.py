@@ -26,6 +26,10 @@ def preview_target(payload):
         result = run_json_task(task="target_decompose", prompt_name=PROMPT,
                                user_input=text, output_model=TargetImport)
         output = result.output.model_dump(mode="json")
+        # The model may propose wording, never a reviewed vocabulary decision.
+        for skill in output["skills"]:
+            skill["concept_id"] = None
+            skill["mapping_reviewed"] = False
         # User intent is authoritative, including a real vs imagined choice.
         output["target"].update(title=payload.title, is_imagined=payload.is_imagined,
                                  organisation=payload.organisation)

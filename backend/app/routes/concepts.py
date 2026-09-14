@@ -174,8 +174,8 @@ def list_concepts(type_code: str | None = None, status: str = "active", q: str |
         query += " AND type_code = %s"
         params.append(type_code)
     if q:
-        query += " AND canonical_name ILIKE %s"
-        params.append(f"%{q}%")
+        query += " AND (canonical_name ILIKE %s OR EXISTS (SELECT 1 FROM jobber.concept_alias a WHERE a.concept_id = concept.id AND a.alias ILIKE %s))"
+        params.extend([f"%{q}%", f"%{q}%"])
     query += " ORDER BY canonical_name"
     with db_cursor() as cur:
         cur.execute(query, params)

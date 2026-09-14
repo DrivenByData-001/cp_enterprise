@@ -1,4 +1,5 @@
 import type { TargetDraft } from '../lib/api'
+import TargetRequirementPicker from './TargetRequirementPicker'
 
 export default function TargetDraftEditor({ value, onChange, disabled = false }: {
   value: TargetDraft; onChange: (value: TargetDraft) => void; disabled?: boolean
@@ -39,10 +40,11 @@ export default function TargetDraftEditor({ value, onChange, disabled = false }:
     <label>Feasibility assessment<select value={target.is_plausible == null ? 'unknown' : String(target.is_plausible)} onChange={e => update({ is_plausible: e.target.value === 'unknown' ? null : e.target.value === 'true' })}>
       <option value="unknown">Not assessed</option><option value="true">Plausible</option><option value="false">Implausible</option>
     </select></label>
-    <h3>Requirements used for matching</h3>
-    <p className="secondary">Review these separately from the descriptive examples above. Only named concepts in your vocabulary can be matched.</p>
+    <h3>Target requirements and vocabulary mapping</h3>
+    <p className="secondary">Review these separately from descriptive examples. Search and select a vocabulary concept to confirm different wording. Unmapped requirements can be saved, but prevent a complete target assessment.</p>
     {value.skills.map((skill, index) => <div className="form-grid" key={index}>
-      <label>Requirement {index + 1}<input value={skill.name} onChange={e => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? { ...s, name: e.target.value } : s) })} /></label>
+      <label>Requirement {index + 1}<input value={skill.name} onChange={e => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? { ...s, name: e.target.value, concept_id: null, mapping_reviewed: false } : s) })} /></label>
+      <TargetRequirementPicker skill={skill} onChange={updated => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? updated : s) })} />
       <label>Priority<select value={skill.requirement_type ?? ''} onChange={e => onChange({ ...value, skills: value.skills.map((s, i) => i === index ? { ...s, requirement_type: e.target.value || null } : s) })}>
         <option value="">Unspecified</option><option value="required">Required</option><option value="preferred">Preferred</option><option value="contextual">Contextual</option>
       </select></label>

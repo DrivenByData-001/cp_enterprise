@@ -1,8 +1,25 @@
 """Transparent, evidence-led candidate ranking; never predicts hiring or ability."""
 
+import logging
+from time import perf_counter
+from fastapi.encoders import jsonable_encoder
+
 from .capability_engine import atomic_concept_evidence, derive_capability_coverage
+from .db import to_json_param
 from .embeddings import cosine_similarity, get_embeddings
 from .role_requirements import load_role_requirements_bulk
+from .target_mapping import target_mapping_summary
+from .target_cache import revisions, cached_statuses, save_status
+
+logger = logging.getLogger(__name__)
+
+
+def measured(result, started, cache_hit, evaluated):
+    result["metrics"] = {"cache_hit": cache_hit, "candidates": result["candidates_assessed"],
+                         "distinct_concepts": result["distinct_concepts"], "concepts_evaluated": evaluated,
+                         "elapsed_ms": round((perf_counter() - started) * 1000, 2)}
+    logger.info("target_path_analysis %s", result["metrics"])
+    return result
 
 
 def assess_candidate(requirements, target_requirements, status_by_concept):
@@ -64,6 +81,12 @@ def assess_candidate(requirements, target_requirements, status_by_concept):
 
 
 def path_to_target(cur, target_id, target_vec, profile_vec):
+    started = perf_counter()
+    evidence_revision, path_revision = revisions(cur, target_vec, profile_vec)
+    cur.execute("SELECT result FROM jobber.d_target_path WHERE role_id = %s AND revision = %s", (target_id, path_revision))
+    cached = cur.fetchone()
+    if cached:
+        return measured(dict(cached["result"]), started, True, 0)
     cur.execute("SELECT id, title, organisation, career_track, posting_date FROM jobber.role_instance "
                 "WHERE instance_type = 'observed_posting' AND id != %s", (target_id,))
     candidates = cur.fetchall()
@@ -71,19 +94,30 @@ def path_to_target(cur, target_id, target_vec, profile_vec):
     requirements = load_role_requirements_bulk(cur, [target_id, *ids])
     vectors = get_embeddings(cur, "role_instance", ids)
     # Evaluate each distinct concept once per request, using the same engine as Comparison.
-    statuses = {}
+    concepts = {r["concept_id"] for rows in requirements.values() for r in rows}
+    statuses = cached_statuses(cur, evidence_revision, list(concepts))
+    evaluated = 0
     for rows in requirements.values():
         for row in rows:
             key = row["concept_id"]
             if key not in statuses:
+                if row["concept_status"] != "active":
+                    statuses[key] = "not_found"
+                    continue
                 evidence = (derive_capability_coverage(cur, key) if row["type_code"] == "capability"
                             else atomic_concept_evidence(cur, key))
                 statuses[key] = evidence["status"]
+                save_status(cur, evidence_revision, key, evidence["status"])
+                evaluated += 1
+    mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
     ranked = []
     for c in candidates:
         key = str(c["id"])
         vector = vectors.get(key, [])
         assessment = assess_candidate(requirements.get(key, []), requirements.get(target_id, []), statuses)
+        if not mapping["complete"]:
+            assessment.update(assessment="incomplete_target_mapping", ranking_score=0,
+                              explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.")
         ranked.append({**dict(c), "id": key, **assessment,
                        "similarity_to_target": cosine_similarity(target_vec, vector),
                        "similarity_to_profile": cosine_similarity(profile_vec, vector) if profile_vec else None})
@@ -92,10 +126,16 @@ def path_to_target(cur, target_id, target_vec, profile_vec):
         len(r["missing_required"]), len(r["unverified_required"]),
         -(r["similarity_to_profile"] or 0), -(r["similarity_to_target"] or 0), r["id"],
     ))
-    return {
+    result = {
         "profile_to_target_similarity": cosine_similarity(profile_vec, target_vec) if profile_vec else None,
         "stepping_stones": ranked[:5], "candidates_assessed": len(ranked),
+        "target_mapping": mapping, "distinct_concepts": len(concepts),
         "method": "Evidence coverage balanced with coverage of target evidence gaps; similarity breaks ties. "
                   "A role involving a gap is an opportunity to develop it, not proof you will acquire it. "
                   "Historical postings describe role patterns, not confirmed vacancies.",
     }
+    result = jsonable_encoder(result)
+    cur.execute("""INSERT INTO jobber.d_target_path (role_id, revision, result) VALUES (%s, %s, %s)
+                   ON CONFLICT (role_id) DO UPDATE SET revision = EXCLUDED.revision,
+                   result = EXCLUDED.result, prepared_at = now()""", (target_id, path_revision, to_json_param(result)))
+    return measured(result, started, False, evaluated)

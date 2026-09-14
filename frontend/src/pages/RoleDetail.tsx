@@ -396,6 +396,11 @@ export default function RoleDetail() {
       {isTarget && role.path && (
         <section className="card" style={{ marginTop: 16 }}>
           <h2 style={{ fontSize: 18 }}>Potential steps toward this target</h2>
+          {role.path.target_mapping && <div>
+            <p>{role.path.target_mapping.mapped} of {role.path.target_mapping.total} target requirements mapped and included.</p>
+            {!role.path.target_mapping.complete && <p role="alert">Target mapping is incomplete. Readiness and intermediate-step conclusions are withheld. <Link to={`/roles/${role.id}/edit`}>Review target requirements</Link></p>}
+            <ul>{role.path.target_mapping.items.map((item, index) => <li key={index}>{item.name}: {item.mapping_status === 'mapped' ? `Mapped → ${item.canonical_name}` : item.mapping_status === 'excluded' ? `Mapped → ${item.canonical_name}, but excluded by requirement review — needs review` : 'Unmapped — excluded from analysis; needs review'}</li>)}</ul>
+          </div>}
           <p className="secondary">{role.path.method}</p>
           <p className="muted">Assessed {role.path.candidates_assessed} captured roles. Missing evidence does not mean missing ability.</p>
           {role.path.stepping_stones.map((step) => (
