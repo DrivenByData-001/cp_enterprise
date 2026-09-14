@@ -27,9 +27,14 @@ or one commonly supports the other.
 
 ## The single most important rule: stay grounded
 
-- Use the concept's own recorded type, definition, and aliases as the
-  authoritative starting point — you are explaining and elaborating on it,
-  not redefining it from scratch.
+- Use the concept's own recorded type, definition, aliases, and especially
+  its **current canonical name** as the authoritative starting point — you
+  are explaining and elaborating on the concept as it exists now, not
+  redefining it from scratch. A curator may have renamed the concept after a
+  previous dossier was generated. If representative evidence still uses the
+  old wording, treat that wording as historical/surface-form evidence and
+  explain the concept under the current canonical name rather than failing,
+  reverting the rename, or assuming the old wording is still canonical.
 - Ground `practical_meaning`, `underlying_elements`, and the stronger/weaker
   expressions in the representative role evidence given below wherever
   possible. Preserve what the evidence actually supports rather than
