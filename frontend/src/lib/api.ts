@@ -29,12 +29,44 @@ export type SteppingStone = {
   title: string
   organisation: string | null
   career_track: string | null
-  similarity_to_target: number
+  similarity_to_target: number | null
+  similarity_to_profile: number | null
+  posting_date: string | null
+  assessment: string
+  explanation: string
+  evidenced_requirements: number
+  requirements_total: number
+  missing_required: string[]
+  unverified_required: string[]
+  target_gaps_addressed: string[]
+  legacy_requirements: number
 }
 
 export type TargetPath = {
+  target_mapping?: { total: number; mapped: number; unresolved: number; complete: boolean; items: TargetRequirementMapping[] }
   profile_to_target_similarity: number | null
   stepping_stones: SteppingStone[]
+  candidates_assessed: number
+  method: string
+}
+
+export type TargetDraft = {
+  metadata: { source?: string | null; notes_for_user?: string | null }
+  target: {
+    title: string; organisation?: string | null; is_imagined: boolean
+    description?: string | null; summary?: string | null; career_track?: string | null
+    seniority_level?: string | null; typical_tasks: string[]
+    skill_decomposition: SkillDecompositionItem[]; technical_subjects: TechnicalSubjectItem[]
+    grounding_note?: string | null; feasibility_note?: string | null; is_plausible?: boolean | null
+  }
+  skills: { name: string; category?: string | null; requirement_type?: string | null; importance?: number | null; concept_id?: string | null; mapping_reviewed?: boolean }[]
+}
+
+export type TargetRequirementMapping = { name: string; concept_id: string | null; canonical_name: string | null; mapping_status: 'mapped' | 'unmapped' | 'excluded' }
+
+export type DevelopmentAction = {
+  id: string; concept_id: string; role_instance_id: string; title: string; note: string
+  due_date: string | null; status: 'open' | 'done'
 }
 
 // The authoritative ok/partial signal (docs/18 §5) for a role produced by
@@ -869,7 +901,8 @@ export type ComparisonItem = {
   concept: { id: string; canonical_name: string; type_code: string }
   status: ComparisonStatus
   role_side: {
-    requirement_claim_id: string
+    requirement_claim_id: string | null
+    role_skill_observation_id?: string | null
     requirement_type: string
     basis: string
     review_status: string
@@ -887,6 +920,7 @@ export type ComparisonItem = {
 export type GapConcept = { id: string; canonical_name: string; type_code: string }
 
 export type ComparisonResult = {
+  target_mapping?: TargetPath['target_mapping']
   role: { id: string; title: string; kind: string }
   items: ComparisonItem[]
   counts: Record<ComparisonStatus, number>
@@ -1624,6 +1658,15 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  previewTarget: (payload: { title: string; organisation?: string | null; is_imagined: boolean; description: string; supporting_material: string }) =>
+    req<{ status: 'ok' | 'failed'; proposal: TargetDraft | null; error: string | null; extraction_run_id: string }>('/targets/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  listDevelopmentActions: (roleId: string) => req<DevelopmentAction[]>(`/comparison/role/${roleId}/actions`),
+  createDevelopmentAction: (roleId: string, payload: { concept_id: string; title: string; note: string; due_date: string | null }) =>
+    req<DevelopmentAction>(`/comparison/role/${roleId}/actions`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateDevelopmentAction: (roleId: string, actionId: string, status: 'open' | 'done') =>
+    req<DevelopmentAction>(`/comparison/role/${roleId}/actions/${actionId}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  deleteDevelopmentAction: (roleId: string, actionId: string) =>
+    req<{ status: string }>(`/comparison/role/${roleId}/actions/${actionId}`, { method: 'DELETE' }),
   login,
   logout,
   authStatus,
@@ -1712,6 +1755,8 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : ''
     return req<Concept[]>(`/concepts${suffix}`)
   },
+  resolveTargetRequirements: (skills: TargetDraft['skills']) =>
+    req<TargetRequirementMapping[]>('/targets/resolve-requirements', { method: 'POST', body: JSON.stringify(skills) }),
   createConcept: (payload: ConceptInput) =>
     req<{ id: string; status: string }>('/concepts', { method: 'POST', body: JSON.stringify(payload) }),
   getConcept: (id: string) => req<Concept>(`/concepts/${id}`),

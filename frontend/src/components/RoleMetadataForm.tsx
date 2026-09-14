@@ -27,7 +27,7 @@ export default function RoleMetadataForm({
   const set = <K extends keyof RoleMetadataInput>(key: K, v: RoleMetadataInput[K]) => onChange({ ...value, [key]: v })
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+    <div className="form-grid">
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
         Title
         <input value={value.title ?? ''} disabled={disabled} onChange={(e) => set('title', e.target.value || null)} />

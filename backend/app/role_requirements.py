@@ -60,98 +60,51 @@ validated pipeline and should win whenever it has anything usable to say):
 SOURCE_CLAIM = "claim"
 SOURCE_OBSERVATION = "role_skill_observation"
 
-
-def _load_requirement_claims(cur, role_instance_id: str) -> list[dict]:
-    cur.execute(
-        """
-        SELECT rc.id, rc.requirement_type, rc.importance, rc.basis, rc.review_status, rc.evidence_span,
-               c.id AS concept_id, c.canonical_name, c.type_code
-        FROM jobber.requirement_claim rc
-        JOIN jobber.concept c ON c.id = rc.concept_id
-        WHERE rc.role_instance_id = %s AND rc.superseded_by IS NULL AND rc.review_status != 'rejected'
-        ORDER BY rc.requirement_type, c.canonical_name
-        """,
-        (role_instance_id,),
-    )
-    items = []
-    for r in cur.fetchall():
-        items.append(
-            {
-                "concept_id": str(r["concept_id"]),
-                "canonical_name": r["canonical_name"],
-                "type_code": r["type_code"],
-                "requirement_type": r["requirement_type"],
-                "importance": r["importance"],
-                "source": SOURCE_CLAIM,
-                "requirement_claim_id": str(r["id"]),
-                "role_skill_observation_id": None,
-                "basis": r["basis"],
-                "review_status": r["review_status"],
-                "evidence_span": r["evidence_span"],
-            }
-        )
-    return items
+# Shared by comparison, economics, filters and facet counts. Claims win at
+# role level; curator rejection/supersession vetoes legacy resurrection.
+REQUIREMENT_EVIDENCE_SQL = """
+WITH usable_claims AS (
+    SELECT rc.role_instance_id, rc.concept_id, rc.id AS requirement_claim_id,
+           NULL::uuid AS role_skill_observation_id, rc.requirement_type,
+           rc.importance, rc.basis, rc.review_status, rc.evidence_span,
+           'claim'::text AS source
+    FROM jobber.requirement_claim rc
+    WHERE rc.superseded_by IS NULL AND rc.review_status != 'rejected'
+), evidence AS (
+    SELECT * FROM usable_claims
+    UNION ALL
+    SELECT rso.role_instance_id, rso.canonical_concept_id, NULL::uuid, rso.id,
+           rso.requirement_type, rso.importance, NULL::text, NULL::text, NULL::text,
+           'role_skill_observation'::text
+    FROM jobber.role_skill_observation rso
+    JOIN jobber.concept c ON c.id = rso.canonical_concept_id AND c.status = 'active'
+    WHERE NOT EXISTS (SELECT 1 FROM usable_claims u WHERE u.role_instance_id = rso.role_instance_id)
+      AND NOT EXISTS (
+          SELECT 1 FROM jobber.requirement_claim veto
+          WHERE veto.role_instance_id = rso.role_instance_id
+            AND veto.concept_id = rso.canonical_concept_id
+            AND (veto.review_status = 'rejected' OR veto.superseded_by IS NOT NULL)
+      )
+)
+SELECT e.*, c.canonical_name, c.type_code, c.status AS concept_status
+FROM evidence e JOIN jobber.concept c ON c.id = e.concept_id
+"""
 
 
-def _rejected_or_superseded_concept_ids(cur, role_instance_id: str) -> set[str]:
-    """Concept ids the curator has already spoken on for this role via a
-    requirement_claim that is rejected and/or superseded. Explicit on its
-    own WHERE clause (rather than relying on the caller only ever invoking
-    this once `_load_requirement_claims` is known empty) so this function
-    is correct in isolation, not just under one caller's invariant."""
-    cur.execute(
-        "SELECT DISTINCT concept_id FROM jobber.requirement_claim "
-        "WHERE role_instance_id = %s AND (review_status = 'rejected' OR superseded_by IS NOT NULL)",
-        (role_instance_id,),
-    )
-    return {str(r["concept_id"]) for r in cur.fetchall()}
-
-
-def _load_mapped_observations(cur, role_instance_id: str, exclude_concept_ids: set[str]) -> list[dict]:
-    cur.execute(
-        """
-        SELECT rso.id, rso.requirement_type, rso.importance,
-               c.id AS concept_id, c.canonical_name, c.type_code
-        FROM jobber.role_skill_observation rso
-        JOIN jobber.concept c ON c.id = rso.canonical_concept_id
-        WHERE rso.role_instance_id = %s AND c.status = 'active'
-        ORDER BY c.canonical_name
-        """,
-        (role_instance_id,),
-    )
-    items = []
-    for r in cur.fetchall():
-        concept_id = str(r["concept_id"])
-        if concept_id in exclude_concept_ids:
-            # Curator-authority veto (point 2 above): this concept's only
-            # requirement_claim history on this role was rejected/superseded
-            # — a legacy observation must never resurrect it.
-            continue
-        items.append(
-            {
-                "concept_id": concept_id,
-                "canonical_name": r["canonical_name"],
-                "type_code": r["type_code"],
-                "requirement_type": r["requirement_type"],
-                "importance": r["importance"],
-                "source": SOURCE_OBSERVATION,
-                "requirement_claim_id": None,
-                "role_skill_observation_id": str(r["id"]),
-                "basis": None,
-                "review_status": None,
-                "evidence_span": None,
-            }
-        )
-    return items
+def load_role_requirements_bulk(cur, role_ids: list[str]) -> dict[str, list[dict]]:
+    if not role_ids:
+        return {}
+    cur.execute("SELECT * FROM (" + REQUIREMENT_EVIDENCE_SQL + ") requirements "
+                "WHERE role_instance_id = ANY(%s::uuid[]) ORDER BY requirement_type, canonical_name", (role_ids,))
+    grouped = {str(key): [] for key in role_ids}
+    for row in cur.fetchall():
+        item = dict(row)
+        role_id = str(item.pop("role_instance_id"))
+        for key in ("concept_id", "requirement_claim_id", "role_skill_observation_id"):
+            item[key] = str(item[key]) if item[key] is not None else None
+        grouped[role_id].append(item)
+    return grouped
 
 
 def load_role_requirements(cur, role_instance_id: str) -> list[dict]:
-    """The canonical requirement-evidence loader for one role. Returns a
-    list of dicts (see module docstring for the exact shape/semantics).
-    Never raises for a role with no requirements of either kind — returns
-    `[]`."""
-    claims = _load_requirement_claims(cur, role_instance_id)
-    if claims:
-        return claims
-    excluded = _rejected_or_superseded_concept_ids(cur, role_instance_id)
-    return _load_mapped_observations(cur, role_instance_id, excluded)
+    return load_role_requirements_bulk(cur, [role_instance_id]).get(str(role_instance_id), [])

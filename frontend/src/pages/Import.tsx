@@ -1,301 +1,124 @@
 import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { api, type DuplicateCheckResult, type DuplicateRoleSummary } from '../lib/api'
+import { Link, useNavigate } from 'react-router-dom'
+import { api, type DuplicateCheckResult } from '../lib/api'
+import ImportSteps from '../components/ImportSteps'
 
-type Result = { ok: boolean; message: string }
-type PendingCapture = { text: string; source: string }
+type BulkResult = { file: string; status: string; id?: string; error?: string }
 
-function DuplicateWarning({
-  duplicate,
-  onOpenExisting,
-  onCaptureAnyway,
-  onCancel,
-  busy,
-}: {
-  duplicate: DuplicateCheckResult
-  onOpenExisting: (roleId: string) => void
-  onCaptureAnyway: () => void
-  onCancel: () => void
-  busy: boolean
-}) {
-  const isExact = duplicate.exact_duplicate != null
-  const match: DuplicateRoleSummary = (duplicate.exact_duplicate ?? duplicate.possible_duplicate)!
-
-  return (
-    <div
-      className="card"
-      style={{ marginBottom: 8, borderColor: isExact ? 'var(--critical)' : 'var(--warning)', background: isExact ? 'rgba(208,59,59,0.08)' : 'rgba(250,178,25,0.08)' }}
-    >
-      <strong>{isExact ? 'This document appears to have already been captured.' : 'This source appears to already exist.'}</strong>
-      <p className="secondary" style={{ margin: '6px 0 0', fontSize: 13 }}>
-        {isExact
-          ? 'The exact same content is already stored as a captured role.'
-          : 'The text matches an existing capture once whitespace differences (e.g. from PDF extraction) are ignored.'}
-      </p>
-      <div className="secondary" style={{ fontSize: 13, marginTop: 8 }}>
-        <div>
-          <strong>{match.title ?? 'Untitled'}</strong>
-        </div>
-        <div>{match.organisation ?? 'Unknown org'}</div>
-        <div>Posting date: {match.posting_date ?? 'unknown'}</div>
-      </div>
-      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {match.role_instance_id && (
-          <button onClick={() => onOpenExisting(match.role_instance_id!)} disabled={busy}>
-            Open existing
-          </button>
-        )}
-        <button className="primary" onClick={onCaptureAnyway} disabled={busy}>
-          {busy ? 'Capturing…' : 'Capture anyway'}
-        </button>
-        <button onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function SourceAwareIngest() {
+export default function Import() {
+  const navigate = useNavigate()
   const [text, setText] = useState('')
+  const [source, setSource] = useState('user_paste')
   const [title, setTitle] = useState('')
   const [organisation, setOrganisation] = useState('')
   const [location, setLocation] = useState('')
   const [country, setCountry] = useState('')
   const [postingDate, setPostingDate] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
-  const [result, setResult] = useState<Result | null>(null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
   const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null)
-  const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null)
-  const pdfInput = useRef<HTMLInputElement>(null)
-  const navigate = useNavigate()
-
-  const goToRequirements = (id: string) => setTimeout(() => navigate(`/role-instances/${id}/requirements`), 500)
-
-  const resetFields = () => {
-    setText('')
-    setTitle('')
-    setOrganisation('')
-    setLocation('')
-    setCountry('')
-    setPostingDate('')
-    setSourceUrl('')
-  }
-
-  const doCapture = async (captureText: string, source: string) => {
-    setBusy(true)
-    setResult(null)
-    try {
-      const res = await api.ingestText({
-        text: captureText,
-        title: title.trim() || null,
-        organisation: organisation.trim() || null,
-        location: location.trim() || null,
-        country: country.trim() || null,
-        posting_date: postingDate || null,
-        source_url: sourceUrl.trim() || null,
-        source,
-      })
-      setResult({ ok: true, message: `Captured as document #${res.document_id}, role instance #${res.id}.` })
-      resetFields()
-      setDuplicate(null)
-      setPendingCapture(null)
-      goToRequirements(res.id)
-    } catch (e) {
-      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const checkThenCapture = async (captureText: string, source: string) => {
-    setBusy(true)
-    setResult(null)
-    setDuplicate(null)
-    try {
-      const check = await api.checkDuplicate(captureText, 'posting')
-      if (check.exact_duplicate || check.possible_duplicate) {
-        setDuplicate(check)
-        setPendingCapture({ text: captureText, source })
-        setBusy(false)
-        return
-      }
-      await doCapture(captureText, source)
-    } catch (e) {
-      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
-      setBusy(false)
-    }
-  }
-
-  const submitText = () => checkThenCapture(text, 'user_paste')
-
-  const submitPdf = async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-    setBusy(true)
-    setResult(null)
-    try {
-      const { text: extracted } = await api.extractPdfText(files[0])
-      await checkThenCapture(extracted, 'pdf')
-    } catch (e) {
-      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
-      setBusy(false)
-    } finally {
-      if (pdfInput.current) pdfInput.current.value = ''
-    }
-  }
-
-  return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <h3 style={{ marginTop: 0, fontSize: 14 }}>Source-aware ingest → requirement claims</h3>
-      <p className="secondary" style={{ marginTop: 0, fontSize: 13 }}>
-        Captures the raw text as an immutable source document first, then lets you extract reviewable requirement
-        claims against the canonical vocabulary — separately, on the next page. Nothing here is auto-accepted.
-      </p>
-
-      {duplicate && (
-        <DuplicateWarning
-          duplicate={duplicate}
-          busy={busy}
-          onOpenExisting={(roleId) => navigate(`/roles/${roleId}`)}
-          onCaptureAnyway={() => pendingCapture && doCapture(pendingCapture.text, pendingCapture.source)}
-          onCancel={() => {
-            setDuplicate(null)
-            setPendingCapture(null)
-          }}
-        />
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional — derived from the text if blank)" />
-        <input value={organisation} onChange={(e) => setOrganisation(e.target.value)} placeholder="Employer / Organisation (optional)" />
-        <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Location (optional)" />
-        <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Country (optional)" />
-        <input
-          type="date"
-          value={postingDate}
-          onChange={(e) => setPostingDate(e.target.value)}
-          title="Posting date (optional — leave blank if unknown; never inferred from upload date)"
-        />
-        <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="Source URL (optional)" />
-      </div>
-      <textarea rows={10} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste raw posting text…" />
-      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="primary" onClick={submitText} disabled={busy || !text.trim() || !!duplicate}>
-          {busy ? 'Capturing…' : 'Capture text'}
-        </button>
-        <span className="muted" style={{ fontSize: 12 }}>or</span>
-        <input ref={pdfInput} type="file" accept="application/pdf" onChange={(e) => submitPdf(e.target.files)} disabled={busy || !!duplicate} />
-      </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 6, marginBottom: 0 }}>
-        Selectable-text PDFs only for now — image-only/scanned PDFs need OCR, not yet supported.
-      </p>
-      {result && (
-        <p style={{ marginTop: 12, color: result.ok ? 'var(--good)' : 'var(--critical)' }}>{result.message}</p>
-      )}
-    </div>
-  )
-}
-
-export default function Import() {
-  const [text, setText] = useState('')
-  const [sourceUrl, setSourceUrl] = useState('')
-  const [postingDate, setPostingDate] = useState('')
-  const [result, setResult] = useState<Result | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [bulkResults, setBulkResults] = useState<BulkResult[]>([])
+  const [failedFiles, setFailedFiles] = useState<File[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
-  const navigate = useNavigate()
+  const pdfInput = useRef<HTMLInputElement>(null)
+  const match = duplicate?.exact_duplicate ?? duplicate?.possible_duplicate
 
-  const submitNative = async () => {
-    setBusy(true)
-    setResult(null)
+  const capture = async (force = false) => {
+    setBusy(true); setError(null); setMessage(null)
     try {
-      const res = await api.importPostingNative({
-        text,
-        source_url: sourceUrl.trim() || null,
-        known_posting_date: postingDate || null,
-      })
-      setResult({ ok: true, message: `AI extracted and imported role (id ${res.id}), via ${res.run.model}.` })
-      setText('')
-      setSourceUrl('')
-      setPostingDate('')
-      setTimeout(() => navigate(`/roles/${res.id}`), 500)
+      if (!force) {
+        const check = await api.checkDuplicate(text, 'posting')
+        if (check.exact_duplicate || check.possible_duplicate) { setDuplicate(check); return }
+      }
+      const res = await api.ingestText({ text, source, title: title.trim() || null,
+        organisation: organisation.trim() || null, location: location.trim() || null,
+        country: country.trim() || null, posting_date: postingDate || null, source_url: sourceUrl.trim() || null })
+      navigate(`/role-instances/${res.id}/requirements?step=details`)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
+  }
+  const previewPdf = async (file?: File) => {
+    if (!file) return
+    setBusy(true); setError(null); setMessage(null)
+    try {
+      const res = await api.extractPdfText(file)
+      setText(res.text); setSource('pdf')
+      setMessage('PDF text is ready to review. Nothing has been captured yet.')
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false); if (pdfInput.current) pdfInput.current.value = '' }
+  }
+  const importFiles = async (files: File[] | FileList | null, retry = false) => {
+    if (!files?.length) return
+    const submitted = Array.from(files)
+    setBusy(true); setError(null); setMessage(null)
+    try {
+      const res = await api.importBulk(submitted)
+      setFailedFiles(submitted.filter((_, i) => res.results[i]?.status !== 'imported'))
+      setBulkResults(previous => retry ? [...previous.filter(r => r.status === 'imported'), ...res.results] : res.results)
+      setMessage('Import finished. Review the result for each file below.')
     } catch (e) {
-      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setBusy(false)
-    }
+      setFailedFiles([])
+      setError(`${e instanceof Error ? e.message : String(e)} Import outcome could not be confirmed. Check your roles before resubmitting to avoid duplicates.`)
+    } finally { setBusy(false); if (fileInput.current) fileInput.current.value = '' }
+  }
+  const importNative = async () => {
+    setBusy(true); setError(null)
+    try {
+      const res = await api.importPostingNative({ text, source_url: sourceUrl || null, known_posting_date: postingDate || null })
+      navigate(`/roles/${res.id}`)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setBusy(false) }
   }
 
-  const submitFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-    setBusy(true)
-    setResult(null)
-    try {
-      const res = await api.importBulk(Array.from(files))
-      const okCount = res.results.filter((r: { status: string }) => r.status === 'imported').length
-      const failCount = res.results.length - okCount
-      setResult({
-        ok: failCount === 0,
-        message: `Imported ${okCount} of ${res.results.length} file(s).${failCount ? ' Check console for errors.' : ''}`,
-      })
-      if (failCount) console.warn(res.results)
-    } catch (e) {
-      setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div>
-      <h1 style={{ fontSize: 22 }}>Import a role</h1>
-      <p className="secondary">
-        Paste the posting text and let the app extract and analyse it. The structured result is validated and stored directly.
-      </p>
-
-      <SourceAwareIngest />
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI extraction (legacy flat fields)</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8, marginBottom: 8 }}>
-          <input
-            value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)}
-            placeholder="Source URL (optional)"
-          />
-          <input type="date" value={postingDate} onChange={(e) => setPostingDate(e.target.value)} />
-        </div>
-        <textarea
-          rows={16}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Paste the raw job posting here…"
-        />
-        <div style={{ marginTop: 8 }}>
-          <button className="primary" onClick={submitNative} disabled={busy || !text.trim()}>
-            {busy ? 'Extracting…' : 'Extract with AI & import'}
-          </button>
-        </div>
+  return <div>
+    <h1>Import a role</h1>
+    <ImportSteps step={0} />
+    <p>Add the source, review the details and requirements, then compare the role with your evidence.</p>
+    {error && <p role="alert">{error} Your input is preserved.</p>}
+    {message && <p role="status">{message}</p>}
+    {match && <div className="card" role="alert">
+      <strong>{duplicate?.exact_duplicate ? 'This document appears to have already been captured.' : 'This source appears to already exist.'}</strong>
+      <p>{match.title ?? 'Untitled'}</p><p>{match.organisation ?? 'Unknown org'}</p>
+      <p>Posting date: {match.posting_date ?? 'unknown'}</p>
+      <p>{duplicate?.exact_duplicate ? 'The exact content is already stored.' : 'The text matches after whitespace differences are ignored.'}</p>
+      <div className="actions">
+        {match.role_instance_id && <button disabled={busy} onClick={() => navigate(`/roles/${match.role_instance_id}`)}>Open existing</button>}
+        <button disabled={busy} onClick={() => capture(true)}>Capture anyway</button>
+        <button disabled={busy} onClick={() => setDuplicate(null)}>Cancel</button>
       </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Legacy JSON import</h3>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="application/json"
-          multiple
-          onChange={(e) => submitFiles(e.target.files)}
-        />
-        <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
-          Existing extracted JSON files remain supported for migration and recovery.
-        </p>
+    </div>}
+    <fieldset disabled={busy || !!duplicate} className="form-stack card">
+      <legend>Add a posting</legend>
+      <div className="form-grid">
+        <label>Title (optional)<input value={title} onChange={e => setTitle(e.target.value)} /></label>
+        <label>Employer (optional)<input value={organisation} onChange={e => setOrganisation(e.target.value)} /></label>
+        <label>Location (optional)<input value={location} onChange={e => setLocation(e.target.value)} /></label>
+        <label>Country (optional)<input value={country} onChange={e => setCountry(e.target.value)} /></label>
+        <label>Posting date (optional)<input type="date" value={postingDate} onChange={e => setPostingDate(e.target.value)} /></label>
+        <label>Source URL (optional)<input type="url" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} /></label>
       </div>
-
-      {result && (
-        <p style={{ marginTop: 16, color: result.ok ? 'var(--good)' : 'var(--critical)' }}>{result.message}</p>
-      )}
-    </div>
-  )
+      <label>{source === 'pdf' ? 'Extracted PDF text (preview)' : 'Posting text'}
+        <textarea rows={10} value={text} readOnly={source === 'pdf'} onChange={e => setText(e.target.value)} placeholder="Paste raw posting text…" />
+      </label>
+      {source === 'pdf' && <button onClick={() => { setSource('user_paste'); setText('') }}>Use pasted text instead</button>}
+      <label>Upload a PDF<input ref={pdfInput} type="file" accept="application/pdf" onChange={e => previewPdf(e.target.files?.[0])} /></label>
+      <p className="muted">Selectable-text PDFs only. Scanned PDFs need OCR before import. Leave unknown posting dates blank.</p>
+      <button className="primary" disabled={busy || !text.trim()} onClick={() => capture()}>{busy ? 'Working…' : 'Capture text'}</button>
+    </fieldset>
+    <details className="card" style={{ marginTop: 16 }}>
+      <summary>Advanced imports</summary>
+      <p>For previously extracted files or the original one-step import workflow.</p>
+      <label>JSON files<input ref={fileInput} type="file" multiple accept="application/json" disabled={busy} onChange={e => importFiles(e.target.files)} /></label>
+      <p className="secondary">One-step AI import uses the posting text and source details above, saves the extraction immediately, and opens the role for review.</p>
+      <button disabled={busy || !!duplicate || !text.trim() || source === 'pdf'} onClick={importNative}>One-step AI import</button>
+    </details>
+    {bulkResults.length > 0 && <section className="card" aria-label="Import results" style={{ marginTop: 16 }}>
+      <h2>Import results</h2>
+      <ul>{bulkResults.map((r, i) => <li key={i}><strong>{r.file}</strong>: {r.status === 'imported' ? 'Imported' : r.error ?? 'Failed'}{' '}
+        {r.id && <Link to={`/roles/${r.id}`}>Open role</Link>}</li>)}</ul>
+      {failedFiles.length > 0 && <button disabled={busy} onClick={() => importFiles(failedFiles, true)}>Retry failed files only ({failedFiles.length})</button>}
+    </section>}
+  </div>
 }

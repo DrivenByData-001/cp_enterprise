@@ -9,13 +9,78 @@ as the headline result.
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+from datetime import date
+from typing import Literal
+from uuid import UUID
 
 from .. import capability_engine
 from ..db import db_cursor, instance_type_to_app_kind
 from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
+from ..role_requirements import load_role_requirements
+from ..target_mapping import target_mapping_summary
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
+
+
+class DevelopmentActionInput(BaseModel):
+    concept_id: UUID
+    title: str = Field(min_length=1, max_length=500)
+    note: str = Field(default="", max_length=10000)
+    due_date: date | None = None
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("An action title is required")
+        return value.strip()
+
+
+class DevelopmentActionUpdate(BaseModel):
+    status: Literal["open", "done"]
+
+
+@router.get("/role/{role_id}/actions")
+def list_actions(role_id: UUID):
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.development_action WHERE role_instance_id = %s ORDER BY created_at, id", (role_id,))
+        return cur.fetchall()
+
+
+@router.post("/role/{role_id}/actions")
+def create_action(role_id: UUID, payload: DevelopmentActionInput):
+    with db_cursor() as cur:
+        cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_id,))
+        if not cur.fetchone():
+            raise HTTPException(404, "Role not found")
+        cur.execute("SELECT id FROM jobber.concept WHERE id = %s AND status = 'active'", (payload.concept_id,))
+        if not cur.fetchone():
+            raise HTTPException(400, "Choose an active concept")
+        cur.execute("""INSERT INTO jobber.development_action (role_instance_id, concept_id, title, note, due_date)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+                    (role_id, payload.concept_id, payload.title, payload.note, payload.due_date))
+        return cur.fetchone()
+
+
+@router.patch("/role/{role_id}/actions/{action_id}")
+def update_action(role_id: UUID, action_id: UUID, payload: DevelopmentActionUpdate):
+    with db_cursor() as cur:
+        cur.execute("UPDATE jobber.development_action SET status = %s, updated_at = now() "
+                    "WHERE id = %s AND role_instance_id = %s RETURNING *", (payload.status, action_id, role_id))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Action not found on this role")
+        return row
+
+
+@router.delete("/role/{role_id}/actions/{action_id}")
+def delete_action(role_id: UUID, action_id: UUID):
+    with db_cursor() as cur:
+        cur.execute("DELETE FROM jobber.development_action WHERE id = %s AND role_instance_id = %s", (action_id, role_id))
+        if not cur.rowcount:
+            raise HTTPException(404, "Action not found on this role")
+    return {"status": "deleted"}
 
 
 def _requirement_documents(cur, requirement_claim_ids: list[str]) -> dict[str, dict | None]:
@@ -59,6 +124,8 @@ def compare_role(role_instance_id: str):
             "title": role["title"],
             "kind": instance_type_to_app_kind(role["instance_type"], role["target_basis"]),
         }
+        mapping = (target_mapping_summary(cur, role_instance_id, load_role_requirements(cur, role_instance_id))
+                   if role["kind"] != "posting" else None)
 
         try:
             fit = capability_engine.derive_role_fit(cur, role_instance_id)
@@ -68,6 +135,18 @@ def compare_role(role_instance_id: str):
         trace_items = fit["trace"]["items"]
         claim_ids = [item["requirement_claim_id"] for item in trace_items if item["requirement_claim_id"]]
         docs_by_claim = _requirement_documents(cur, claim_ids)
+
+        # Keep personal notes retractable even when stronger mapped evidence wins
+        # the status. Reading this separately never changes the engine's judgment.
+        concept_ids = list({item["concept"]["id"] for item in trace_items})
+        cur.execute("SELECT id, jobber_concept_id, note, created_at, promoted_to_profile360_at "
+                    "FROM jobber.person_capability_assertion WHERE jobber_concept_id = ANY(%s::uuid[])", (concept_ids,))
+        assertions = {}
+        for row in cur.fetchall():
+            assertion = dict(row)
+            key = str(assertion.pop("jobber_concept_id"))
+            assertion["id"] = str(assertion["id"])
+            assertions[key] = assertion
 
         items = []
         for item in trace_items:
@@ -91,6 +170,7 @@ def compare_role(role_instance_id: str):
                 }
             else:
                 person_side = {"mappings": [], "assertion": None, "component_of": [], "coverage": detail["coverage"]}
+            person_side["assertion"] = assertions.get(item["concept"]["id"])
             items.append({"concept": item["concept"], "status": item["status"], "role_side": role_side, "person_side": person_side})
 
     counts = {
@@ -104,11 +184,12 @@ def compare_role(role_instance_id: str):
         "role": role,
         "items": items,
         "counts": counts,
+        "target_mapping": mapping,
         # Structural summary (brief §17/§18) — shown before, and separate
         # from, fit_score in the UI.
         "blocking_gaps": fit["blocking_gaps"],
         "unverified_required": fit["unverified_required"],
-        "fit_score": fit["fit_score"],
+        "fit_score": None if mapping is not None and not mapping["complete"] else fit["fit_score"],
         "embedding_similarity": fit["embedding_similarity"],
         "engine_version": capability_engine.ENGINE_VERSION,
     }

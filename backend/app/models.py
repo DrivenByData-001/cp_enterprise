@@ -1,7 +1,8 @@
 from datetime import date as _date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, field_validator
+from uuid import UUID
 
 
 class Skill(BaseModel):
@@ -87,10 +88,20 @@ class TargetRole(BaseModel):
     is_plausible: Optional[bool] = None
 
 
+class TargetRequirement(Skill):
+    concept_id: Optional[str] = None
+    mapping_reviewed: bool = False
+
+    @field_validator("concept_id")
+    @classmethod
+    def valid_concept_id(cls, value):
+        return str(UUID(value)) if value is not None else None
+
+
 class TargetImport(BaseModel):
     metadata: Metadata
     target: TargetRole
-    skills: list[Skill] = []
+    skills: list[TargetRequirement] = []
 
 
 class ConceptCreate(BaseModel):

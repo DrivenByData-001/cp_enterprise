@@ -29,21 +29,23 @@ function AddObservationForm({ dimensions, onAdded }: { dimensions: PreferenceDim
     note: '',
   })
   const [busy, setBusy] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const submit = async () => {
     setBusy(true)
+    setSaveError(null)
     try {
       await api.createPreferenceObservation({ ...form, source_label: form.source_label || undefined, note: form.note || undefined })
       await onAdded()
       setForm({ ...form, source_label: '', note: '' })
-    } finally {
+    } catch (e) { setSaveError(e instanceof Error ? e.message : String(e)) } finally {
       setBusy(false)
     }
   }
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+      <div className="form-grid">
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
           <span className="secondary">Dimension</span>
           <select value={form.dimension_code} onChange={(e) => setForm({ ...form, dimension_code: e.target.value })}>
@@ -86,14 +88,15 @@ function AddObservationForm({ dimensions, onAdded }: { dimensions: PreferenceDim
           </span>
         )}
       </label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <input
+      <div className="form-grid">
+        <label>Source<input
           value={form.source_label ?? ''}
           onChange={(e) => setForm({ ...form, source_label: e.target.value })}
           placeholder="Source (e.g. 'MBTI: INTP', 'episode 4')"
-        />
-        <input value={form.note ?? ''} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Note (optional)" />
+        /></label>
+        <label>Note<input value={form.note ?? ''} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Note (optional)" /></label>
       </div>
+      {saveError && <p role="alert">{saveError}</p>}
       <div>
         <button className="primary" onClick={submit} disabled={busy || !form.dimension_code}>
           {busy ? 'Saving…' : 'Add observation'}

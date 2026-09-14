@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, type Facet, type Role, type YearRange } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
+import { rememberRoleList } from '../lib/roleNavigation'
 
 const TRACKS = ['actuarial', 'data_science', 'quant', 'risk', 'finance', 'mixed', 'other']
 const PAGE_SIZE = 20
@@ -50,56 +51,58 @@ export default function Dashboard() {
   const [roles, setRoles] = useState<Role[]>([])
   const [total, setTotal] = useState(0)
   const [yearRange, setYearRange] = useState<YearRange>(null)
-  const [track, setTrack] = useState('')
-  const [sort, setSort] = useState('similarity')
-  const [facetType, setFacetType] = useState('')
+  const [params, setParams] = useSearchParams()
+  useEffect(() => { rememberRoleList(params.toString()) }, [params])
+  const track = params.get('track') ?? ''
+  const sort = params.get('sort') ?? 'similarity'
+  const facetType = params.get('facet') ?? ''
+  const conceptId = facetType ? params.get('concept') ?? '' : ''
+  const periodValue = params.get('period') ?? 'recent'
+  const period = ['recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'recent'
+  const year = /^\d{4}$/.test(params.get('year') ?? '') ? Number(params.get('year')) : ''
+  const rawOffset = Number(params.get('offset') ?? 0)
+  const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
   const [facets, setFacets] = useState<Facet[]>([])
-  const [conceptId, setConceptId] = useState<string>('')
-  const [period, setPeriod] = useState<'recent' | 'all' | 'year' | 'unknown_date'>('recent')
-  const [year, setYear] = useState<number | ''>('')
-  const [offset, setOffset] = useState(0)
+  const [retry, setRetry] = useState(0)
+  const update = (key: string, value: string | number) => {
+    const next = new URLSearchParams(params)
+    if (value === '') next.delete(key)
+    else next.set(key, String(value))
+    if (key !== 'offset') next.delete('offset')
+    if (key === 'facet') next.delete('concept')
+    setParams(next)
+  }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!facetType) {
-      setFacets([])
-      setConceptId('')
-      return
-    }
-    api
-      .getFacets(facetType)
-      .then(setFacets)
-      .catch((e) => setError(String(e)))
-  }, [facetType])
-
-  // Any filter change resets pagination to the first page — a stale offset
-  // against a differently-sized filtered set would silently show an
-  // out-of-range empty page.
-  useEffect(() => {
-    setOffset(0)
-  }, [track, conceptId, sort, period, year])
+    let current = true
+    setFacets([])
+    if (facetType) api.getFacets(facetType)
+      .then((value) => { if (current) setFacets(value) })
+      .catch((e) => { if (current) setError(String(e)) })
+    return () => { current = false }
+  }, [facetType, retry])
 
   useEffect(() => {
+    let current = true
+    setError(null)
+    setRoles([])
+    setTotal(0)
+    if (period === 'year' && year === '') { setLoading(false); return }
     setLoading(true)
-    api
-      .listRoles({
-        career_track: track || undefined,
-        concept_id: conceptId === '' ? undefined : conceptId,
-        sort,
-        period: period === 'year' ? 'all' : period, // an explicit year always wins server-side; 'all' just avoids double-filtering
-        year: period === 'year' && year !== '' ? year : undefined,
-        limit: PAGE_SIZE,
-        offset,
-      })
-      .then((res) => {
-        setRoles(res.items)
-        setTotal(res.total)
-        setYearRange(res.year_range)
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
-  }, [track, conceptId, sort, period, year, offset])
+    api.listRoles({
+      career_track: track || undefined, concept_id: conceptId || undefined, sort,
+      period: period === 'year' ? 'all' : period as 'all' | 'recent' | 'unknown_date',
+      year: period === 'year' && year !== '' ? year : undefined,
+      limit: PAGE_SIZE, offset,
+    }).then((res) => {
+      if (!current) return
+      setRoles(res.items); setTotal(res.total); setYearRange(res.year_range)
+    }).catch((e) => { if (current) setError(String(e)) })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false }
+  }, [track, conceptId, sort, period, year, offset, retry])
 
   const availableYears: number[] = yearRange ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, i) => yearRange.max - i) : []
   const pageStart = total === 0 ? 0 : offset + 1
@@ -110,7 +113,7 @@ export default function Dashboard() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
         <h1 style={{ fontSize: 22, margin: 0 }}>Roles</h1>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <select value={track} onChange={(e) => setTrack(e.target.value)}>
+          <select aria-label="Career track" value={track} onChange={(e) => update('track', e.target.value)}>
             <option value="">All tracks</option>
             {TRACKS.map((t) => (
               <option key={t} value={t}>
@@ -118,13 +121,13 @@ export default function Dashboard() {
               </option>
             ))}
           </select>
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
+          <select aria-label="Sort roles" value={sort} onChange={(e) => update('sort', e.target.value)}>
             <option value="similarity">Sort: similarity</option>
             <option value="posting_date">Sort: posting date</option>
             <option value="captured_at">Sort: captured</option>
             <option value="title">Sort: title</option>
           </select>
-          <select value={facetType} onChange={(e) => setFacetType(e.target.value)}>
+          <select aria-label="Filter category" value={facetType} onChange={(e) => update('facet', e.target.value)}>
             <option value="">Facet: none</option>
             {FACET_TYPES.map((t) => (
               <option key={t.code} value={t.code}>
@@ -133,7 +136,7 @@ export default function Dashboard() {
             ))}
           </select>
           {facetType && (
-            <select value={conceptId} onChange={(e) => setConceptId(e.target.value)}>
+            <select aria-label="Concept" value={conceptId} onChange={(e) => update('concept', e.target.value)}>
               <option value="">All {facetType}s</option>
               {facets.map((f) => (
                 <option key={f.id} value={f.id}>
@@ -157,7 +160,7 @@ export default function Dashboard() {
         <span className="secondary" style={{ fontSize: 13 }}>
           Showing:
         </span>
-        <select value={period} onChange={(e) => setPeriod(e.target.value as typeof period)}>
+        <select aria-label="Posting period" value={period} onChange={(e) => update('period', e.target.value)}>
           <option value="recent">Recent (last few years)</option>
           <option value="all">All years{yearRange ? ` (${yearRange.min}–${yearRange.max})` : ''}</option>
           <option value="year">A specific posting year…</option>
@@ -168,7 +171,7 @@ export default function Dashboard() {
             <span className="secondary" style={{ fontSize: 13 }}>
               Posting year:
             </span>
-            <select value={year} onChange={(e) => setYear(e.target.value ? Number(e.target.value) : '')}>
+            <select aria-label="Posting year" value={year} onChange={(e) => update('year', e.target.value)}>
               <option value="">Choose a year</option>
               {availableYears.map((y) => (
                 <option key={y} value={y}>
@@ -190,12 +193,15 @@ export default function Dashboard() {
         )}
       </div>
 
-      {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
+      {error && <div role="alert"><p>{error}</p><button onClick={() => setRetry(retry + 1)}>Retry loading roles</button></div>}
       {loading && <p className="muted">Loading…</p>}
-      {!loading && roles.length === 0 && (
-        <p className="muted">
-          No roles captured yet. Head to <Link to="/import">Import</Link> to add your first one.
-        </p>
+      {!loading && !error && roles.length === 0 && (
+        <div className="card">
+          <p>{period === 'year' && year === '' ? 'Choose a posting year to see matching roles.' :
+            track || conceptId || period !== 'all' || offset > 0 ? 'No roles match these filters.' : 'No roles captured yet.'}</p>
+          <button onClick={() => setParams({ period: 'all' })}>Clear filters and show all years</button>{' '}
+          <Link to="/import">Add a posting</Link>
+        </div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -203,6 +209,7 @@ export default function Dashboard() {
           <Link
             key={r.id}
             to={`/roles/${r.id}`}
+            state={{ returnTo: `/?${params.toString()}` }}
             className="card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}
           >
@@ -241,10 +248,10 @@ export default function Dashboard() {
             {pageStart}–{pageEnd} of {total}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+            <button disabled={offset === 0} onClick={() => update('offset', Math.max(0, offset - PAGE_SIZE))}>
               Previous
             </button>
-            <button disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+            <button disabled={offset + PAGE_SIZE >= total} onClick={() => update('offset', offset + PAGE_SIZE)}>
               Next
             </button>
           </div>

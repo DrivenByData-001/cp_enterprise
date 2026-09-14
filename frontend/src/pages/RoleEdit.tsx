@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Role, type RoleMetadataInput } from '../lib/api'
+import { api, type Role, type RoleMetadataInput, type TargetDraft } from '../lib/api'
 import RoleMetadataForm from '../components/RoleMetadataForm'
+import TargetDraftEditor from '../components/TargetDraftEditor'
 
 type Result = { ok: boolean; message: string }
 
@@ -140,6 +141,43 @@ function LegacyJsonEditor({ role }: { role: Role }) {
   )
 }
 
+function SavedTargetEditor({ role }: { role: Role }) {
+  const navigate = useNavigate()
+  const [draft, setDraft] = useState<TargetDraft>(() => {
+    const raw = role.raw_json as Partial<TargetDraft> | null
+    const target = raw?.target
+    return {
+      metadata: raw?.metadata ?? { source: 'user_defined', notes_for_user: role.extraction_notes },
+      target: { ...target, title: target?.title ?? role.title, is_imagined: target?.is_imagined ?? role.node_type === 'target_imagined',
+        description: target?.description ?? role.description, organisation: target?.organisation ?? role.organisation,
+        summary: target?.summary ?? role.summary, career_track: target?.career_track ?? role.career_track,
+        seniority_level: target?.seniority_level ?? role.seniority_level,
+        grounding_note: target?.grounding_note ?? role.grounding_note,
+        feasibility_note: target?.feasibility_note ?? role.feasibility_note,
+        is_plausible: target?.is_plausible ?? role.is_plausible,
+        typical_tasks: target?.typical_tasks ?? role.typical_tasks ?? [],
+        skill_decomposition: target?.skill_decomposition ?? role.skill_decomposition ?? [],
+        technical_subjects: target?.technical_subjects ?? role.technical_subjects ?? [] },
+      skills: raw?.skills ?? role.skills?.map(skill => ({ ...skill, concept_id: skill.resolved_concept_id, mapping_reviewed: true })) ?? (role.path?.target_mapping?.items ?? []).map(item => ({
+        name: item.name, concept_id: item.concept_id, mapping_reviewed: true,
+      })),
+    }
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  return <div className="form-stack">
+    <TargetDraftEditor value={draft} onChange={setDraft} disabled={busy} />
+    {error && <p role="alert">{error} Your edits are preserved.</p>}
+    <button disabled={busy || !draft.target.title.trim()} onClick={async () => {
+      setBusy(true); setError('')
+      try { await api.updateTarget(role.id, draft); navigate(`/roles/${role.id}`) }
+      catch (e) { setError(String(e)) }
+      finally { setBusy(false) }
+    }}>{busy ? 'Saving…' : 'Save target changes'}</button>
+    {role.raw_json != null && <details><summary>Advanced: replace target JSON</summary><LegacyJsonEditor role={role} /></details>}
+  </div>
+}
+
 export default function RoleEdit() {
   const { id } = useParams()
   const [role, setRole] = useState<Role | null>(null)
@@ -164,18 +202,11 @@ export default function RoleEdit() {
 
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Edit "{role.title}"</h1>
 
-      {hasRawJson && <LegacyJsonEditor role={role} />}
+      {isTarget && <SavedTargetEditor role={role} />}
+      {hasRawJson && !isTarget && <LegacyJsonEditor role={role} />}
 
       {!hasRawJson && !isTarget && <SourceAwareMetadataEditor role={role} />}
 
-      {!hasRawJson && isTarget && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <p className="secondary" style={{ margin: 0 }}>
-            This target has no structured data to edit as JSON yet, and a dedicated metadata editor for hand-entered
-            targets isn't available here yet.
-          </p>
-        </div>
-      )}
     </div>
   )
 }

@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type ComparisonItem, type ComparisonResult, type ComparisonStatus } from '../lib/api'
+import { api, type ComparisonItem, type ComparisonResult, type ComparisonStatus, type DevelopmentAction } from '../lib/api'
+
+import ComparisonActions from '../components/ComparisonActions'
+import ImportSteps from '../components/ImportSteps'
 
 const STATUS_LABEL: Record<ComparisonStatus, string> = {
   evidenced: 'Evidenced',
@@ -22,7 +25,7 @@ function ItemDetail({ item }: { item: ComparisonItem }) {
   const bestEpisode = compositional && 'best_episode' in compositional ? compositional.best_episode : null
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8, fontSize: 13 }}>
+    <div className="form-grid" style={{ marginTop: 8, fontSize: 13 }}>
       <div>
         <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>
           Role side
@@ -85,26 +88,24 @@ export default function Comparison() {
   const roleId = id ?? ''
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busyConceptId, setBusyConceptId] = useState<string | null>(null)
+  const [actions, setActions] = useState<DevelopmentAction[]>([])
+  const [retry, setRetry] = useState(0)
 
-  const reload = () => api.compareRole(roleId).then(setData)
-
-  useEffect(() => {
-    reload().catch((e) => setError(String(e)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roleId])
-
-  const assert = async (conceptId: string) => {
-    setBusyConceptId(conceptId)
-    try {
-      await api.assertCapability(conceptId)
-      await reload()
-    } finally {
-      setBusyConceptId(null)
-    }
+  const reload = async () => {
+    const [comparison, nextActions] = await Promise.all([api.compareRole(roleId), api.listDevelopmentActions(roleId)])
+    setData(comparison); setActions(nextActions)
   }
 
-  if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
+  useEffect(() => {
+    let current = true
+    setData(null); setActions([]); setError(null)
+    Promise.all([api.compareRole(roleId), api.listDevelopmentActions(roleId)])
+      .then(([comparison, nextActions]) => { if (current) { setData(comparison); setActions(nextActions) } })
+      .catch(e => { if (current) setError(String(e)) })
+    return () => { current = false }
+  }, [roleId, retry])
+
+  if (error) return <div role="alert"><p>{error}</p><button onClick={() => setRetry(retry + 1)}>Retry comparison</button></div>
   if (!data) return <p className="muted">Loading…</p>
 
   return (
@@ -112,7 +113,13 @@ export default function Comparison() {
       <Link to={`/roles/${roleId}`} className="muted" style={{ fontSize: 13 }}>
         ← Back to {data.role.title}
       </Link>
+      <ImportSteps step={3} />
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Structural comparison: {data.role.title}</h1>
+      {data.target_mapping && <div className="card">
+        <p>{data.target_mapping.mapped} of {data.target_mapping.total} target requirements mapped and included. Counts below cover included requirements only.</p>
+        {!data.target_mapping.complete && <p role="alert">Target mapping is incomplete; this comparison cannot establish overall target readiness. <Link to={`/roles/${data.role.id}/edit`}>Review target requirements</Link></p>}
+        <ul>{data.target_mapping.items.map((item, i) => <li key={i}>{item.name}: {item.mapping_status === 'mapped' ? `Mapped → ${item.canonical_name}` : item.mapping_status === 'excluded' ? 'Excluded by requirement review — needs review' : 'Unmapped — needs review'}</li>)}</ul>
+      </div>}
       <p className="secondary">
         Evidence-backed, not scored. "No evidence found" means exactly that — not that you lack the capability. Every
         row traces to its source on both sides.
@@ -132,7 +139,7 @@ export default function Comparison() {
       {data.blocking_gaps.length > 0 && (
         <div className="card" style={{ borderColor: 'var(--critical)', marginBottom: 12 }}>
           <strong style={{ color: 'var(--critical)' }}>
-            {data.blocking_gaps.length} blocking gap{data.blocking_gaps.length === 1 ? '' : 's'}
+            {data.blocking_gaps.length} required evidence gap(s)
           </strong>
           <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
             Required, and no evidence found at all: {data.blocking_gaps.map((g) => g.canonical_name).join(', ')}
@@ -143,7 +150,7 @@ export default function Comparison() {
       {data.unverified_required.length > 0 && (
         <div className="card" style={{ borderColor: 'var(--warning)', marginBottom: 12 }}>
           <strong style={{ color: 'var(--warning)' }}>
-            {data.unverified_required.length} required capability{data.unverified_required.length === 1 ? '' : 'ies'} not fully verified
+            {data.unverified_required.length} required {data.unverified_required.length === 1 ? 'capability' : 'capabilities'} not fully verified
           </strong>
           <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
             Required, but only {data.unverified_required.map((g) => `${g.canonical_name} (${STATUS_LABEL[g.status].toLowerCase()})`).join(', ')} —
@@ -154,13 +161,13 @@ export default function Comparison() {
 
       {data.items.length === 0 && (
         <p className="muted">
-          No requirement claims for this role yet — extract them from the role's Requirements page first.
+          No requirement claims for this role yet. <Link to={`/role-instances/${roleId}/requirements`}>Review and extract requirements</Link>.
         </p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {data.items.map((item) => (
-          <div key={item.role_side.requirement_claim_id} className="card">
+          <div key={item.role_side.requirement_claim_id ?? item.role_side.role_skill_observation_id ?? item.concept.id} className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div>
                 <strong>{item.concept.canonical_name}</strong>{' '}
@@ -175,11 +182,8 @@ export default function Comparison() {
 
             <ItemDetail item={item} />
 
-            {item.status === 'not_found' && (
-              <button style={{ marginTop: 8 }} disabled={busyConceptId === item.concept.id} onClick={() => assert(item.concept.id)}>
-                I have done this
-              </button>
-            )}
+            <ComparisonActions item={item} roleId={roleId}
+              actions={actions.filter(action => action.concept_id === item.concept.id)} onChanged={reload} />
           </div>
         ))}
       </div>

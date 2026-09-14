@@ -1,10 +1,44 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
 from ..db import create_document, db_cursor, flatten_role_instance, upsert_role_instance
 from ..embeddings import cosine_similarity, embed_text, ensure_profile_embedding, get_embeddings, role_embedding_text, set_embedding
-from ..models import TargetImport
+from ..models import TargetImport, TargetRequirement
+from ..target_mapping import resolve_requirements
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
+
+
+class TargetPreviewInput(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    organisation: str | None = Field(default=None, max_length=300)
+    is_imagined: bool = False
+    description: str = Field(default="", max_length=10000)
+    supporting_material: str = Field(default="", max_length=40000)
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("A target title is required")
+        return value.strip()
+
+
+@router.post("/preview")
+def target_preview(payload: TargetPreviewInput):
+    from ..target_preview import preview_target
+    return preview_target(payload)
+
+
+@router.post("/resolve-requirements")
+def resolve_target_requirements(payload: list[TargetRequirement]):
+    with db_cursor() as cur:
+        return resolve_requirements(cur, [s.model_dump() for s in payload])
+
+
+def target_skills(cur, payload):
+    resolved = resolve_requirements(cur, [s.model_dump() for s in payload.skills])
+    return [{**s, "_resolved_concept_id": s["concept_id"]} for s in resolved]
 
 
 def _compose_target_text(target) -> str:
@@ -93,8 +127,8 @@ def list_targets():
 
 @router.post("")
 def import_target(payload: TargetImport):
-    skills = [s.model_dump() for s in payload.skills]
     with db_cursor() as cur:
+        skills = target_skills(cur, payload)
         columns = target_columns(cur, payload)
         embedding_text = columns.pop("_embedding_text")
         role_id = upsert_role_instance(cur, None, columns, skills)
@@ -114,8 +148,8 @@ def update_target(target_id: str, payload: TargetImport):
     if row["instance_type"] == "observed_posting":
         raise HTTPException(400, "this is a posting — edit it via PUT /api/roles/{id}")
 
-    skills = [s.model_dump() for s in payload.skills]
     with db_cursor() as cur:
+        skills = target_skills(cur, payload)
         columns = target_columns(cur, payload)
         embedding_text = columns.pop("_embedding_text")
         upsert_role_instance(cur, target_id, columns, skills)

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from .. import concept_curation
 from ..concept_linking import normalize_name
 from ..db import db_cursor
+from ..role_requirements import REQUIREMENT_EVIDENCE_SQL
 from ..models import (
     ClusterProposalResolve,
     ConceptAliasCreate,
@@ -86,14 +87,11 @@ def list_concept_types():
 def get_facets(type_code: str):
     with db_cursor() as cur:
         cur.execute(
-            """
-            SELECT c.id, c.canonical_name, COUNT(DISTINCT rso.role_instance_id) AS role_count
-            FROM jobber.concept c
-            JOIN jobber.role_skill_observation rso ON rso.canonical_concept_id = c.id
-            WHERE c.status = 'active' AND c.type_code = %s
-            GROUP BY c.id
-            ORDER BY role_count DESC, c.canonical_name
-            """,
+            "SELECT e.concept_id AS id, e.canonical_name, COUNT(DISTINCT e.role_instance_id) AS role_count "
+            "FROM (" + REQUIREMENT_EVIDENCE_SQL + ") e "
+            "JOIN jobber.role_instance ri ON ri.id = e.role_instance_id "
+            "WHERE e.concept_status = 'active' AND e.type_code = %s AND ri.instance_type = 'observed_posting' "
+            "GROUP BY e.concept_id, e.canonical_name ORDER BY role_count DESC, e.canonical_name",
             (type_code,),
         )
         return cur.fetchall()
@@ -176,8 +174,8 @@ def list_concepts(type_code: str | None = None, status: str = "active", q: str |
         query += " AND type_code = %s"
         params.append(type_code)
     if q:
-        query += " AND canonical_name ILIKE %s"
-        params.append(f"%{q}%")
+        query += " AND (canonical_name ILIKE %s OR EXISTS (SELECT 1 FROM jobber.concept_alias a WHERE a.concept_id = concept.id AND a.alias ILIKE %s))"
+        params.extend([f"%{q}%", f"%{q}%"])
     query += " ORDER BY canonical_name"
     with db_cursor() as cur:
         cur.execute(query, params)
