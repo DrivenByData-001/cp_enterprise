@@ -679,6 +679,15 @@ export type RequirementReviewSummary = {
   accepted: number
   unreviewed: number
   rejected: number
+  // Pending jobber.concept_proposal rows for this role's own source
+  // document — a surface form extraction couldn't resolve to any concept
+  // becomes one of these, never a requirement_claim, so it's tracked
+  // separately from the claim-status counts above.
+  unresolved_proposals: number
+  // Whether a requirement_extract run has ever been recorded for this role
+  // — distinguishes "never extracted" from "reviewed and complete" even
+  // though both currently have zero current claims.
+  extraction_attempted: boolean
   complete: boolean
 }
 

@@ -1,4 +1,5 @@
 import io
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile
@@ -322,17 +323,32 @@ def accept_requirement(role_id: str, claim_id: str):
 
 @router.post("/{role_id}/requirements/{claim_id}/reject")
 def reject_requirement(role_id: str, claim_id: str):
+    """Reject an unreviewed claim in place — or un-accept an already-accepted
+    one: a review mistake must be recoverable later, not only while still
+    unreviewed, and Edit alone cannot express "this isn't a requirement at
+    all." Un-accepting never overwrites the accepted decision in place — it
+    goes through the same non-destructive supersession `_supersede_with_new_claim`
+    edit uses, so the audit trail shows the claim WAS accepted before a
+    human changed their mind, exactly as any other correction would."""
     with db_cursor() as cur:
         claim = _current_claim(cur, role_id, claim_id)
         if claim["superseded_by"] is not None:
             raise HTTPException(409, "this claim has been superseded — act on its current replacement instead")
-        if claim["review_status"] != "unreviewed":
-            raise HTTPException(409, f"only an unreviewed claim can be rejected directly (current status: {claim['review_status']})")
-        cur.execute(
-            "UPDATE jobber.requirement_claim SET review_status = 'rejected', reviewed_at = now() WHERE id = %s",
-            (claim_id,),
-        )
-        return _fetch_claim_view(cur, claim_id)
+        if claim["review_status"] == "unreviewed":
+            cur.execute(
+                "UPDATE jobber.requirement_claim SET review_status = 'rejected', reviewed_at = now() WHERE id = %s",
+                (claim_id,),
+            )
+            return _fetch_claim_view(cur, claim_id)
+        if claim["review_status"] == "accepted":
+            new_id = _supersede_with_new_claim(
+                cur, role_id=role_id, old_claim_id=claim_id, concept_id=str(claim["concept_id"]),
+                requirement_type=claim["requirement_type"], importance=claim["importance"], basis=claim["basis"],
+                document_id=str(claim["document_id"]) if claim["document_id"] else None,
+                evidence_span=claim["evidence_span"], new_review_status="rejected",
+            )
+            return _fetch_claim_view(cur, new_id)
+        raise HTTPException(409, f"only an unreviewed or accepted claim can be rejected (current status: {claim['review_status']})")
 
 
 @router.post("/{role_id}/requirements/{claim_id}/reopen")
@@ -396,6 +412,60 @@ def _validate_requirement_fields(cur, *, concept_id, requirement_type, basis, im
             raise HTTPException(400, "evidence_span is not an exact match in the source document")
 
 
+def _existing_current_claim_id(cur, role_id: str, concept_id: str, *, exclude_claim_id: str | None = None) -> str | None:
+    """Is there already a *current* claim for this (role, concept) — the
+    condition migration 0020's partial unique index also enforces at the
+    database level. Used to turn what would otherwise be a raw integrity-
+    error 500 into a clear 409 before Add requirement or a concept remap
+    ever reaches the database."""
+    query = "SELECT id FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL"
+    params: list = [role_id, concept_id]
+    if exclude_claim_id is not None:
+        query += " AND id != %s"
+        params.append(exclude_claim_id)
+    cur.execute(query, params)
+    row = cur.fetchone()
+    return str(row["id"]) if row else None
+
+
+def _supersede_with_new_claim(cur, *, role_id, old_claim_id, concept_id, requirement_type, importance, basis,
+                               document_id, evidence_span, new_review_status: str) -> str:
+    """The shared non-destructive-correction mechanism behind both /edit and
+    /reject-an-accepted-claim below: the old row is marked 'corrected' and
+    pointed at a new row via superseded_by, and the new row (carrying
+    `new_review_status` — 'accepted' for a correction, 'rejected' for an
+    un-accept) becomes current, with extraction_run_id=NULL — it is not the
+    output of any extraction run, it is what a human reviewer determined,
+    truthfully recorded as such.
+
+    The new row's id is generated here, in Python, rather than left to the
+    table's own DEFAULT gen_random_uuid(), specifically so the old row's
+    UPDATE (which frees the (role, concept) slot by clearing its "current"
+    status) can run *before* the new row's INSERT (which reclaims that same
+    slot). Reversing that order — inserting the replacement first, the way
+    an append-only model might suggest — would momentarily leave two current
+    rows for the same (role, concept) whenever a correction doesn't change
+    the concept (the common case: editing type/basis/span/importance
+    without remapping), tripping migration 0020's partial unique index
+    inside this same transaction."""
+    new_id = str(uuid.uuid4())
+    cur.execute(
+        "UPDATE jobber.requirement_claim SET review_status = 'corrected', superseded_by = %s, reviewed_at = now() "
+        "WHERE id = %s",
+        (new_id, old_claim_id),
+    )
+    cur.execute(
+        """
+        INSERT INTO jobber.requirement_claim
+            (id, role_instance_id, concept_id, requirement_type, importance, basis,
+             document_id, evidence_span, extraction_run_id, review_status, reviewed_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, %s, now())
+        """,
+        (new_id, role_id, concept_id, requirement_type, importance, basis, document_id, evidence_span, new_review_status),
+    )
+    return new_id
+
+
 class RequirementClaimEdit(BaseModel):
     """PATCH-shaped partial edit for /edit below — every field optional; an
     omitted field keeps the original claim's value, matching
@@ -414,13 +484,16 @@ class RequirementClaimEdit(BaseModel):
 def edit_requirement(role_id: str, claim_id: str, payload: RequirementClaimEdit):
     """'Edit & accept' for an unreviewed claim, and 'Edit' for an already-
     accepted one (brief §2/§4) — both go through the same non-destructive
-    supersession path (brief §3): the original AI claim/extraction_run_id is
-    preserved untouched on the old row, which is marked 'corrected' and
-    linked via superseded_by; a *new* row carries the corrected data,
-    review_status='accepted' and extraction_run_id=NULL (it is not the
-    output of any extraction run — it is what the human reviewer determined
-    is true, truthfully recorded as such). A rejected claim must be
-    /reopen-ed first; a superseded row is immutable history."""
+    supersession path (brief §3, `_supersede_with_new_claim`): the original
+    AI claim/extraction_run_id is preserved untouched on the old row, which
+    is marked 'corrected' and linked via superseded_by; a *new* row carries
+    the corrected data and review_status='accepted'. A rejected claim must
+    be /reopen-ed first; a superseded row is immutable history. A field-
+    for-field-identical patch is treated as a plain Accept (or a no-op, if
+    already accepted) — enforced here, not only by the frontend, so a direct
+    API call can't manufacture a pointless replacement/corrected pair
+    either. Remapping onto a concept this role already has a separate
+    *current* claim for is rejected (409) rather than creating a duplicate."""
     patch = payload.model_dump(exclude_unset=True)
     with db_cursor() as cur:
         claim = _current_claim(cur, role_id, claim_id)
@@ -439,32 +512,43 @@ def edit_requirement(role_id: str, claim_id: str, payload: RequirementClaimEdit)
         importance = patch["importance"] if "importance" in patch else claim["importance"]
         evidence_span = patch["evidence_span"] if "evidence_span" in patch else claim["evidence_span"]
         document_id = str(claim["document_id"]) if claim["document_id"] else None
+        # A span only ever means something alongside stated/implied basis —
+        # computed before the no-op/validation checks below so both compare
+        # and store the same "effective" value, never a stale quote left
+        # over from a stronger basis.
+        if basis not in ("stated", "implied"):
+            evidence_span = None
+
+        unchanged = (
+            concept_id == str(claim["concept_id"])
+            and requirement_type == claim["requirement_type"]
+            and basis == claim["basis"]
+            and importance == claim["importance"]
+            and evidence_span == claim["evidence_span"]
+        )
+        if unchanged:
+            if claim["review_status"] == "unreviewed":
+                cur.execute(
+                    "UPDATE jobber.requirement_claim SET review_status = 'accepted', reviewed_at = now() WHERE id = %s",
+                    (claim_id,),
+                )
+            return _fetch_claim_view(cur, claim_id)
 
         _validate_requirement_fields(
             cur, concept_id=concept_id, requirement_type=requirement_type, basis=basis,
             importance=importance, evidence_span=evidence_span, document_id=document_id,
         )
-        # A span left over from a stronger basis must not linger once the
-        # claim no longer carries evidence strong enough to justify showing
-        # a quote — never looks like it's still quoting the source.
-        if basis not in ("stated", "implied"):
-            evidence_span = None
+        if _existing_current_claim_id(cur, role_id, concept_id, exclude_claim_id=claim_id):
+            raise HTTPException(
+                409,
+                "this role already has a current requirement for that concept — edit or reject the existing one "
+                "instead of creating a duplicate",
+            )
 
-        cur.execute(
-            """
-            INSERT INTO jobber.requirement_claim
-                (role_instance_id, concept_id, requirement_type, importance, basis,
-                 document_id, evidence_span, extraction_run_id, review_status, reviewed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, 'accepted', now())
-            RETURNING id
-            """,
-            (role_id, concept_id, requirement_type, importance, basis, document_id, evidence_span),
-        )
-        new_id = str(cur.fetchone()["id"])
-        cur.execute(
-            "UPDATE jobber.requirement_claim SET review_status = 'corrected', superseded_by = %s, reviewed_at = now() "
-            "WHERE id = %s",
-            (new_id, claim_id),
+        new_id = _supersede_with_new_claim(
+            cur, role_id=role_id, old_claim_id=claim_id, concept_id=concept_id, requirement_type=requirement_type,
+            importance=importance, basis=basis, document_id=document_id, evidence_span=evidence_span,
+            new_review_status="accepted",
         )
         return _fetch_claim_view(cur, new_id)
 
@@ -497,6 +581,8 @@ def add_requirement(role_id: str, payload: RequirementClaimCreate):
             cur, concept_id=payload.concept_id, requirement_type=payload.requirement_type, basis=payload.basis,
             importance=payload.importance, evidence_span=payload.evidence_span, document_id=document_id,
         )
+        if _existing_current_claim_id(cur, role_id, payload.concept_id):
+            raise HTTPException(409, "this requirement already exists — review or edit the existing claim instead")
         cur.execute(
             """
             INSERT INTO jobber.requirement_claim

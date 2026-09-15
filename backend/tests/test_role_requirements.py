@@ -5,8 +5,11 @@ the real Postgres test database, plus integration checks through
 `capability_engine.derive_role_fit` and `db.role_skills_with_fallback`
 (Role Detail's own, separately-precedenced consumer of the same table)."""
 
+import uuid
+
 from app import capability_engine as engine
 from app import db
+from app.concept_linking import get_or_create_current_vocabulary_version
 from app.role_requirements import (
     load_requirement_review_summary,
     load_requirement_review_summary_bulk,
@@ -36,13 +39,38 @@ def _role(cur, title="Test role"):
     return db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": title}, skills=[])
 
 
-def _claim_requirement(cur, role_id, concept_id, *, requirement_type="required", basis="user_asserted", review_status="accepted", superseded_by=None):
+def _claim_requirement(cur, role_id, concept_id, *, requirement_type="required", basis="user_asserted", review_status="accepted", superseded_by=None, claim_id=None):
     cur.execute(
-        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status, superseded_by) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-        (role_id, concept_id, requirement_type, basis, review_status, superseded_by),
+        "INSERT INTO jobber.requirement_claim (id, role_instance_id, concept_id, requirement_type, basis, review_status, superseded_by) "
+        "VALUES (COALESCE(%s, gen_random_uuid()), %s, %s, %s, %s, %s, %s) RETURNING id",
+        (claim_id, role_id, concept_id, requirement_type, basis, review_status, superseded_by),
     )
     return str(cur.fetchone()["id"])
+
+
+def _supersede(cur, old_claim_id, *, new_review_status="accepted", old_review_status=None, **new_claim_kwargs) -> str:
+    """Migration 0020's partial unique index allows at most one *current*
+    claim per (role, concept), so a same-concept replacement must free the
+    old row's slot (superseded_by set) *before* the new row reclaims it —
+    the new row's id is generated here so that ordering is possible despite
+    superseded_by's own foreign key pointing at it (deferred to commit; see
+    routes/role_instances.py::_supersede_with_new_claim, the same pattern
+    used in application code). `old_review_status` optionally also flips the
+    old row's status (e.g. to 'corrected'); left alone (None) when a test
+    wants to simulate proposal churn where the old row stays 'unreviewed'."""
+    new_claim_id = str(uuid.uuid4())
+    if old_review_status is not None:
+        cur.execute(
+            "UPDATE jobber.requirement_claim SET review_status = %s, superseded_by = %s WHERE id = %s",
+            (old_review_status, new_claim_id, old_claim_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s",
+            (new_claim_id, old_claim_id),
+        )
+    _claim_requirement(cur, review_status=new_review_status, claim_id=new_claim_id, **new_claim_kwargs)
+    return new_claim_id
 
 
 def _observation(cur, role_id, *, surface_form, canonical_concept_id=None, requirement_type=None, importance=None):
@@ -200,8 +228,7 @@ def test_superseded_but_never_reviewed_claim_does_not_veto_fallback(client):
         role_id = _role(cur)
         concept_id = _concept(cur, "Old thing")
         old_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="unreviewed")
-        new_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="unreviewed")
-        cur.execute("UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s", (new_claim_id, old_claim_id))
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id, new_review_status="unreviewed")
         _observation(cur, role_id, surface_form="Old thing", canonical_concept_id=concept_id)
 
         items = load_role_requirements(cur, role_id)
@@ -219,8 +246,7 @@ def test_superseded_concept_with_current_usable_successor_uses_claim_path(client
         role_id = _role(cur)
         concept_id = _concept(cur, "Reserving")
         old_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="preferred")
-        new_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="required")
-        cur.execute("UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s", (new_claim_id, old_claim_id))
+        new_claim_id = _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id, requirement_type="required")
         _observation(cur, role_id, surface_form="Reserving", canonical_concept_id=concept_id)
 
         items = load_role_requirements(cur, role_id)
@@ -335,7 +361,10 @@ def test_accepted_claims_used_alone_when_unreviewed_claims_also_exist(client):
 
     assert len(items) == 1
     assert items[0]["concept_id"] == accepted_concept_id
-    assert summary == {"accepted": 1, "unreviewed": 1, "rejected": 0, "complete": False}
+    assert summary == {
+        "accepted": 1, "unreviewed": 1, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": False, "complete": False,
+    }
 
 
 # --- review-summary helper --------------------------------------------------
@@ -349,7 +378,10 @@ def test_review_summary_counts_current_claims_by_status(client):
         _claim_requirement(cur, role_id, _concept(cur, "D"), review_status="rejected")
 
         summary = load_requirement_review_summary(cur, role_id)
-    assert summary == {"accepted": 2, "unreviewed": 1, "rejected": 1, "complete": False}
+    assert summary == {
+        "accepted": 2, "unreviewed": 1, "rejected": 1,
+        "unresolved_proposals": 0, "extraction_attempted": False, "complete": False,
+    }
 
 
 def test_review_summary_complete_when_no_current_claims_are_unreviewed(client):
@@ -369,7 +401,76 @@ def test_review_summary_vacuously_complete_for_a_role_with_no_claims(client):
     with db.db_cursor() as cur:
         role_id = _role(cur)
         summary = load_requirement_review_summary(cur, role_id)
-    assert summary == {"accepted": 0, "unreviewed": 0, "rejected": 0, "complete": True}
+    assert summary == {
+        "accepted": 0, "unreviewed": 0, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+    }
+
+
+def test_review_summary_is_not_complete_while_unresolved_vocabulary_proposals_remain(client):
+    """A surface form extraction could not resolve to any concept becomes a
+    concept_proposal, never a requirement_claim — so a role can have every
+    one of its claims accepted while still carrying pending, unresolved
+    proposals for the same document. Those requirements are just as
+    excluded from analysis as an unreviewed claim would be (they never
+    became a claim at all), so 'complete' must stay False."""
+    with db.db_cursor() as cur:
+        document_id, _ = db.create_document(cur, kind="job_posting", content_text="Requires Python and Solvency II.",
+                                             provenance_quality="original")
+        role_id = db.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
+        )
+        _claim_requirement(cur, role_id, _concept(cur, "Python"), review_status="accepted")
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+            "VALUES ('solvency ii', 1, %s, 'Solvency II', 'pending')",
+            (document_id,),
+        )
+        summary = load_requirement_review_summary(cur, role_id)
+    assert summary["accepted"] == 1
+    assert summary["unreviewed"] == 0
+    assert summary["unresolved_proposals"] == 1
+    assert summary["complete"] is False
+
+
+def test_resolved_or_unrelated_proposals_do_not_count_as_unresolved(client):
+    with db.db_cursor() as cur:
+        document_id, _ = db.create_document(cur, kind="job_posting", content_text="Requires Python.", provenance_quality="original")
+        other_document_id, _ = db.create_document(cur, kind="job_posting", content_text="A different posting.", provenance_quality="original")
+        role_id = db.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
+        )
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+            "VALUES ('resolved thing', 1, %s, 'x', 'resolved')",
+            (document_id,),
+        )
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+            "VALUES ('unrelated thing', 1, %s, 'y', 'pending')",
+            (other_document_id,),
+        )
+        summary = load_requirement_review_summary(cur, role_id)
+    assert summary["unresolved_proposals"] == 0
+    assert summary["complete"] is True
+
+
+def test_extraction_attempted_reflects_whether_a_requirement_extract_run_exists(client):
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        summary = load_requirement_review_summary(cur, role_id)
+        assert summary["extraction_attempted"] is False
+
+        vocabulary_version_id = get_or_create_current_vocabulary_version(cur)
+        cur.execute(
+            "INSERT INTO jobber.extraction_run (task, subject_type, role_instance_id, model, prompt_name, "
+            "prompt_version, vocabulary_version_id, started_at, finished_at, status) "
+            "VALUES ('requirement_extract', 'role_instance', %s, 'm', 'p', 'v', %s, now(), now(), 'ok')",
+            (role_id, vocabulary_version_id),
+        )
+        summary = load_requirement_review_summary(cur, role_id)
+    assert summary["extraction_attempted"] is True
+    assert summary["complete"] is True  # zero claims and zero proposals — attempted, but nothing pending either
 
 
 def test_review_summary_excludes_superseded_and_corrected_history(client):
@@ -380,13 +481,12 @@ def test_review_summary_excludes_superseded_and_corrected_history(client):
         role_id = _role(cur)
         concept_id = _concept(cur, "Python")
         old_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="accepted")
-        new_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="accepted")
-        cur.execute(
-            "UPDATE jobber.requirement_claim SET review_status = 'corrected', superseded_by = %s WHERE id = %s",
-            (new_claim_id, old_claim_id),
-        )
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id, old_review_status="corrected")
         summary = load_requirement_review_summary(cur, role_id)
-    assert summary == {"accepted": 1, "unreviewed": 0, "rejected": 0, "complete": True}
+    assert summary == {
+        "accepted": 1, "unreviewed": 0, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+    }
 
 
 def test_review_summary_bulk_handles_multiple_roles_and_empty_input(client):
@@ -431,11 +531,8 @@ def test_role_skills_with_fallback_excludes_superseded_history(client):
         role_id = _role(cur)
         concept_id = _concept(cur, "Python")
         old_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="accepted")
-        new_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="preferred", review_status="accepted")
-        cur.execute(
-            "UPDATE jobber.requirement_claim SET review_status = 'corrected', superseded_by = %s WHERE id = %s",
-            (new_claim_id, old_claim_id),
-        )
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id,
+                   requirement_type="preferred", old_review_status="corrected")
         skills = db.role_skills_with_fallback(cur, role_id)
     assert len(skills) == 1
     assert skills[0]["requirement_type"] == "preferred"
@@ -443,7 +540,9 @@ def test_role_skills_with_fallback_excludes_superseded_history(client):
 
 def test_role_skills_with_fallback_never_touched_when_observations_exist(client):
     """Unchanged precedence: a role with real role_skill_observation rows
-    uses those alone, regardless of what requirement_claim holds."""
+    uses those alone (never merged with claim-sourced skills), regardless of
+    what requirement_claim holds — an accepted claim for an unrelated
+    concept does not get added alongside the observations."""
     with db.db_cursor() as cur:
         role_id = _role(cur)
         obs_concept_id = _concept(cur, "Pricing")
@@ -452,3 +551,24 @@ def test_role_skills_with_fallback_never_touched_when_observations_exist(client)
 
         skills = db.role_skills_with_fallback(cur, role_id)
     assert [s["name"] for s in skills] == ["Pricing"]
+
+
+def test_role_skills_with_fallback_still_applies_curator_veto_when_observations_exist(client):
+    """The observation-preferred branch is not exempt from curator authority:
+    a concept a human has explicitly rejected (or corrected away) as a
+    requirement for this role must not keep showing as a "skill" chip just
+    because a legacy role_skill_observation also mentions it — display must
+    not contradict what analysis already excludes."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        rejected_concept_id = _concept(cur, "Python")
+        _observation(cur, role_id, surface_form="Python", canonical_concept_id=rejected_concept_id, requirement_type="required")
+        kept_concept_id = _concept(cur, "SQL")
+        _observation(cur, role_id, surface_form="SQL", canonical_concept_id=kept_concept_id, requirement_type="preferred")
+        _claim_requirement(cur, role_id, rejected_concept_id, review_status="rejected")
+
+        skills = db.role_skills_with_fallback(cur, role_id)
+    resolved_ids = {s["resolved_concept_id"] for s in skills}
+    assert rejected_concept_id not in resolved_ids
+    assert kept_concept_id in resolved_ids
+    assert len(skills) == 1

@@ -130,6 +130,23 @@ def load_role_requirements(cur, role_instance_id: str) -> list[dict]:
     return load_role_requirements_bulk(cur, [role_instance_id]).get(str(role_instance_id), [])
 
 
+def vetoed_concept_ids(cur, role_instance_id: str) -> set[str]:
+    """Concepts a curator has actively rejected or corrected away for this
+    role (point 2's veto condition) — real curator authority that must
+    prevent a legacy `role_skill_observation` for the same concept from
+    reappearing wherever it might otherwise resurface, not only in this
+    module's own fallback branch. `db.role_skills_with_fallback` uses this
+    too: its observation-preferred branch would otherwise keep showing a
+    concept as a "skill" even after a curator explicitly rejected it as a
+    requirement."""
+    cur.execute(
+        "SELECT DISTINCT concept_id FROM jobber.requirement_claim "
+        "WHERE role_instance_id = %s AND review_status IN ('rejected', 'corrected')",
+        (role_instance_id,),
+    )
+    return {str(r["concept_id"]) for r in cur.fetchall()}
+
+
 # --- Review-summary helper --------------------------------------------------
 #
 # The authoritative loader above deliberately *excludes* unreviewed/rejected
@@ -140,18 +157,36 @@ def load_role_requirements(cur, role_instance_id: str) -> list[dict]:
 # analysis) needs to know *separately* whether a role's requirement review is
 # still in progress, so it never presents a partially-reviewed requirement
 # set as final.
+#
+# "Complete" must also account for extraction's *other* output: a surface
+# form extraction could not resolve to any concept becomes a
+# jobber.concept_proposal (never a requirement_claim at all — see
+# extraction.py), keyed by the source document rather than the role. A role
+# can have every one of its requirement_claim rows accepted while still
+# carrying pending concept_proposal rows for the same document — those
+# requirements are just as excluded from analysis (they never became a claim
+# to begin with), so `complete` must not be true while any exist.
 
 _REVIEW_STATUSES = ("accepted", "unreviewed", "rejected")
 
 
 def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, dict]:
     """Per role_instance_id: counts of *current* (superseded_by IS NULL)
-    requirement_claim rows by review_status, plus `complete` (True iff there
-    are zero current unreviewed claims — vacuously true for a role with no
-    claims at all, e.g. one relying entirely on the legacy observation
-    fallback). Superseded/corrected history is deliberately excluded from
-    every count here — it is neither pending nor a current decision."""
-    summary = {str(rid): {status: 0 for status in _REVIEW_STATUSES} for rid in role_ids}
+    requirement_claim rows by review_status; `unresolved_proposals` (pending
+    jobber.concept_proposal rows tied to the role's own source document —
+    extraction output that never became a claim at all); `extraction_attempted`
+    (whether a requirement_extract run has ever been recorded for this role,
+    so a consumer can distinguish "never extracted" from "reviewed and
+    genuinely complete" even though both currently have zero current claims);
+    and `complete` (True iff there are zero current unreviewed claims AND
+    zero unresolved proposals — vacuously true for a role with neither, e.g.
+    one relying entirely on the legacy observation fallback). Superseded/
+    corrected history is deliberately excluded from every claim count here —
+    it is neither pending nor a current decision."""
+    summary = {
+        str(rid): {status: 0 for status in _REVIEW_STATUSES} | {"unresolved_proposals": 0, "extraction_attempted": False}
+        for rid in role_ids
+    }
     if not role_ids:
         return summary
     cur.execute(
@@ -167,8 +202,32 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
         role_id = str(row["role_instance_id"])
         if row["review_status"] in summary[role_id]:
             summary[role_id][row["review_status"]] += row["n"]
+
+    cur.execute(
+        """
+        SELECT ri.id AS role_instance_id, COUNT(cp.id) AS n
+        FROM jobber.role_instance ri
+        JOIN jobber.concept_proposal cp ON cp.document_id = ri.document_id AND cp.status = 'pending'
+        WHERE ri.id = ANY(%s::uuid[])
+        GROUP BY ri.id
+        """,
+        (role_ids,),
+    )
+    for row in cur.fetchall():
+        summary[str(row["role_instance_id"])]["unresolved_proposals"] = row["n"]
+
+    cur.execute(
+        """
+        SELECT DISTINCT role_instance_id FROM jobber.extraction_run
+        WHERE task = 'requirement_extract' AND role_instance_id = ANY(%s::uuid[])
+        """,
+        (role_ids,),
+    )
+    for row in cur.fetchall():
+        summary[str(row["role_instance_id"])]["extraction_attempted"] = True
+
     for entry in summary.values():
-        entry["complete"] = entry["unreviewed"] == 0
+        entry["complete"] = entry["unreviewed"] == 0 and entry["unresolved_proposals"] == 0
     return summary
 
 

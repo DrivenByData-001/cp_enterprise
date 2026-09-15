@@ -6,6 +6,8 @@ default (current-only) requirement listing. `app.role_requirements`/
 and test_requirement_claims.py respectively — this file is the HTTP-route
 layer that puts a human curator in the loop."""
 
+import uuid
+
 from app import db
 from app.concept_linking import get_or_create_current_vocabulary_version
 
@@ -28,7 +30,18 @@ def _role_with_document(cur, body: str = "Requires strong Python skills.", prove
 
 
 def _claim(cur, role_id, concept_id, *, document_id=None, evidence_span=None, basis="stated",
-           requirement_type="required", review_status="unreviewed", extraction_run_id=None) -> str:
+           requirement_type="required", review_status="unreviewed", extraction_run_id=None, claim_id=None) -> str:
+    if claim_id is not None:
+        cur.execute(
+            """
+            INSERT INTO jobber.requirement_claim
+                (id, role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span,
+                 review_status, extraction_run_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (claim_id, role_id, concept_id, requirement_type, basis, document_id, evidence_span, review_status, extraction_run_id),
+        )
+        return str(cur.fetchone()["id"])
     cur.execute(
         """
         INSERT INTO jobber.requirement_claim
@@ -93,7 +106,7 @@ def test_accept_only_valid_from_unreviewed(client):
     assert resp.status_code == 409
 
 
-def test_reject_only_valid_from_unreviewed(client):
+def test_reject_only_valid_from_unreviewed_or_accepted(client):
     with db.db_cursor() as cur:
         role_id, document_id = _role_with_document(cur)
         concept_id = _active_concept(cur, "Python")
@@ -102,6 +115,42 @@ def test_reject_only_valid_from_unreviewed(client):
 
     resp = client.post(f"/api/role-instances/{role_id}/requirements/{claim_id}/reject")
     assert resp.status_code == 409
+
+
+def test_reject_un_accepts_an_accepted_claim_via_supersession_preserving_audit_trail(client):
+    """A review mistake must be recoverable even after Accept — Edit alone
+    cannot express 'this isn't a requirement at all'. Un-accepting never
+    mutates the accepted decision in place: the original accepted row is
+    preserved as 'corrected' history (not deleted, not silently flipped),
+    and a *new* rejected row becomes current, exactly as an /edit correction
+    would produce."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _role_with_document(cur)
+        concept_id = _active_concept(cur, "Python")
+        accepted_claim_id = _claim(cur, role_id, concept_id, document_id=document_id,
+                                    evidence_span="strong Python skills", review_status="accepted")
+
+    resp = client.post(f"/api/role-instances/{role_id}/requirements/{accepted_claim_id}/reject")
+    assert resp.status_code == 200
+    new = resp.json()
+    assert new["id"] != accepted_claim_id
+    assert new["review_status"] == "rejected"
+    assert new["concept_id"] == concept_id
+    assert new["evidence_span"] == "strong Python skills"  # carried over from the accepted claim, not lost
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT review_status, superseded_by FROM jobber.requirement_claim WHERE id = %s", (accepted_claim_id,))
+        old = cur.fetchone()
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        total = cur.fetchone()["n"]
+    assert old["review_status"] == "corrected"  # preserved as history, not deleted or flipped in place
+    assert str(old["superseded_by"]) == new["id"]
+    assert total == 2
+
+    # And the newly-current rejected claim can itself be reopened, same as any other.
+    reopen_resp = client.post(f"/api/role-instances/{role_id}/requirements/{new['id']}/reopen")
+    assert reopen_resp.status_code == 200
+    assert reopen_resp.json()["review_status"] == "unreviewed"
 
 
 # --- Reject / Reopen ---------------------------------------------------------
@@ -223,10 +272,17 @@ def test_a_superseded_claim_cannot_be_acted_on_directly(client):
         role_id, document_id = _role_with_document(cur)
         concept_id = _active_concept(cur, "Python")
         old_claim_id = _claim(cur, role_id, concept_id, document_id=document_id, evidence_span="strong Python skills")
-        new_claim_id = _claim(cur, role_id, concept_id, document_id=document_id,
-                               evidence_span="strong Python skills", review_status="accepted")
+        # Migration 0020's partial unique index allows at most one *current*
+        # claim per (role, concept), so the old row must stop being current
+        # before the replacement (same concept) is inserted — the deferred
+        # superseded_by FK lets the old row point at the new row's
+        # pre-generated id before that row exists, same as
+        # routes/role_instances.py::_supersede_with_new_claim.
+        new_claim_id = str(uuid.uuid4())
         cur.execute("UPDATE jobber.requirement_claim SET review_status = 'corrected', superseded_by = %s WHERE id = %s",
                     (new_claim_id, old_claim_id))
+        _claim(cur, role_id, concept_id, document_id=document_id, evidence_span="strong Python skills",
+               review_status="accepted", claim_id=new_claim_id)
 
     for action in ("accept", "reject", "reopen", "edit"):
         payload = {} if action != "edit" else {"requirement_type": "preferred"}
@@ -273,6 +329,82 @@ def test_remapping_to_a_nonexistent_concept_is_rejected(client):
         json={"concept_id": "00000000-0000-0000-0000-000000000000"},
     )
     assert resp.status_code == 400
+
+
+def test_remapping_onto_a_concept_this_role_already_has_a_current_claim_for_is_rejected(client):
+    """Two current claims for the same (role, concept) would double-count in
+    capability_engine.derive_role_fit and break the rerun-dedup code's
+    at-most-one-current-claim assumption — an Edit that would create that
+    situation is rejected with a clear 409, not left to a raw database
+    integrity error."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _role_with_document(cur)
+        python_id = _active_concept(cur, "Python")
+        sql_id = _active_concept(cur, "SQL")
+        _claim(cur, role_id, sql_id, document_id=document_id, evidence_span="strong Python skills", review_status="accepted")
+        python_claim_id = _claim(cur, role_id, python_id, document_id=document_id, evidence_span="strong Python skills")
+
+    resp = client.post(f"/api/role-instances/{role_id}/requirements/{python_claim_id}/edit", json={"concept_id": sql_id})
+    assert resp.status_code == 409
+    with db.db_cursor() as cur:
+        cur.execute("SELECT review_status, superseded_by FROM jobber.requirement_claim WHERE id = %s", (python_claim_id,))
+        row = cur.fetchone()
+    assert row["review_status"] == "unreviewed"  # untouched by the rejected edit
+    assert row["superseded_by"] is None
+
+
+def test_editing_without_remapping_away_from_the_same_concept_is_unaffected_by_the_duplicate_check(client):
+    """The duplicate-concept check must not trip over a claim's own current
+    row when the concept isn't actually changing (the common case: editing
+    type/basis/span/importance without remapping)."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _role_with_document(cur)
+        concept_id = _active_concept(cur, "Python")
+        claim_id = _claim(cur, role_id, concept_id, document_id=document_id, evidence_span="strong Python skills")
+
+    resp = client.post(
+        f"/api/role-instances/{role_id}/requirements/{claim_id}/edit",
+        json={"concept_id": concept_id, "requirement_type": "preferred"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["requirement_type"] == "preferred"
+
+
+def test_edit_with_a_field_identical_patch_does_not_manufacture_a_replacement(client):
+    """The frontend collapses a no-op edit into a plain Accept, but the
+    server must enforce this too — a direct API call with a patch matching
+    the claim's current values exactly must never create a pointless
+    replacement/corrected pair."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _role_with_document(cur, "Requires strong Python skills.")
+        concept_id = _active_concept(cur, "Python")
+        claim_id = _claim(cur, role_id, concept_id, document_id=document_id, evidence_span="strong Python skills")
+
+    resp = client.post(
+        f"/api/role-instances/{role_id}/requirements/{claim_id}/edit",
+        json={"concept_id": concept_id, "requirement_type": "required", "basis": "stated",
+              "evidence_span": "strong Python skills"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == claim_id  # same row — no replacement was created
+    assert body["review_status"] == "accepted"
+
+    with db.db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1
+
+    # Editing an already-accepted claim with an identical patch is a true no-op.
+    resp2 = client.post(
+        f"/api/role-instances/{role_id}/requirements/{claim_id}/edit",
+        json={"concept_id": concept_id, "requirement_type": "required", "basis": "stated",
+              "evidence_span": "strong Python skills"},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["id"] == claim_id
+    with db.db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1
 
 
 # --- Span/provenance server-side enforcement --------------------------------
@@ -402,7 +534,10 @@ def test_default_listing_excludes_superseded_history_but_history_flag_shows_it(c
     default = client.get(f"/api/role-instances/{role_id}/requirements").json()
     default_ids = {item["id"] for item in default["items"]}
     assert default_ids == {new_id}  # the superseded original is not a duplicate current card
-    assert default["review_summary"] == {"accepted": 1, "unreviewed": 0, "rejected": 0, "complete": True}
+    assert default["review_summary"] == {
+        "accepted": 1, "unreviewed": 0, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+    }
 
     history = client.get(f"/api/role-instances/{role_id}/requirements", params={"history": "true"}).json()
     history_ids = {item["id"] for item in history["items"]}
@@ -458,6 +593,22 @@ def test_add_requirement_only_accepts_an_active_concept(client):
         json={"concept_id": deprecated_id, "requirement_type": "required", "evidence_span": "strong Python skills"},
     )
     assert resp.status_code == 400
+
+
+def test_add_requirement_rejects_a_concept_this_role_already_has_a_current_claim_for(client):
+    with db.db_cursor() as cur:
+        role_id, document_id = _role_with_document(cur, "Requires strong Python skills.")
+        concept_id = _active_concept(cur, "Python")
+        _claim(cur, role_id, concept_id, document_id=document_id, evidence_span="strong Python skills", review_status="accepted")
+
+    resp = client.post(
+        f"/api/role-instances/{role_id}/requirements",
+        json={"concept_id": concept_id, "requirement_type": "required", "evidence_span": "strong Python skills"},
+    )
+    assert resp.status_code == 409
+    with db.db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1  # the duplicate was never inserted
 
 
 def test_add_requirement_rejects_a_non_source_backed_basis(client):

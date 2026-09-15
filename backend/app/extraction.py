@@ -12,6 +12,7 @@ review endpoints' mapping-run bookkeeping.
 """
 
 import json
+import uuid
 from datetime import datetime, timezone
 
 from .ai import AIConfigError, AITaskError, ai_model_name, load_prompt, prompt_version, run_json_task
@@ -261,6 +262,14 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                     # for this role — extraction running again never
                     # revisits that decision.
                     continue
+                # Deliberately excludes `importance`: it isn't part of what a
+                # requirement *is* the way requirement_type/basis/evidence_span
+                # are, and importance plays no role in capability_engine's fit
+                # calculation today. A rerun that only reproduces a fresher
+                # importance guess for an already-proposed (role, concept)
+                # interpretation is treated as the same proposal, not a
+                # reason to churn the review queue — extraction is not
+                # intended to "refresh" a stored importance in place.
                 same_interpretation = (
                     existing["requirement_type"] == requirement_type
                     and existing["basis"] == basis
@@ -276,20 +285,27 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                 # 'unreviewed' — no human reviewed it, so it must not gain
                 # the curator veto's authority (role_requirements.py §2)
                 # merely by being superseded through proposal churn.
-                cur.execute(
-                    """
-                    INSERT INTO jobber.requirement_claim
-                        (role_instance_id, concept_id, requirement_type, importance, basis,
-                         document_id, evidence_span, extraction_run_id, review_status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
-                    RETURNING id
-                    """,
-                    (role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
-                )
-                new_claim_id = cur.fetchone()["id"]
+                #
+                # The new row's id is generated here so the old row's
+                # supersede-update (freeing the (role, concept) slot) can run
+                # *before* the new row's insert reclaims it — inserting first
+                # would momentarily leave two current rows for the same
+                # (role, concept) and trip migration 0020's partial unique
+                # index (see routes/role_instances.py::_supersede_with_new_claim,
+                # the same pattern used there).
+                new_claim_id = str(uuid.uuid4())
                 cur.execute(
                     "UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s",
                     (new_claim_id, existing["id"]),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO jobber.requirement_claim
+                        (id, role_instance_id, concept_id, requirement_type, importance, basis,
+                         document_id, evidence_span, extraction_run_id, review_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+                    """,
+                    (new_claim_id, role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
                 )
                 claims_created += 1
                 claims_superseded += 1

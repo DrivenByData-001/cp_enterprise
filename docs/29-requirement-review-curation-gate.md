@@ -28,23 +28,52 @@ role with zero claims would — it is not treated as "claimed but empty."
 `db.role_skills_with_fallback` — Role Detail's own consumer of
 `requirement_claim`, with the *opposite* source precedence (prefers
 `role_skill_observation`, falls back to `requirement_claim` only when that
-is completely empty) — is held to the same accepted-only, current-only
-rule within its own `requirement_claim` branch. This matters more than it
-might look: a role captured through source-aware ingest always has an
-empty `role_skill_observation` (skills=[] at ingest time), so this branch
-is the *only* skills source such a role has. Before this build, a freshly
-extracted, never-reviewed posting could show its unreviewed AI proposals as
-if they were the role's established "skills" on the very page that now also
-carries the "Requirements review pending" indicator saying otherwise.
+is completely empty) — respects the same curation-gate authority in both
+of its branches, though the rule takes a different shape in each:
+
+- Its `requirement_claim`-fallback branch (reached only when
+  `role_skill_observation` is completely empty) applies the identical
+  accepted-only, current-only filter §1 describes. This matters more than
+  it might look: a role captured through source-aware ingest always has an
+  empty `role_skill_observation` (skills=[] at ingest time), so this branch
+  is the *only* skills source such a role has. Before this build, a freshly
+  extracted, never-reviewed posting could show its unreviewed AI proposals
+  as if they were the role's established "skills" on the very page that now
+  also carries the "Requirements review pending" indicator saying
+  otherwise.
+- Its `role_skill_observation`-preferred branch (the common case for older,
+  legacy-imported roles) does *not* switch to requiring accepted claims —
+  observations remain the display source whenever any exist, unchanged.
+  But it now also applies `role_requirements.vetoed_concept_ids` (the same
+  `review_status IN ('rejected', 'corrected')` condition §5 describes): a
+  concept a curator has explicitly reviewed and rejected as a requirement
+  for this role is excluded from the observation list too, so display can
+  no longer contradict analysis (an old role whose "Python" requirement a
+  human rejected would otherwise keep showing a "Python" skill chip
+  forever, since that branch never consulted requirement_claim at all
+  before this fix).
 
 ## 2. Visibility without authority: the review-summary helper
 
 Excluding unreviewed claims from the authoritative set must not make
 pending review invisible. `role_requirements.load_requirement_review_summary(_bulk)`
 returns, per role, current-claim counts by status (`accepted`,
-`unreviewed`, `rejected`) and a `complete` flag (`unreviewed == 0` —
-vacuously true for a role with no claims at all). Every UI surface that
-could otherwise imply "this is the final requirement set" reads it:
+`unreviewed`, `rejected`); `unresolved_proposals` (pending
+`jobber.concept_proposal` rows tied to the role's own source document — a
+surface form extraction couldn't resolve to any concept becomes one of
+these, *never* a `requirement_claim` at all, so it would otherwise be
+invisible to this summary entirely); `extraction_attempted` (whether a
+`requirement_extract` run has ever been recorded for this role, so a
+consumer can tell "never extracted" apart from "reviewed and genuinely
+complete" even though both currently have zero current claims); and a
+`complete` flag — `unreviewed == 0 AND unresolved_proposals == 0`, vacuously
+true for a role with neither. A role can have every one of its claims
+accepted while still carrying pending, unresolved proposals for the same
+document — those requirements are just as excluded from analysis as an
+unreviewed claim would be, so `complete` must not be true while any remain;
+an earlier version of this build defined `complete` from the claim counts
+alone and missed this. Every UI surface that could otherwise imply "this is
+the final requirement set" reads it:
 
 - `GET /api/role-instances/{id}/requirements` returns it alongside the
   claim list, driving the Review requirements page's status summary.
@@ -77,10 +106,18 @@ act on its current replacement instead):
 - `POST .../{claim_id}/accept` — unreviewed → accepted, in place. No
   replacement row; the original claim and its `extraction_run_id` are
   untouched.
-- `POST .../{claim_id}/reject` — unreviewed → rejected.
+- `POST .../{claim_id}/reject` — unreviewed → rejected, in place; **or**
+  accepted → rejected ("un-accepting"). A review mistake must be
+  recoverable even after Accept — Edit alone cannot express "this isn't a
+  requirement at all." Un-accepting never mutates the accepted decision in
+  place: it goes through the same non-destructive supersession `edit` uses
+  (below), producing a *new* current `rejected` row while the original
+  accepted claim is preserved as `corrected` history, exactly as any other
+  correction would.
 - `POST .../{claim_id}/reopen` — rejected → unreviewed (clears
   `reviewed_at`). Recovers an accidental Reject with no database
-  intervention.
+  intervention, regardless of whether that rejected row came from a plain
+  Reject or from un-accepting.
 - `POST .../{claim_id}/edit` — the correction path, valid from either
   `unreviewed` ("Edit & accept" in the UI) or `accepted` ("Edit", so a
   review mistake is always recoverable later, not just at first review).
@@ -94,9 +131,49 @@ act on its current replacement instead):
   row's id. The edit accepts a partial patch (concept/requirement_type/
   basis/importance/evidence_span, each optional — an omitted field keeps
   the original claim's value, matching `RoleMetadataUpdate`'s
-  `exclude_unset` convention); a field-for-field-identical "edit" is
-  treated as a plain Accept instead of manufacturing a no-op correction.
+  `exclude_unset` convention). A field-for-field-identical patch is
+  rejected as a no-op **server-side** (not only by the frontend, which
+  independently collapses it into a plain Accept before ever calling
+  `/edit`): it behaves as a plain Accept (or a true no-op, if already
+  accepted) rather than manufacturing a pointless replacement/corrected
+  pair, so a direct API call bypassing the frontend gets the same
+  guarantee. Remapping onto a concept this role already has a separate
+  *current* claim for — whether via `/edit` or `POST .../requirements`
+  below — is rejected with a 409 rather than creating a second current
+  claim for the same concept (see §3a).
 - `POST .../requirements` (no claim id) — "Add requirement": see §7.
+
+### 3a. At most one current claim per (role, concept)
+
+Two current claims for the same (role, concept) would double-count in
+`capability_engine.derive_role_fit` (which iterates every row the
+canonical loader returns) and break the rerun-dedup code's assumption
+(§6) that at most one current claim exists per (role, concept) to check
+against. Migration 0020 adds a partial unique index —
+`UNIQUE (role_instance_id, concept_id) WHERE superseded_by IS NULL` — so
+this is a database guarantee, not just an application-level convention
+that a route handler could forget to check; `/edit` and
+`POST .../requirements` also check it themselves first, so the user sees a
+clear 409 ("this role already has a current requirement for that concept")
+rather than a raw integrity error.
+
+That index creates an ordering puzzle for every non-destructive correction
+(`/edit`, and un-accepting via `/reject`): the old row must stop being
+current (its slot freed) *before* the new row can claim that same (role,
+concept) slot — but a same-concept correction (the common case: editing
+type/basis/span/importance without remapping) would otherwise momentarily
+need *both* rows current in the same transaction. Reversing the order —
+freeing the old row first — runs into the opposite problem: `superseded_by`
+is a foreign key pointing at the new row, which doesn't exist yet.
+Migration 0020 resolves this by also marking that foreign key
+`DEFERRABLE INITIALLY DEFERRED` (Postgres has no equivalent deferral for
+partial unique indexes, so the FK is what has to give): application code
+(`routes/role_instances.py::_supersede_with_new_claim`, and the equivalent
+in `extraction.py`'s rerun path) generates the new row's id in Python
+*first*, updates the old row's `superseded_by` to that not-yet-existing id,
+then inserts the new row with that id — valid by commit, when the deferred
+FK check actually runs, even though the new row doesn't exist yet at the
+moment the old row's update executes.
 
 Concept remapping only accepts an **active** vocabulary concept (a
 deprecated or nonexistent id is a 400); the frontend's `ConceptPicker`
@@ -159,8 +236,12 @@ for an existing *current* claim on the same (role, concept):
   concept's requirement for this role — the new proposal is dropped
   entirely; extraction never revisits a human decision.
 - If it is `unreviewed` and the new proposal is identical
-  (`requirement_type`, `basis`, `evidence_span` all match) — no duplicate
-  is inserted (`claims_deduplicated`).
+  (`requirement_type`, `basis`, `evidence_span` all match — deliberately
+  *not* `importance`, which isn't part of what a requirement *is* the way
+  those three are, and plays no role in `capability_engine`'s fit
+  calculation; a rerun that only reproduces a fresher importance guess is
+  the same proposal, not a reason to churn the review queue) — no
+  duplicate is inserted (`claims_deduplicated`).
 - If it is `unreviewed` and the new proposal genuinely differs — the old
   proposal is superseded (`superseded_by` set, `review_status` stays
   `unreviewed` per §5) and the new one becomes current
@@ -210,11 +291,16 @@ in exactly two database statements, unchanged; see
 (849 cold queries against a 1,000-role/200-concept corpus, well under its
 3,000-query budget; 2 warm queries).
 
-## 10. No schema migration
+## 10. Schema migration
 
 `requirement_claim` already had `review_status` (including `corrected`),
-`superseded_by` and a nullable `extraction_run_id` — this build is a
-semantics and application-code change only.
+`superseded_by` and a nullable `extraction_run_id`, so the initial build
+was a semantics and application-code change only. A code-review pass
+against that build found a genuine gap needing one: nothing stopped two
+current claims from coexisting for the same (role, concept) (§3a).
+Migration 0020 adds the partial unique index that closes it, plus makes
+the `superseded_by` foreign key deferrable to keep non-destructive
+correction working under that new constraint.
 
 ## 11. Production-data impact
 

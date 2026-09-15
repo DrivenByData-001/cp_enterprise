@@ -130,7 +130,10 @@ def test_2026_style_role_renders_with_its_real_evidence_via_detail_endpoint(clie
     # — and the review-pending indicator must say so.
     before = client.get(f"/api/roles/{role_id}").json()
     assert before["skills"] == []
-    assert before["requirement_review"] == {"accepted": 0, "unreviewed": len(_REQUIREMENTS), "rejected": 0, "complete": False}
+    assert before["requirement_review"] == {
+        "accepted": 0, "unreviewed": len(_REQUIREMENTS), "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": True, "complete": False,
+    }
 
     claims = client.get(f"/api/role-instances/{role_id}/requirements").json()["items"]
     assert len(claims) == len(_REQUIREMENTS)
@@ -144,7 +147,10 @@ def test_2026_style_role_renders_with_its_real_evidence_via_detail_endpoint(clie
 
     assert role["title"] == "Senior Actuary"
     assert role["node_type"] == "posting"
-    assert role["requirement_review"] == {"accepted": len(_REQUIREMENTS), "unreviewed": 0, "rejected": 0, "complete": True}
+    assert role["requirement_review"] == {
+        "accepted": len(_REQUIREMENTS), "unreviewed": 0, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": True, "complete": True,
+    }
 
     # Skills: none in role_skill_observation for this role — must fall back
     # to accepted requirement_claim evidence rather than silently rendering

@@ -287,7 +287,10 @@ function RequirementCard({
             </>
           )}
           {claim.review_status === 'accepted' && !editing && (
-            <button disabled={busy} onClick={startEdit}>Edit</button>
+            <>
+              <button disabled={busy} onClick={startEdit}>Edit</button>
+              <button disabled={busy} onClick={() => run(() => api.rejectRequirement(roleId, claim.id))}>Reject</button>
+            </>
           )}
           {claim.review_status === 'rejected' && (
             <button disabled={busy} onClick={() => run(() => api.reopenRequirement(roleId, claim.id))}>Reopen for review</button>
@@ -441,28 +444,43 @@ export default function RoleRequirements() {
   const [extracting, setExtracting] = useState(false)
   const [lastRun, setLastRun] = useState<ExtractionSummary | null>(null)
   const [addingRequirement, setAddingRequirement] = useState(false)
+  // Unlike accepted/unreviewed/rejected counts, this can't be derived from
+  // `claims` — a surface form extraction couldn't resolve to any concept
+  // becomes a concept_proposal, never a requirement_claim at all, so it
+  // only ever comes from the server's review_summary (refreshed on load and
+  // after every extraction run, the only actions that can change it).
+  const [unresolvedProposals, setUnresolvedProposals] = useState(0)
 
-  const reload = () => api.listRequirements(roleId).then(res => setClaims(res.items))
+  const reload = () => api.listRequirements(roleId).then(res => {
+    setClaims(res.items)
+    setUnresolvedProposals(res.review_summary.unresolved_proposals)
+  })
 
   useEffect(() => {
     let current = true
     setLoading(true); setClaims([]); setError(null); setLastRun(null)
-    api.listRequirements(roleId).then(res => { if (current) setClaims(res.items) })
+    api.listRequirements(roleId).then(res => {
+      if (!current) return
+      setClaims(res.items)
+      setUnresolvedProposals(res.review_summary.unresolved_proposals)
+    })
       .catch(e => { if (current) setError(String(e)) })
       .finally(() => { if (current) setLoading(false) })
     return () => { current = false }
   }, [roleId, retry])
 
-  // The status summary is derived from the same current-claims list the
-  // review cards render, rather than tracked separately — it can never drift
-  // out of sync with what's on screen, and every action already updates
-  // `claims` locally.
+  // The claim-status counts are derived from the same current-claims list
+  // the review cards render, rather than tracked separately — they can
+  // never drift out of sync with what's on screen, and every action already
+  // updates `claims` locally. `complete` also requires zero unresolved
+  // vocabulary proposals — those are just as excluded from analysis as an
+  // unreviewed claim, even though they never became a claim to review here.
   const summary = useMemo(() => {
     const accepted = claims.filter(c => c.review_status === 'accepted').length
     const unreviewed = claims.filter(c => c.review_status === 'unreviewed').length
     const rejected = claims.filter(c => c.review_status === 'rejected').length
-    return { accepted, unreviewed, rejected, complete: unreviewed === 0 }
-  }, [claims])
+    return { accepted, unreviewed, rejected, complete: unreviewed === 0 && unresolvedProposals === 0 }
+  }, [claims, unresolvedProposals])
 
   const runExtraction = async () => {
     setExtracting(true)
@@ -555,10 +573,16 @@ export default function RoleRequirements() {
       </div>
 
       <p style={{ marginTop: 16 }}>{summary.unreviewed} requirement(s) still need review.</p>
+      {unresolvedProposals > 0 && (
+        <p className="secondary">
+          {unresolvedProposals} extracted term{unresolvedProposals === 1 ? '' : 's'} could not be matched to the vocabulary and{' '}
+          {unresolvedProposals === 1 ? 'is' : 'are'} excluded here too. <Link to="/vocabulary">Review in Vocabulary</Link>.
+        </p>
+      )}
       {!summary.complete && (
         <p role="alert" style={{ color: 'var(--warning)' }}>
-          Requirement review is incomplete — {summary.unreviewed} pending suggestion{summary.unreviewed === 1 ? '' : 's'} excluded from
-          comparison and analysis until reviewed.
+          Requirement review is incomplete — {summary.unreviewed + unresolvedProposals} pending item{summary.unreviewed + unresolvedProposals === 1 ? '' : 's'} excluded
+          from comparison and analysis until reviewed.
         </p>
       )}
       <Link to={`/comparison/${roleId}`}>

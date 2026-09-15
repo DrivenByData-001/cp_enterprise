@@ -118,7 +118,7 @@ describe('Requirement review', () => {
     document_id: null, document_title: null, document_provenance: null } as Awaited<ReturnType<typeof api.listRequirements>>['items'][number]
 
   it('shows failed acceptance and allows retry without losing the claim', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, complete: false } })
     vi.mocked(api.acceptRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ ...claim, review_status: 'accepted' })
     render(<MemoryRouter initialEntries={['/role-instances/role/requirements']}><Routes><Route path="/role-instances/:id/requirements" element={<RoleRequirements />} /></Routes></MemoryRouter>)
     fireEvent.click(await screen.findByText('Accept'))

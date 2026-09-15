@@ -509,7 +509,18 @@ def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
     prevent, right on the page carrying the "Requirements review pending"
     indicator that says otherwise. Superseded/corrected history is excluded
     the same way the Requirements review list excludes it, so a correction
-    never shows as a duplicate skill alongside its replacement."""
+    never shows as a duplicate skill alongside its replacement.
+
+    The role_skill_observation branch also respects curator authority, even
+    though it is the *preferred* branch and does not otherwise consult
+    requirement_claim at all: a concept the curator has explicitly rejected
+    or corrected away via a claim on this same role (`role_requirements.
+    vetoed_concept_ids` — the same veto `role_requirements.py`'s analytical
+    fallback applies) is excluded here too. Without this, an old
+    role_skill_observation-shaped role could keep showing "Python" as a
+    skill chip after a human explicitly reviewed and rejected Python as a
+    requirement for that role — display would then contradict analysis,
+    which already excludes it."""
     cur.execute(
         "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
         "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
@@ -520,7 +531,13 @@ def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
         for s in cur.fetchall()
     ]
     if skills:
-        return skills
+        # Lazy import: same reasoning as concept_linking/role_requirements
+        # elsewhere in this module — keeps db.py free of a module-load-time
+        # dependency on role_requirements.py.
+        from .role_requirements import vetoed_concept_ids
+
+        vetoed = vetoed_concept_ids(cur, role_instance_id)
+        return [s for s in skills if s["resolved_concept_id"] not in vetoed]
 
     cur.execute(
         """

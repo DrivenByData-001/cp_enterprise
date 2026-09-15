@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import RoleRequirements from './RoleRequirements'
-import { api, type Concept, type RequirementClaim } from '../lib/api'
+import { api, type Concept, type RequirementClaim, type RequirementReviewSummary } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: {
   listRequirements: vi.fn(), extractRequirements: vi.fn(), acceptRequirement: vi.fn(),
@@ -22,6 +22,10 @@ function claim(overrides: Partial<RequirementClaim> = {}): RequirementClaim {
   }
 }
 
+function reviewSummary(overrides: Partial<RequirementReviewSummary> = {}): RequirementReviewSummary {
+  return { accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, complete: true, ...overrides }
+}
+
 function renderPage(roleId = 'role-1') {
   return render(
     <MemoryRouter initialEntries={[`/role-instances/${roleId}/requirements`]}>
@@ -32,7 +36,7 @@ function renderPage(roleId = 'role-1') {
 
 describe('unreviewed requirement row', () => {
   it('offers Accept, Edit & accept and Reject, and requests the current list without history', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     renderPage('role-1')
     await screen.findByText('Python')
     expect(screen.getByText('Accept')).toBeTruthy()
@@ -42,7 +46,7 @@ describe('unreviewed requirement row', () => {
   })
 
   it('accept and reject update the status summary counts', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     vi.mocked(api.acceptRequirement).mockResolvedValue(claim({ review_status: 'accepted' }))
     renderPage()
     await screen.findByText('Python')
@@ -57,17 +61,26 @@ describe('unreviewed requirement row', () => {
 })
 
 describe('accepted and rejected rows', () => {
-  it('an accepted row offers Edit instead of Accept/Reject', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: { accepted: 1, unreviewed: 0, rejected: 0, complete: true } })
+  it('an accepted row offers Edit and Reject, but not Accept', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: reviewSummary({ accepted: 1, unreviewed: 0, rejected: 0, complete: true }) })
     renderPage()
     await screen.findByText('Python')
     expect(screen.getByText('Edit')).toBeTruthy()
+    expect(screen.getByText('Reject')).toBeTruthy()
     expect(screen.queryByText('Accept')).toBeNull()
-    expect(screen.queryByText('Reject')).toBeNull()
+  })
+
+  it('rejecting an accepted row un-accepts it via the same reject action', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: reviewSummary({ accepted: 1, unreviewed: 0, rejected: 0, complete: true }) })
+    vi.mocked(api.rejectRequirement).mockResolvedValue(claim({ id: 'claim-2', review_status: 'rejected' }))
+    renderPage()
+    fireEvent.click(await screen.findByText('Reject'))
+    await waitFor(() => expect(api.rejectRequirement).toHaveBeenCalledWith('role-1', 'claim-1'))
+    await screen.findByText('Reopen for review')
   })
 
   it('a rejected row can be reopened for review', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'rejected' })], review_summary: { accepted: 0, unreviewed: 0, rejected: 1, complete: true } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'rejected' })], review_summary: reviewSummary({ accepted: 0, unreviewed: 0, rejected: 1, complete: true }) })
     vi.mocked(api.reopenRequirement).mockResolvedValue(claim({ review_status: 'unreviewed' }))
     renderPage()
     fireEvent.click(await screen.findByText('Reopen for review'))
@@ -78,7 +91,7 @@ describe('accepted and rejected rows', () => {
 
 describe('edit & accept', () => {
   it('lets you remap the concept, change type/basis/importance/span, and saves via editRequirement', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     vi.mocked(api.listConcepts).mockResolvedValue([{ id: 'sql', canonical_name: 'SQL', type_code: 'tool', status: 'active' } as Concept])
     vi.mocked(api.editRequirement).mockResolvedValue(claim({
       id: 'claim-2', concept_id: 'sql', canonical_name: 'SQL', requirement_type: 'preferred',
@@ -108,7 +121,7 @@ describe('edit & accept', () => {
   })
 
   it('an edit form drops the evidence span once basis is no longer stated/implied', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     renderPage()
     fireEvent.click(await screen.findByText('Edit & accept'))
     expect(screen.getByLabelText('Evidence span (must be an exact quote from the source document)')).toBeTruthy()
@@ -117,7 +130,7 @@ describe('edit & accept', () => {
   })
 
   it('a failed save preserves the edited draft and the error is recoverable on retry', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     vi.mocked(api.editRequirement).mockRejectedValueOnce(new Error('Save failed'))
       .mockResolvedValueOnce(claim({ review_status: 'accepted', requirement_type: 'preferred' }))
     renderPage()
@@ -132,7 +145,7 @@ describe('edit & accept', () => {
   })
 
   it('an already-accepted row can be edited via the same supersession path', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: { accepted: 1, unreviewed: 0, rejected: 0, complete: true } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: reviewSummary({ accepted: 1, unreviewed: 0, rejected: 0, complete: true }) })
     vi.mocked(api.editRequirement).mockResolvedValue(claim({ id: 'claim-3', importance: 4, review_status: 'accepted' }))
     renderPage()
     fireEvent.click(await screen.findByText('Edit'))
@@ -142,7 +155,7 @@ describe('edit & accept', () => {
   })
 
   it('debounces vocabulary search instead of issuing one request per keystroke', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     vi.mocked(api.listConcepts).mockResolvedValue([{ id: 'sql', canonical_name: 'SQL', type_code: 'tool', status: 'active' } as Concept])
     renderPage()
     fireEvent.click(await screen.findByText('Edit & accept'))
@@ -158,7 +171,7 @@ describe('edit & accept', () => {
 
 describe('add requirement', () => {
   it('creates a source-backed accepted claim through the manual add form', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: { accepted: 0, unreviewed: 0, rejected: 0, complete: true } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: reviewSummary({ accepted: 0, unreviewed: 0, rejected: 0, complete: true }) })
     vi.mocked(api.listConcepts).mockResolvedValue([{ id: 'sql', canonical_name: 'SQL', type_code: 'tool', status: 'active' } as Concept])
     vi.mocked(api.addRequirement).mockResolvedValue(claim({ id: 'claim-4', concept_id: 'sql', canonical_name: 'SQL', review_status: 'accepted' }))
     renderPage()
@@ -177,7 +190,7 @@ describe('add requirement', () => {
 
 describe('review-incomplete warning', () => {
   it('warns before Continue to comparison while requirements remain unreviewed', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })
     renderPage()
     await screen.findByText('Python')
     expect(screen.getByText('Continue to comparison (requirement review incomplete)')).toBeTruthy()
@@ -185,10 +198,21 @@ describe('review-incomplete warning', () => {
   })
 
   it('does not warn once every current requirement has been reviewed', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: { accepted: 1, unreviewed: 0, rejected: 0, complete: true } })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim({ review_status: 'accepted' })], review_summary: reviewSummary({ accepted: 1, unreviewed: 0, rejected: 0, complete: true }) })
     renderPage()
     await screen.findByText('Python')
     expect(screen.getByText('Continue to comparison')).toBeTruthy()
     expect(screen.queryByText(/Requirement review is incomplete/)).toBeNull()
+  })
+
+  it('warns when unresolved vocabulary proposals remain, even with every claim accepted', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({
+      items: [claim({ review_status: 'accepted' })],
+      review_summary: reviewSummary({ accepted: 1, unreviewed: 0, rejected: 0, unresolved_proposals: 2, complete: false }),
+    })
+    renderPage()
+    await screen.findByText('Python')
+    expect(screen.getByText(/2 extracted terms could not be matched to the vocabulary/)).toBeTruthy()
+    expect(screen.getByText('Continue to comparison (requirement review incomplete)')).toBeTruthy()
   })
 })
