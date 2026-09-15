@@ -55,6 +55,15 @@ kept for reproducibility.
   unresolved `concept_proposal` for human review — extraction never invents a
   concept. See `docs/11-capability-model-design.md` §7.3 and
   `backend/app/extraction.py`.
+- **Requirement review is a real curation gate, not an Accept/Reject screen.**
+  An AI-extracted requirement claim is a visible proposal only — it never
+  becomes analytically authoritative (comparison, capability/role fit,
+  economics, filters/facets, target/stepping-stone analysis) merely because
+  nobody rejected it. A curator can accept, correct (non-destructively —
+  corrections supersede rather than overwrite, preserving the original AI
+  claim), reject, or reopen a rejected claim; every downstream consumer of
+  requirement evidence reads its status through one shared loader. See
+  `docs/29-requirement-review-curation-gate.md`.
 - **profile360 is read-only, and never duplicated.** The user's deep career
   evidence (claims, capabilities, episodes) lives in a separate `profile360`
   schema owned by another tool. This app reads it and maps it onto the same
@@ -238,8 +247,12 @@ see `docs/20-render-deployment.md` §8 for the full design and
     action replaces it; viewing the page never triggers generation. See
     `docs/21-role-context-and-vocabulary-splitting.md` §3.
 7. **Requirements** (a role's detail page → "Requirements") — run closed-
-   vocabulary AI extraction against that role's source document, then accept
-   or reject each proposed requirement claim.
+   vocabulary AI extraction against that role's source document, then accept,
+   correct ("Edit & accept"/"Edit"), or reject each proposed requirement
+   claim; a rejected claim can be reopened. AI suggestions are never
+   authoritative until accepted — a status summary and a "review incomplete"
+   warning make that explicit before continuing to comparison. See
+   `docs/29-requirement-review-curation-gate.md`.
 8. **Compare** (a role's detail page → "Compare") — an evidence-backed,
    four-state comparison against everything mapped from profile360, with a
    one-click "I have done this" for anything you can personally assert with

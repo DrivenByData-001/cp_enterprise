@@ -119,23 +119,30 @@ observations in production).
 one canonical loader, shared by `capability_engine.derive_role_fit` and
 `economics_engine.derive_archetype_demand`:
 
-1. If the role has **usable** `requirement_claim` rows — non-superseded
-   (`superseded_by IS NULL`) **and** non-rejected (`review_status !=
-   'rejected'`) — those are authoritative.
+1. If the role has **usable** `requirement_claim` rows — current
+   (`superseded_by IS NULL`) **and accepted** (`review_status =
+   'accepted'`) — those are authoritative. An unreviewed claim is a visible
+   AI *proposal* only; it is never authoritative merely because nobody has
+   rejected it yet. See
+   `docs/29-requirement-review-curation-gate.md` for the full curation-gate
+   build this rule is now part of (superseding the "non-superseded and
+   non-rejected" rule this section originally described).
 2. Otherwise, mapped `role_skill_observation` rows whose
    `canonical_concept_id` resolves to an **active** concept —
-   **except a concept the curator has already spoken on for this role via
-   a rejected or superseded `requirement_claim`.** Curator authority always
-   outranks a legacy observation: a rejected claim for "Python" must
-   prevent a legacy "Python" observation from resurrecting that same
-   requirement through the fallback, even though no *usable* claim exists
-   to be authoritative in its place. An unrelated concept's observation
-   (e.g. "SQL") is unaffected. If the concept's history includes a
-   superseded claim but a *current usable successor* claim also exists,
-   point 1 already handles it — the whole role takes the claim-
+   **except a concept the curator has actively rejected or corrected for
+   this role** (`review_status IN ('rejected', 'corrected')`). Curator
+   authority always outranks a legacy observation: a rejected claim for
+   "Python" must prevent a legacy "Python" observation from resurrecting
+   that same requirement through the fallback, even though no *usable*
+   claim exists to be authoritative in its place. An unrelated concept's
+   observation (e.g. "SQL") is unaffected. If the concept's history
+   includes a corrected claim but a *current usable successor* claim also
+   exists, point 1 already handles it — the whole role takes the claim-
    authoritative branch and this exclusion never runs; it only matters when
    a concept's entire requirement_claim history on this role resolved to
-   nothing usable. See `role_requirements._rejected_or_superseded_concept_ids`.
+   nothing usable. A claim merely *superseded by a fresher unreviewed
+   proposal* (re-extraction churn — docs/29 §6) does **not** veto: no human
+   ever looked at it, so it carries no curator authority.
 3. The two sources are **never merged** for one role.
 4. A `role_skill_observation`-sourced item always carries `basis =
    review_status = evidence_span = None` — never upgraded to "stated"
@@ -149,19 +156,24 @@ This mirrors, in spirit, `db.role_skills_with_fallback`'s existing "prefer
 one source, fall back to the other, never merge" pattern for Role Detail
 display — with the opposite precedence, because Phase 4's derivations need
 `requirement_claim`'s review/basis/span provenance to win whenever it
-exists.
+exists. `role_skills_with_fallback`'s own `requirement_claim` branch is
+held to the same accepted-only rule (docs/29 §2).
 
 One deliberate behaviour refinement, not just a passthrough: previously
 `capability_engine.derive_role_fit`'s inline query did **not** filter out
 `review_status = 'rejected'` requirement_claim rows (only
-`superseded_by IS NULL`). The canonical loader now excludes rejected claims
-from both the "does this role have usable claims" check and the returned
-item list — consistent with the existing `db.py` convention for the same
-table, and covered by
-`test_role_requirements.py::test_rejected_claims_do_not_block_fallback_for_other_roles`/
-`test_rejected_or_superseded_claims_never_reappear_even_with_no_fallback`.
-Production currently has 0 capability requirement_claim rows, so this
-changes no production behaviour today.
+`superseded_by IS NULL`), and even after that was fixed, an *unreviewed*
+claim still counted as usable. The canonical loader now requires
+`review_status = 'accepted'` for a claim to be usable at all — see
+`test_role_requirements.py` for the full regression suite. Excluding
+unreviewed claims does not make pending review invisible:
+`role_requirements.load_requirement_review_summary(_bulk)` gives every
+downstream consumer (Comparison, Role Detail, target/stepping-stone
+analysis) an accepted/unreviewed/rejected count and a `complete` flag, so a
+partially-reviewed role's requirement set is never presented as final.
+Production currently has 0 capability requirement_claim rows, so the
+original superseded/rejected refinement changed no production behaviour;
+see docs/29 §9 for this build's production-data impact.
 
 **Post-merge integrity fix**: an initial version of this loader excluded
 rejected/superseded claims from the "does the role have usable claims"

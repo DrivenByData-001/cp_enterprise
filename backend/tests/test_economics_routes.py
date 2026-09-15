@@ -80,7 +80,8 @@ def test_gap_value_endpoint_reflects_rebuild(client):
         role_id = str(db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "x"}, skills=[]))
         cur.execute("UPDATE jobber.role_instance SET archetype_concept_id = %s WHERE id = %s", (archetype_id, role_id))
         cur.execute(
-            "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis) VALUES (%s, %s, 'required', 'user_asserted')",
+            "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+            "VALUES (%s, %s, 'required', 'user_asserted', 'accepted')",
             (role_id, cap_id),
         )
         market_id = str(_market(cur))

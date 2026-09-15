@@ -14,7 +14,9 @@ vi.mock('../lib/api', () => ({ api: {
   previewTarget: vi.fn(), importTarget: vi.fn(), assertCapability: vi.fn(), retractAssertion: vi.fn(),
   promoteAssertion: vi.fn(), createDevelopmentAction: vi.fn(), updateDevelopmentAction: vi.fn(),
   deleteDevelopmentAction: vi.fn(), getRole: vi.fn(), listRequirements: vi.fn(),
-  reviewRequirement: vi.fn(), proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  acceptRequirement: vi.fn(), rejectRequirement: vi.fn(), reopenRequirement: vi.fn(),
+  editRequirement: vi.fn(), addRequirement: vi.fn(), listConcepts: vi.fn(),
+  proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
 } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 function Location() { return <output aria-label="Location">{useLocation().pathname + useLocation().search}</output> }
@@ -110,15 +112,20 @@ describe('Target creation', () => {
 })
 
 describe('Requirement review', () => {
+  const claim = { id: 'claim', canonical_name: 'Python', concept_id: 'python', type_code: 'tool',
+    requirement_type: 'required', basis: 'stated', review_status: 'unreviewed', evidence_span: 'Python',
+    importance: 3, created_at: '2026-01-01', extraction_run_id: 'run-1', superseded_by: null,
+    document_id: null, document_title: null, document_provenance: null } as Awaited<ReturnType<typeof api.listRequirements>>['items'][number]
+
   it('shows failed acceptance and allows retry without losing the claim', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue([{ id: 'claim', canonical_name: 'Python', concept_id: 'python', type_code: 'tool', requirement_type: 'required', basis: 'stated', review_status: 'unreviewed', evidence_span: 'Python', importance: 3 } as Awaited<ReturnType<typeof api.listRequirements>>[number]])
-    vi.mocked(api.reviewRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ id: 'claim', review_status: 'accepted' })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, complete: false } })
+    vi.mocked(api.acceptRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ ...claim, review_status: 'accepted' })
     render(<MemoryRouter initialEntries={['/role-instances/role/requirements']}><Routes><Route path="/role-instances/:id/requirements" element={<RoleRequirements />} /></Routes></MemoryRouter>)
     fireEvent.click(await screen.findByText('Accept'))
     await screen.findByText('Review failed')
     fireEvent.click(screen.getByText('Accept'))
     await screen.findByText('accepted')
-    expect(api.reviewRequirement).toHaveBeenCalledTimes(2)
+    expect(api.acceptRequirement).toHaveBeenCalledTimes(2)
   })
 })
 

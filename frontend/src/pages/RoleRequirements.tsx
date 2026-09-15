@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, type ExtractionSummary, type RequirementClaim, type RoleMetadataInput } from '../lib/api'
+import {
+  api,
+  type Concept,
+  type ExtractionSummary,
+  type RequirementClaim,
+  type RequirementClaimEditInput,
+  type RoleMetadataInput,
+} from '../lib/api'
 import ImportSteps from '../components/ImportSteps'
 import RoleMetadataForm from '../components/RoleMetadataForm'
 
@@ -10,6 +17,9 @@ const BASIS_LABEL: Record<string, string> = {
   inferred: 'inferred (no verbatim span — provenance too weak to trust one)',
   user_asserted: 'user-asserted',
 }
+
+const REQUIREMENT_TYPE_OPTIONS = ['required', 'preferred', 'contextual'] as const
+const BASIS_OPTIONS = ['stated', 'implied', 'inferred', 'user_asserted'] as const
 
 // Reviewable, AI-assisted metadata enrichment (source-aware ingest cleanup,
 // problem #5): proposes title/organisation/location/... from the role's own
@@ -106,29 +116,353 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
   )
 }
 
+// Debounced search against active accepted vocabulary concepts (mirrors
+// TargetRequirementPicker's pattern) — never fires one uncontrolled request
+// per keystroke, and never lets the user invent a concept inline; if
+// nothing matches, the route to Vocabulary is the only way forward.
+function ConceptPicker({ onSelect }: { onSelect: (c: Concept) => void }) {
+  const [query, setQuery] = useState('')
+  const [options, setOptions] = useState<Concept[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setOptions([]); setSearchError('')
+    if (!query.trim()) { setSearching(false); return }
+    setSearching(true)
+    const timer = setTimeout(() => {
+      api.listConcepts({ q: query, status: 'active' }).then(rows => { if (active) setOptions(rows) })
+        .catch(e => { if (active) setSearchError(e instanceof Error ? e.message : String(e)) })
+        .finally(() => { if (active) setSearching(false) })
+    }, 250)
+    return () => { active = false; clearTimeout(timer) }
+  }, [query])
+
+  return (
+    <div>
+      <label>
+        Search active vocabulary concepts
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="e.g. Python, Solvency II…" />
+      </label>
+      {searching && <span className="muted" style={{ fontSize: 12 }}>Searching…</span>}
+      {searchError && <p role="alert" style={{ fontSize: 13 }}>Search failed: {searchError}. Change the search to retry.</p>}
+      {options.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+          {options.slice(0, 20).map(c => (
+            <button type="button" key={c.id} onClick={() => { onSelect(c); setQuery('') }}>
+              {c.canonical_name} <span className="muted">({c.type_code})</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {query.trim() && !searching && !searchError && options.length === 0 && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          No active concept matches. <Link to={`/vocabulary?focusConceptName=${encodeURIComponent(query)}`}>Add it in Vocabulary</Link> rather
+          than inventing one here.
+        </p>
+      )}
+    </div>
+  )
+}
+
+type EditDraft = {
+  concept_id: string
+  canonical_name: string
+  type_code: string
+  requirement_type: string
+  basis: string
+  importance: string
+  evidence_span: string
+}
+
+function draftFromClaim(c: RequirementClaim): EditDraft {
+  return {
+    concept_id: c.concept_id,
+    canonical_name: c.canonical_name,
+    type_code: c.type_code,
+    requirement_type: c.requirement_type,
+    basis: c.basis,
+    importance: c.importance != null ? String(c.importance) : '',
+    evidence_span: c.evidence_span ?? '',
+  }
+}
+
+function RequirementCard({
+  claim, roleId, busy, onBusyChange, onUpdated, onError,
+}: {
+  claim: RequirementClaim
+  roleId: string
+  busy: boolean
+  onBusyChange: (busy: boolean) => void
+  onUpdated: (oldClaimId: string, updated: RequirementClaim) => void
+  onError: (message: string | null) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<EditDraft>(() => draftFromClaim(claim))
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const startEdit = () => { setDraft(draftFromClaim(claim)); setSaveError(null); setEditing(true) }
+  const cancelEdit = () => { setEditing(false); setSaveError(null) }
+
+  const run = async (action: () => Promise<RequirementClaim>) => {
+    onBusyChange(true); onError(null)
+    try {
+      const updated = await action()
+      onUpdated(claim.id, updated)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      onBusyChange(false)
+    }
+  }
+
+  const saveEdit = async () => {
+    const original = draftFromClaim(claim)
+    const unchanged = draft.concept_id === original.concept_id && draft.requirement_type === original.requirement_type
+      && draft.basis === original.basis && draft.importance === original.importance
+      && draft.evidence_span === original.evidence_span
+
+    onBusyChange(true); setSaveError(null)
+    try {
+      const updated = unchanged
+        ? (claim.review_status === 'accepted' ? claim : await api.acceptRequirement(roleId, claim.id))
+        : await api.editRequirement(roleId, claim.id, {
+            concept_id: draft.concept_id,
+            requirement_type: draft.requirement_type as RequirementClaimEditInput['requirement_type'],
+            basis: draft.basis as RequirementClaimEditInput['basis'],
+            importance: draft.importance.trim() === '' ? null : Number(draft.importance),
+            // The server would null this out anyway once basis no longer
+            // needs it, but a stale quote must not even be sent once the
+            // field disappears — what's submitted should match what's shown.
+            evidence_span: (draft.basis === 'stated' || draft.basis === 'implied') ? (draft.evidence_span || null) : null,
+          })
+      onUpdated(claim.id, updated)
+      setEditing(false)
+    } catch (e) {
+      // Never discard the draft on a failed save — the user's edits stay on
+      // screen, with the error, so they can fix and retry.
+      setSaveError(e instanceof Error ? e.message : String(e))
+    } finally {
+      onBusyChange(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <strong>{claim.canonical_name}</strong>{' '}
+          <span className="muted" style={{ fontSize: 12 }}>
+            {claim.type_code} · {claim.requirement_type} · {BASIS_LABEL[claim.basis] ?? claim.basis}
+            {claim.importance ? ` · importance ${claim.importance}/5` : ''}
+          </span>
+          {claim.evidence_span && (
+            <p className="secondary" style={{ fontSize: 13, margin: '6px 0 0', fontStyle: 'italic' }}>
+              “{claim.evidence_span}”
+            </p>
+          )}
+          {claim.document_provenance && claim.document_provenance !== 'original' && (
+            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+              Source document provenance: {claim.document_provenance} — treated as weaker evidence.
+            </p>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+          <span
+            className="muted"
+            style={{
+              fontSize: 12,
+              color:
+                claim.review_status === 'accepted' ? 'var(--good)' : claim.review_status === 'rejected' ? 'var(--critical)' : undefined,
+            }}
+          >
+            {claim.review_status}
+          </span>
+          {claim.review_status === 'unreviewed' && !editing && (
+            <>
+              <button disabled={busy} onClick={() => run(() => api.acceptRequirement(roleId, claim.id))}>Accept</button>
+              <button disabled={busy} onClick={startEdit}>Edit &amp; accept</button>
+              <button disabled={busy} onClick={() => run(() => api.rejectRequirement(roleId, claim.id))}>Reject</button>
+            </>
+          )}
+          {claim.review_status === 'accepted' && !editing && (
+            <button disabled={busy} onClick={startEdit}>Edit</button>
+          )}
+          {claim.review_status === 'rejected' && (
+            <button disabled={busy} onClick={() => run(() => api.reopenRequirement(roleId, claim.id))}>Reopen for review</button>
+          )}
+        </div>
+      </div>
+
+      {editing && (
+        <div className="form-stack" style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div>
+            <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>Concept</div>
+            <div>{draft.canonical_name} <span className="muted">({draft.type_code})</span></div>
+            <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+              <span>Concept type comes from the accepted vocabulary.</span>{' '}
+              <Link to={`/vocabulary?focusConceptName=${encodeURIComponent(draft.canonical_name)}`}>
+                Open in Vocabulary
+              </Link>{' '}
+              if this classification looks wrong.
+            </p>
+            <ConceptPicker
+              onSelect={(c) => setDraft(d => ({ ...d, concept_id: c.id, canonical_name: c.canonical_name, type_code: c.type_code }))}
+            />
+          </div>
+
+          <label>
+            Requirement type
+            <select value={draft.requirement_type} onChange={e => setDraft(d => ({ ...d, requirement_type: e.target.value }))}>
+              {REQUIREMENT_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+
+          <label>
+            Basis
+            <select value={draft.basis} onChange={e => setDraft(d => ({ ...d, basis: e.target.value }))}>
+              {BASIS_OPTIONS.map(b => <option key={b} value={b}>{BASIS_LABEL[b] ?? b}</option>)}
+            </select>
+          </label>
+
+          {(draft.basis === 'stated' || draft.basis === 'implied') && (
+            <label>
+              Evidence span (must be an exact quote from the source document)
+              <textarea value={draft.evidence_span} onChange={e => setDraft(d => ({ ...d, evidence_span: e.target.value }))} rows={3} />
+            </label>
+          )}
+
+          <label>
+            Importance (1–5, optional)
+            <input type="number" min={1} max={5} value={draft.importance}
+              onChange={e => setDraft(d => ({ ...d, importance: e.target.value }))} />
+          </label>
+
+          {saveError && <p role="alert" style={{ color: 'var(--critical)' }}>{saveError}</p>}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="primary" disabled={busy} onClick={saveEdit}>
+              {claim.review_status === 'accepted' ? 'Save correction' : 'Save & accept'}
+            </button>
+            <button disabled={busy} onClick={cancelEdit}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel }: {
+  roleId: string
+  busy: boolean
+  onBusyChange: (busy: boolean) => void
+  onAdded: (created: RequirementClaim) => void
+  onCancel: () => void
+}) {
+  const [concept, setConcept] = useState<Concept | null>(null)
+  const [requirementType, setRequirementType] = useState<string>('required')
+  const [importance, setImportance] = useState('')
+  const [evidenceSpan, setEvidenceSpan] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async () => {
+    if (!concept) { setError('Choose an active vocabulary concept first.'); return }
+    if (!evidenceSpan.trim()) { setError('Paste the exact supporting text from the source document.'); return }
+    onBusyChange(true); setError(null)
+    try {
+      const created = await api.addRequirement(roleId, {
+        concept_id: concept.id,
+        requirement_type: requirementType as 'required' | 'preferred' | 'contextual',
+        importance: importance.trim() === '' ? null : Number(importance),
+        evidence_span: evidenceSpan,
+      })
+      onAdded(created)
+    } catch (e) {
+      // Preserve everything entered so far — only the error is new.
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      onBusyChange(false)
+    }
+  }
+
+  return (
+    <div className="card form-stack">
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Add a requirement</h3>
+      <p className="muted" style={{ fontSize: 12 }}>
+        Only for a requirement genuinely present in the source document — paste the exact supporting text below; it
+        is validated against the immutable source before saving. This is not the place to record a requirement you
+        believe the employer wants but the posting never actually says.
+      </p>
+      <div>
+        <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>Concept</div>
+        {concept ? (
+          <div>
+            {concept.canonical_name} <span className="muted">({concept.type_code})</span>{' '}
+            <button type="button" onClick={() => setConcept(null)}>Change</button>
+          </div>
+        ) : (
+          <ConceptPicker onSelect={setConcept} />
+        )}
+      </div>
+      <label>
+        Requirement type
+        <select value={requirementType} onChange={e => setRequirementType(e.target.value)}>
+          {REQUIREMENT_TYPE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </label>
+      <label>
+        Evidence span (exact quote from the source document)
+        <textarea value={evidenceSpan} onChange={e => setEvidenceSpan(e.target.value)} rows={3} />
+      </label>
+      <label>
+        Importance (1–5, optional)
+        <input type="number" min={1} max={5} value={importance} onChange={e => setImportance(e.target.value)} />
+      </label>
+      {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="primary" disabled={busy} onClick={save}>Save requirement</button>
+        <button disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 export default function RoleRequirements() {
   const { id } = useParams()
   const roleId = id ?? ''
   const [params, setParams] = useSearchParams()
   const detailsStep = params.get('step') === 'details'
-  const [busyClaim, setBusyClaim] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   const [retry, setRetry] = useState(0)
   const [claims, setClaims] = useState<RequirementClaim[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [extracting, setExtracting] = useState(false)
   const [lastRun, setLastRun] = useState<ExtractionSummary | null>(null)
+  const [addingRequirement, setAddingRequirement] = useState(false)
 
-  const reload = () => api.listRequirements(roleId).then(setClaims)
+  const reload = () => api.listRequirements(roleId).then(res => setClaims(res.items))
 
   useEffect(() => {
     let current = true
     setLoading(true); setClaims([]); setError(null); setLastRun(null)
-    api.listRequirements(roleId).then(rows => { if (current) setClaims(rows) })
+    api.listRequirements(roleId).then(res => { if (current) setClaims(res.items) })
       .catch(e => { if (current) setError(String(e)) })
       .finally(() => { if (current) setLoading(false) })
     return () => { current = false }
   }, [roleId, retry])
+
+  // The status summary is derived from the same current-claims list the
+  // review cards render, rather than tracked separately — it can never drift
+  // out of sync with what's on screen, and every action already updates
+  // `claims` locally.
+  const summary = useMemo(() => {
+    const accepted = claims.filter(c => c.review_status === 'accepted').length
+    const unreviewed = claims.filter(c => c.review_status === 'unreviewed').length
+    const rejected = claims.filter(c => c.review_status === 'rejected').length
+    return { accepted, unreviewed, rejected, complete: unreviewed === 0 }
+  }, [claims])
 
   const runExtraction = async () => {
     setExtracting(true)
@@ -144,13 +478,13 @@ export default function RoleRequirements() {
     }
   }
 
-  const review = async (claimId: string, action: 'accept' | 'reject') => {
-    setBusyClaim(claimId); setError(null)
-    try {
-      await api.reviewRequirement(roleId, claimId, action)
-      setClaims(rows => rows.map(row => row.id === claimId ? { ...row, review_status: action === 'accept' ? 'accepted' : 'rejected' } : row))
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
-    finally { setBusyClaim(null) }
+  const handleUpdated = (oldClaimId: string, updated: RequirementClaim) => {
+    setClaims(rows => rows.map(row => row.id === oldClaimId ? updated : row))
+  }
+
+  const handleAdded = (created: RequirementClaim) => {
+    setClaims(rows => [...rows, created])
+    setAddingRequirement(false)
   }
 
   return (
@@ -166,19 +500,24 @@ export default function RoleRequirements() {
       <div hidden={detailsStep}>
 
       <p className="secondary">
-        Extract requirements from the advert, then accept or reject each suggestion. Quotes show what the source
-        says; inferred requirements are labelled separately. Review suggestions before relying on the comparison.
+        <strong>AI suggestions are not used as authoritative role requirements until you accept them.</strong> Extract
+        requirements from the advert, then accept, correct, or reject each suggestion. Quotes show what the source
+        says; inferred requirements are labelled separately.
       </p>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="primary" onClick={runExtraction} disabled={extracting || busyClaim !== null}>
+        <button className="primary" onClick={runExtraction} disabled={extracting || busy}>
           {extracting ? 'Extracting…' : 'Extract requirements with AI'}
         </button>
         {lastRun && (
           <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>
             {lastRun.status === 'failed'
               ? `Run failed: ${lastRun.error} (recorded as extraction_run #${lastRun.extraction_run_id})`
-              : `Run #${lastRun.extraction_run_id}: ${lastRun.claims_created ?? 0} claim(s), ${lastRun.proposals_created ?? 0} new proposal(s)${lastRun.rejected_span_count ? `, ${lastRun.rejected_span_count} rejected for an invalid span` : ''}.`}
+              : `Run #${lastRun.extraction_run_id}: ${lastRun.claims_created ?? 0} claim(s)` +
+                `${lastRun.claims_superseded ? `, ${lastRun.claims_superseded} superseding an earlier unreviewed proposal` : ''}` +
+                `${lastRun.claims_deduplicated ? `, ${lastRun.claims_deduplicated} identical proposal(s) skipped` : ''}` +
+                `, ${lastRun.proposals_created ?? 0} new vocabulary proposal(s)` +
+                `${lastRun.rejected_span_count ? `, ${lastRun.rejected_span_count} rejected for an invalid span` : ''}.`}
           </span>
         )}
       </div>
@@ -187,55 +526,44 @@ export default function RoleRequirements() {
       {error && <button onClick={() => setRetry(retry + 1)}>Reload requirements</button>}
       {loading && <p className="muted">Loading…</p>}
 
-      {!loading && claims.length === 0 && (
-        <p className="muted">No requirement claims yet — run extraction above, or check the Vocabulary page for unresolved proposals it may have created.</p>
+      {!loading && (claims.length > 0 || addingRequirement) && (
+        <div className="card" style={{ marginBottom: 16, display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span><strong style={{ color: 'var(--good)' }}>{summary.accepted}</strong> <span className="muted">accepted</span></span>
+          <span><strong style={{ color: summary.unreviewed ? 'var(--warning)' : undefined }}>{summary.unreviewed}</strong> <span className="muted">need review</span></span>
+          <span><strong style={{ color: 'var(--critical)' }}>{summary.rejected}</strong> <span className="muted">rejected</span></span>
+        </div>
+      )}
+
+      {!loading && claims.length === 0 && !addingRequirement && (
+        <p className="muted">No requirement claims yet — run extraction above, add one manually below, or check the Vocabulary page for unresolved proposals it may have created.</p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {claims.map((c) => (
-          <div key={c.id} className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-              <div>
-                <strong>{c.canonical_name}</strong>{' '}
-                <span className="muted" style={{ fontSize: 12 }}>
-                  {c.type_code} · {c.requirement_type} · {BASIS_LABEL[c.basis] ?? c.basis}
-                  {c.importance ? ` · importance ${c.importance}/5` : ''}
-                </span>
-                {c.evidence_span && (
-                  <p className="secondary" style={{ fontSize: 13, margin: '6px 0 0', fontStyle: 'italic' }}>
-                    “{c.evidence_span}”
-                  </p>
-                )}
-                {c.document_provenance && c.document_provenance !== 'original_capture' && (
-                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-                    Source document provenance: {c.document_provenance} — treated as weaker evidence.
-                  </p>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-                <span
-                  className="muted"
-                  style={{
-                    fontSize: 12,
-                    color:
-                      c.review_status === 'accepted' ? 'var(--good)' : c.review_status === 'rejected' ? 'var(--critical)' : undefined,
-                  }}
-                >
-                  {c.review_status}
-                </span>
-                {c.review_status === 'unreviewed' && (
-                  <>
-                    <button disabled={busyClaim !== null || extracting} onClick={() => review(c.id, 'accept')}>Accept</button>
-                    <button disabled={busyClaim !== null || extracting} onClick={() => review(c.id, 'reject')}>Reject</button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
+          <RequirementCard key={c.id} claim={c} roleId={roleId} busy={busy || extracting}
+            onBusyChange={setBusy} onUpdated={handleUpdated} onError={setError} />
         ))}
       </div>
-      <p>{claims.filter(c => c.review_status === 'unreviewed').length} requirement(s) still need review.</p>
-      <Link to={`/comparison/${roleId}`}>Continue to comparison</Link>
+
+      <div style={{ marginTop: 16 }}>
+        {!addingRequirement ? (
+          <button onClick={() => setAddingRequirement(true)} disabled={busy || extracting}>Add requirement</button>
+        ) : (
+          <AddRequirementForm roleId={roleId} busy={busy || extracting} onBusyChange={setBusy}
+            onAdded={handleAdded} onCancel={() => setAddingRequirement(false)} />
+        )}
+      </div>
+
+      <p style={{ marginTop: 16 }}>{summary.unreviewed} requirement(s) still need review.</p>
+      {!summary.complete && (
+        <p role="alert" style={{ color: 'var(--warning)' }}>
+          Requirement review is incomplete — {summary.unreviewed} pending suggestion{summary.unreviewed === 1 ? '' : 's'} excluded from
+          comparison and analysis until reviewed.
+        </p>
+      )}
+      <Link to={`/comparison/${roleId}`}>
+        Continue to comparison{!summary.complete ? ' (requirement review incomplete)' : ''}
+      </Link>
       </div>
     </div>
   )

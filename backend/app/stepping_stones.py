@@ -7,7 +7,7 @@ from fastapi.encoders import jsonable_encoder
 from .capability_engine import atomic_concept_evidence, derive_capability_coverage
 from .db import to_json_param
 from .embeddings import cosine_similarity, get_embeddings
-from .role_requirements import load_role_requirements_bulk
+from .role_requirements import load_role_requirements_bulk, load_requirement_review_summary_bulk
 from .target_mapping import target_mapping_summary
 from .target_cache import revisions, cached_statuses, save_status
 
@@ -22,15 +22,24 @@ def measured(result, started, cache_hit, evaluated):
     return result
 
 
-def assess_candidate(requirements, target_requirements, status_by_concept):
+def assess_candidate(requirements, target_requirements, status_by_concept, pending=0, target_pending=0):
+    """`requirements`/`target_requirements` come from the canonical
+    `role_requirements` loader, which only ever returns *usable* evidence
+    (accepted claims + fallback observations) — an unreviewed claim never
+    appears in these lists at all, so it cannot be detected by inspecting
+    row content. `pending`/`target_pending` (current unreviewed-claim counts
+    from `role_requirements.load_requirement_review_summary_bulk`) are how
+    the caller tells this function "review is incomplete" instead —
+    preserved as an explicit gate below so a partially-reviewed role's
+    requirement set is never silently treated as final."""
     # Repeated claims do not give a role extra weight. A required occurrence wins.
     unique = {}
     for row in requirements:
         key = row["concept_id"]
         if key not in unique or row["requirement_type"] == "required":
             unique[key] = row
-    reviewed = [r for r in unique.values() if r["review_status"] != "unreviewed"]
-    target = {r["concept_id"]: r for r in target_requirements if r["review_status"] != "unreviewed"}
+    reviewed = list(unique.values())
+    target = {r["concept_id"]: r for r in target_requirements}
     target_gaps = {k for k in target if status_by_concept.get(k) != "evidenced"}
     required = [r for r in reviewed if r["requirement_type"] == "required"]
     missing = [r["canonical_name"] for r in required if status_by_concept.get(r["concept_id"]) == "not_found"]
@@ -39,8 +48,6 @@ def assess_candidate(requirements, target_requirements, status_by_concept):
     shared = [r["canonical_name"] for r in reviewed if r["concept_id"] in target_gaps]
     coverage = evidenced / len(reviewed) if reviewed else None
     progress = len(shared) / len(target_gaps) if target_gaps else None
-    pending = sum(r["review_status"] == "unreviewed" for r in requirements)
-    target_pending = sum(r["review_status"] == "unreviewed" for r in target_requirements)
     target_required_gaps = sum(r["requirement_type"] == "required" and status_by_concept.get(k) != "evidenced"
                                for k, r in target.items())
     target_coverage = sum(status_by_concept.get(k) == "evidenced" for k in target) / len(target) if target else None
@@ -92,6 +99,7 @@ def path_to_target(cur, target_id, target_vec, profile_vec):
     candidates = cur.fetchall()
     ids = [str(c["id"]) for c in candidates]
     requirements = load_role_requirements_bulk(cur, [target_id, *ids])
+    review_summary = load_requirement_review_summary_bulk(cur, [target_id, *ids])
     vectors = get_embeddings(cur, "role_instance", ids)
     # Evaluate each distinct concept once per request, using the same engine as Comparison.
     concepts = {r["concept_id"] for rows in requirements.values() for r in rows}
@@ -110,11 +118,14 @@ def path_to_target(cur, target_id, target_vec, profile_vec):
                 save_status(cur, evidence_revision, key, evidence["status"])
                 evaluated += 1
     mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
+    target_pending = review_summary.get(target_id, {}).get("unreviewed", 0)
     ranked = []
     for c in candidates:
         key = str(c["id"])
         vector = vectors.get(key, [])
-        assessment = assess_candidate(requirements.get(key, []), requirements.get(target_id, []), statuses)
+        candidate_pending = review_summary.get(key, {}).get("unreviewed", 0)
+        assessment = assess_candidate(requirements.get(key, []), requirements.get(target_id, []), statuses,
+                                       pending=candidate_pending, target_pending=target_pending)
         if not mapping["complete"]:
             assessment.update(assessment="incomplete_target_mapping", ranking_score=0,
                               explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.")

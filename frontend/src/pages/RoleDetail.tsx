@@ -570,6 +570,14 @@ export default function RoleDetail() {
 
       <RoleContextSection roleId={role.id} />
 
+      {role.requirement_review && !role.requirement_review.complete && (
+        <p style={{ marginTop: 16, fontSize: 13, color: 'var(--warning)' }}>
+          Requirements review pending — {role.requirement_review.unreviewed} AI suggestion
+          {role.requirement_review.unreviewed === 1 ? '' : 's'} not yet reviewed and excluded from comparison/analysis.{' '}
+          <Link to={`/role-instances/${role.id}/requirements`}>Review now</Link>
+        </p>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
         {role.url ? (
           <a href={role.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 13 }}>

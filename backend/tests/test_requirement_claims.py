@@ -249,6 +249,158 @@ def test_out_of_range_importance_is_clamped_to_null(client, monkeypatch):
     assert importance is None
 
 
+def test_rerun_does_not_duplicate_an_identical_unreviewed_proposal(client, monkeypatch):
+    body = "Requires Python experience."
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        return _fake_run(
+            RequirementExtractionResult(
+                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+            ),
+            task, prompt_name,
+        )
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        _make_active_concept(cur, "Python")
+        role_id, _ = _make_role_with_document(cur, body)
+
+        result1 = extraction.extract_role_requirements(cur, role_id)
+        assert result1["claims_created"] == 1
+        assert result1["claims_deduplicated"] == 0
+
+        result2 = extraction.extract_role_requirements(cur, role_id)
+        assert result2["claims_created"] == 0
+        assert result2["claims_deduplicated"] == 1
+
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1  # never duplicated
+
+
+def test_rerun_with_a_different_interpretation_supersedes_the_earlier_unreviewed_proposal(client, monkeypatch):
+    body = "Requires Python experience, ideally advanced."
+    calls = {"n": 0}
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        calls["n"] += 1
+        # Same concept, but a genuinely different interpretation on rerun —
+        # "interpretation" is defined by (requirement_type, basis,
+        # evidence_span); importance alone does not count as one (extraction.py).
+        requirement_type = "preferred" if calls["n"] == 1 else "required"
+        return _fake_run(
+            RequirementExtractionResult(
+                requirements=[RequirementItem(surface_form="Python", requirement_type=requirement_type, basis="stated",
+                                               evidence_span="Requires Python experience, ideally advanced.")]
+            ),
+            task, prompt_name,
+        )
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        _make_active_concept(cur, "Python")
+        role_id, _ = _make_role_with_document(cur, body)
+
+        result1 = extraction.extract_role_requirements(cur, role_id)
+        assert result1["claims_created"] == 1
+        old_claim_id = _first_claim_id(cur, role_id)
+
+        result2 = extraction.extract_role_requirements(cur, role_id)
+        assert result2["claims_created"] == 1
+        assert result2["claims_superseded"] == 1
+
+        cur.execute("SELECT id, review_status, superseded_by, requirement_type FROM jobber.requirement_claim "
+                    "WHERE role_instance_id = %s AND superseded_by IS NULL", (role_id,))
+        current = cur.fetchone()
+        cur.execute("SELECT review_status, superseded_by FROM jobber.requirement_claim WHERE id = %s", (old_claim_id,))
+        old = cur.fetchone()
+
+    assert current["requirement_type"] == "required"
+    assert str(current["id"]) != old_claim_id
+    # Preserved through supersession, not left as a second current row — and
+    # still 'unreviewed' (no human ever looked at it), never 'corrected'
+    # (that status is reserved for an actual human correction).
+    assert old["review_status"] == "unreviewed"
+    assert str(old["superseded_by"]) == str(current["id"])
+
+
+def test_rerun_never_touches_an_accepted_human_reviewed_decision(client, monkeypatch):
+    body = "Requires Python experience."
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        return _fake_run(
+            RequirementExtractionResult(
+                requirements=[RequirementItem(surface_form="Python", requirement_type="preferred", basis="stated", evidence_span="Requires Python experience.")]
+            ),
+            task, prompt_name,
+        )
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        _make_active_concept(cur, "Python")
+        role_id, _ = _make_role_with_document(cur, body)
+        extraction.extract_role_requirements(cur, role_id)
+        claim_id = _first_claim_id(cur, role_id)
+
+    accept_resp = client.post(f"/api/role-instances/{role_id}/requirements/{claim_id}/accept")
+    assert accept_resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        result = extraction.extract_role_requirements(cur, role_id)
+        assert result["claims_created"] == 0
+        assert result["claims_superseded"] == 0
+        assert result["claims_deduplicated"] == 0
+
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1
+        cur.execute("SELECT review_status, requirement_type FROM jobber.requirement_claim WHERE id = %s", (claim_id,))
+        row = cur.fetchone()
+    assert row["review_status"] == "accepted"
+    assert row["requirement_type"] == "preferred"  # untouched by the rerun's different proposal
+
+
+def test_rerun_never_touches_a_rejected_human_reviewed_decision(client, monkeypatch):
+    body = "Requires Python experience."
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        return _fake_run(
+            RequirementExtractionResult(
+                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+            ),
+            task, prompt_name,
+        )
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        _make_active_concept(cur, "Python")
+        role_id, _ = _make_role_with_document(cur, body)
+        extraction.extract_role_requirements(cur, role_id)
+        claim_id = _first_claim_id(cur, role_id)
+
+    reject_resp = client.post(f"/api/role-instances/{role_id}/requirements/{claim_id}/reject")
+    assert reject_resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        result = extraction.extract_role_requirements(cur, role_id)
+        assert result["claims_created"] == 0
+        cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 1
+        cur.execute("SELECT review_status FROM jobber.requirement_claim WHERE id = %s", (claim_id,))
+        assert cur.fetchone()["review_status"] == "rejected"  # untouched
+
+
+def _first_claim_id(cur, role_id: str) -> str:
+    cur.execute(
+        "SELECT id FROM jobber.requirement_claim WHERE role_instance_id = %s AND superseded_by IS NULL "
+        "ORDER BY created_at LIMIT 1",
+        (role_id,),
+    )
+    return str(cur.fetchone()["id"])
+
+
 def test_extract_requirements_via_http_route(client, monkeypatch):
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(RequirementExtractionResult(requirements=[]), task, prompt_name)

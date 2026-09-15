@@ -685,10 +685,12 @@ export default function VocabularyReviewView({
   onFocusHandled,
 }: {
   conceptTypes: ConceptType[]
-  /** Set by the Map tab's "Open cluster review" action — filters straight to
-   * the cluster it came from (brief §14/§9.3) without duplicating the queue's
-   * own filter/search logic. */
-  focusRequest?: { q: string; status: 'pending' } | null
+  /** Set by the Map tab's "Open cluster review" action (status: 'pending') or
+   * a deep link from elsewhere in the app pointing at an already-accepted
+   * concept (status: 'accepted', e.g. requirement review's "concept type is
+   * global — open it here" link) — filters straight to it without
+   * duplicating the queue's own filter/search logic. */
+  focusRequest?: { q: string; status: 'pending' | 'accepted' } | null
   onFocusHandled?: () => void
 }) {
   const [progress, setProgress] = useState<VocabProgress | null>(null)

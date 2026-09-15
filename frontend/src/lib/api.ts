@@ -122,6 +122,11 @@ export type Role = {
   feasibility_note?: string | null
   is_plausible?: boolean | null
   path?: TargetPath
+  // Requirement-review curation gate (role_requirements.py): current
+  // requirement_claim counts by status for this role, so Role Detail can
+  // show a "Requirements review pending" indicator without a second
+  // round-trip. Always present for a role that went through build_role_view.
+  requirement_review?: RequirementReviewSummary
 }
 
 // --- Day-in-the-Life / Role Context enrichment ------------------------------
@@ -661,6 +666,7 @@ export type RequirementClaim = {
   review_status: 'unreviewed' | 'accepted' | 'rejected' | 'corrected'
   created_at: string
   extraction_run_id: string | null
+  superseded_by: string | null
   concept_id: string
   canonical_name: string
   type_code: string
@@ -669,11 +675,41 @@ export type RequirementClaim = {
   document_provenance: string | null
 }
 
+export type RequirementReviewSummary = {
+  accepted: number
+  unreviewed: number
+  rejected: number
+  complete: boolean
+}
+
+export type RequirementClaimList = {
+  items: RequirementClaim[]
+  review_summary: RequirementReviewSummary
+}
+
+export type RequirementClaimEditInput = {
+  concept_id?: string
+  requirement_type?: 'required' | 'preferred' | 'contextual'
+  basis?: 'stated' | 'implied' | 'inferred' | 'user_asserted'
+  importance?: number | null
+  evidence_span?: string | null
+}
+
+export type RequirementClaimCreateInput = {
+  concept_id: string
+  requirement_type: 'required' | 'preferred' | 'contextual'
+  basis?: 'stated' | 'implied'
+  importance?: number | null
+  evidence_span: string
+}
+
 export type ExtractionSummary = {
   status: 'ok' | 'partial' | 'failed'
   extraction_run_id: string
   adjudication_run_id?: string | null
   claims_created?: number
+  claims_superseded?: number
+  claims_deduplicated?: number
   proposals_created?: number
   proposals_updated?: number
   rejected_span_count?: number
@@ -929,6 +965,7 @@ export type ComparisonResult = {
   fit_score: number | null
   embedding_similarity: number | null
   engine_version: string
+  review_summary: RequirementReviewSummary
 }
 
 export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
@@ -1905,11 +1942,23 @@ export const api = {
     req<DuplicateCheckResult>('/role-instances/duplicate-check', { method: 'POST', body: JSON.stringify({ text, kind }) }),
   extractRequirements: (roleId: string) =>
     req<ExtractionSummary>(`/role-instances/${roleId}/extract-requirements`, { method: 'POST' }),
-  listRequirements: (roleId: string) => req<RequirementClaim[]>(`/role-instances/${roleId}/requirements`),
-  reviewRequirement: (roleId: string, claimId: string, action: 'accept' | 'reject') =>
-    req<{ id: string; review_status: string }>(`/role-instances/${roleId}/requirements/${claimId}/review`, {
+  listRequirements: (roleId: string, opts: { history?: boolean } = {}) =>
+    req<RequirementClaimList>(`/role-instances/${roleId}/requirements${opts.history ? '?history=true' : ''}`),
+  acceptRequirement: (roleId: string, claimId: string) =>
+    req<RequirementClaim>(`/role-instances/${roleId}/requirements/${claimId}/accept`, { method: 'POST' }),
+  rejectRequirement: (roleId: string, claimId: string) =>
+    req<RequirementClaim>(`/role-instances/${roleId}/requirements/${claimId}/reject`, { method: 'POST' }),
+  reopenRequirement: (roleId: string, claimId: string) =>
+    req<RequirementClaim>(`/role-instances/${roleId}/requirements/${claimId}/reopen`, { method: 'POST' }),
+  editRequirement: (roleId: string, claimId: string, payload: RequirementClaimEditInput) =>
+    req<RequirementClaim>(`/role-instances/${roleId}/requirements/${claimId}/edit`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(payload),
+    }),
+  addRequirement: (roleId: string, payload: RequirementClaimCreateInput) =>
+    req<RequirementClaim>(`/role-instances/${roleId}/requirements`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   // --- Source-aware metadata: manual Edit + reviewable AI enrichment --------

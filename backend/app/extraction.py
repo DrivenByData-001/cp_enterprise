@@ -240,10 +240,61 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         if rejected_span_count else None,
     )
 
-    claims_created = proposals_created = proposals_updated = 0
+    claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
     for idx, (surface_form, requirement_type, basis, span, importance, _context) in enumerate(validated):
         concept_id = item_concept.get(idx)
         if concept_id is not None:
+            # Conservative rerun/supersession handling (brief §7): a rerun
+            # against the same source must not accumulate indistinguishable
+            # current unreviewed proposals, but it must also never silently
+            # touch a decision a human already made. This is a small, exact
+            # match on (role, concept) — not a fuzzy claim-merging pass.
+            cur.execute(
+                "SELECT id, requirement_type, basis, evidence_span, review_status "
+                "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+                (role_instance_id, concept_id),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                if existing["review_status"] in ("accepted", "rejected"):
+                    # A human has already decided this concept's requirement
+                    # for this role — extraction running again never
+                    # revisits that decision.
+                    continue
+                same_interpretation = (
+                    existing["requirement_type"] == requirement_type
+                    and existing["basis"] == basis
+                    and (existing["evidence_span"] or None) == (span or None)
+                )
+                if same_interpretation:
+                    claims_deduplicated += 1
+                    continue
+                # A genuinely different interpretation of the same concept:
+                # preserve the still-unreviewed old proposal through
+                # supersession rather than leaving two current unreviewed
+                # claims for one concept. Its review_status stays
+                # 'unreviewed' — no human reviewed it, so it must not gain
+                # the curator veto's authority (role_requirements.py §2)
+                # merely by being superseded through proposal churn.
+                cur.execute(
+                    """
+                    INSERT INTO jobber.requirement_claim
+                        (role_instance_id, concept_id, requirement_type, importance, basis,
+                         document_id, evidence_span, extraction_run_id, review_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+                    RETURNING id
+                    """,
+                    (role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
+                )
+                new_claim_id = cur.fetchone()["id"]
+                cur.execute(
+                    "UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s",
+                    (new_claim_id, existing["id"]),
+                )
+                claims_created += 1
+                claims_superseded += 1
+                continue
+
             cur.execute(
                 """
                 INSERT INTO jobber.requirement_claim
@@ -296,6 +347,8 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         "extraction_run_id": main_run_id,
         "adjudication_run_id": adjudication_run_id,
         "claims_created": claims_created,
+        "claims_superseded": claims_superseded,
+        "claims_deduplicated": claims_deduplicated,
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,

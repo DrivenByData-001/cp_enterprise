@@ -17,7 +17,7 @@ from uuid import UUID
 from .. import capability_engine
 from ..db import db_cursor, instance_type_to_app_kind
 from ..profile360_promotion import Profile360PromotionError, promote_assertion_to_profile360
-from ..role_requirements import load_role_requirements
+from ..role_requirements import load_requirement_review_summary, load_role_requirements
 from ..target_mapping import target_mapping_summary
 
 router = APIRouter(prefix="/api/comparison", tags=["comparison"])
@@ -132,6 +132,8 @@ def compare_role(role_instance_id: str):
         except capability_engine.RoleInstanceNotFoundError:
             raise HTTPException(404, "role_instance not found")
 
+        review_summary = load_requirement_review_summary(cur, role_instance_id)
+
         trace_items = fit["trace"]["items"]
         claim_ids = [item["requirement_claim_id"] for item in trace_items if item["requirement_claim_id"]]
         docs_by_claim = _requirement_documents(cur, claim_ids)
@@ -192,6 +194,12 @@ def compare_role(role_instance_id: str):
         "fit_score": None if mapping is not None and not mapping["complete"] else fit["fit_score"],
         "embedding_similarity": fit["embedding_similarity"],
         "engine_version": capability_engine.ENGINE_VERSION,
+        # Requirement-review curation gate: this comparison already excludes
+        # unreviewed claims from every count/status above, but that
+        # exclusion is itself invisible unless a consumer is told review is
+        # incomplete — never let a partially-reviewed role's comparison look
+        # final. See role_requirements.py.
+        "review_summary": review_summary,
     }
 
 

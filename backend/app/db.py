@@ -496,7 +496,20 @@ def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
     fallback, both `GET /api/roles/{id}` and Day-in-the-Life generation would
     see empty skills for such a role despite real captured evidence existing.
     Never merges the two sources: a role with real role_skill_observation
-    evidence always uses that alone, unchanged."""
+    evidence always uses that alone, unchanged.
+
+    The requirement_claim branch below is filtered to *current, accepted*
+    claims only (`superseded_by IS NULL AND review_status = 'accepted'`) —
+    the same curation-gate rule `role_requirements.py` enforces for
+    analytical consumers. A role captured via source-aware ingest always has
+    empty role_skill_observation (its skills=[] at ingest time), so this
+    branch is the *only* skills source such a role has: showing an
+    unreviewed AI proposal here as if it were an established "skill" would
+    be exactly the silent-authority problem the curation gate exists to
+    prevent, right on the page carrying the "Requirements review pending"
+    indicator that says otherwise. Superseded/corrected history is excluded
+    the same way the Requirements review list excludes it, so a correction
+    never shows as a duplicate skill alongside its replacement."""
     cur.execute(
         "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
         "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
@@ -515,7 +528,7 @@ def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
                rc.requirement_type, rc.concept_id AS resolved_concept_id
         FROM jobber.requirement_claim rc
         JOIN jobber.concept c ON c.id = rc.concept_id
-        WHERE rc.role_instance_id = %s AND rc.review_status != 'rejected'
+        WHERE rc.role_instance_id = %s AND rc.review_status = 'accepted' AND rc.superseded_by IS NULL
         ORDER BY c.canonical_name
         """,
         (role_instance_id,),
@@ -556,6 +569,14 @@ def build_role_view(cur, role_id: str) -> dict | None:
         else None
     )
     role["_source_document_id"] = document_id
+
+    # Lazy import: same reasoning as concept_linking above — keeps db.py free
+    # of a module-load-time dependency on role_requirements.py. Powers Role
+    # Detail's "Requirements review pending" indicator (never a separate
+    # round-trip just to know whether review is complete).
+    from .role_requirements import load_requirement_review_summary
+
+    role["requirement_review"] = load_requirement_review_summary(cur, role_id)
     return role
 
 
