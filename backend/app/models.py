@@ -345,9 +345,7 @@ _AUTONOMY_LEVELS = ("assisted", "independent", "directed_others", "accountable")
 _NECESSITY_LEVELS = ("core", "supporting", "contextual")
 
 
-class CapabilityCreate(BaseModel):
-    canonical_name: str
-    definition: Optional[str] = None
+class CapabilitySpecification(BaseModel):
     demonstration_standard: str
     min_depth: str = "owned"
     min_autonomy: Optional[str] = None
@@ -355,7 +353,6 @@ class CapabilityCreate(BaseModel):
     min_core_required: Optional[int] = None
     economic_salience: Optional[str] = None  # catalogue metadata only — never drives Phase 3 results (brief §5)
     notes: Optional[str] = None
-    status: str = "active"
 
     @model_validator(mode="after")
     def _check(self):
@@ -365,6 +362,28 @@ class CapabilityCreate(BaseModel):
             raise ValueError(f"min_autonomy must be one of {_AUTONOMY_LEVELS}")
         if self.economic_salience is not None and self.economic_salience not in ("low", "medium", "high"):
             raise ValueError("economic_salience must be one of low, medium, high")
+        return self
+
+
+class CapabilityConfigure(CapabilitySpecification):
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _complete_specification(self):
+        if not self.demonstration_standard.strip():
+            raise ValueError("demonstration_standard must not be blank")
+        if self.min_core_required is not None and self.min_core_required < 0:
+            raise ValueError("min_core_required must be nonnegative")
+        return self
+
+
+class CapabilityCreate(CapabilitySpecification):
+    canonical_name: str
+    definition: Optional[str] = None
+    status: str = "active"
+
+    @model_validator(mode="after")
+    def _check_status(self):
         if self.status not in ("proposed", "active", "deprecated", "rejected"):
             raise ValueError("status must be one of proposed, active, deprecated, rejected")
         return self

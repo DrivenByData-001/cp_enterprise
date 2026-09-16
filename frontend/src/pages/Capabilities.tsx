@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   api,
   type AutonomyLevel,
   type Capability,
   type CapabilityInput,
   type CapabilitySummary,
+  type UnconfiguredCapability,
   type Concept,
   type DepthLevel,
   type Necessity,
@@ -34,26 +35,29 @@ const EMPTY: CapabilityInput = {
   notes: '',
 }
 
-function AddCapabilityForm({ onAdded }: { onAdded: (id: string) => Promise<void> }) {
-  const [form, setForm] = useState<CapabilityInput>(EMPTY)
+function AddCapabilityForm({ onAdded, existing, onCancel }: { onAdded: (id: string) => Promise<void>; existing?: UnconfiguredCapability; onCancel?: () => void }) {
+  const [form, setForm] = useState<CapabilityInput>(existing ? { ...EMPTY, canonical_name: existing.canonical_name, definition: existing.definition } : EMPTY)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!!existing)
 
   const submit = async () => {
     if (!form.canonical_name.trim() || !form.demonstration_standard.trim()) return
     setBusy(true)
     setError(null)
     try {
-      const result = await api.createCapability({
-        ...form,
-        canonical_name: form.canonical_name.trim(),
-        definition: form.definition?.trim() || undefined,
-        notes: form.notes?.trim() || undefined,
-      })
+      const specification = {
+        demonstration_standard: form.demonstration_standard.trim(),
+        min_depth: form.min_depth, min_autonomy: form.min_autonomy,
+        requires_all_core: form.requires_all_core, min_core_required: form.min_core_required,
+        economic_salience: form.economic_salience, notes: form.notes?.trim() || null,
+      }
+      const result = existing
+        ? await api.configureCapability(existing.id, specification)
+        : await api.createCapability({ ...specification, canonical_name: form.canonical_name.trim(), definition: form.definition?.trim() || undefined })
+      await onAdded(result.id)
       setForm(EMPTY)
       setOpen(false)
-      await onAdded(result.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -63,7 +67,7 @@ function AddCapabilityForm({ onAdded }: { onAdded: (id: string) => Promise<void>
 
   if (!open) {
     return (
-      <button className="primary" style={{ width: '100%' }} onClick={() => setOpen(true)}>
+      <button style={{ width: '100%' }} onClick={() => setOpen(true)}>
         + New capability
       </button>
     )
@@ -73,11 +77,11 @@ function AddCapabilityForm({ onAdded }: { onAdded: (id: string) => Promise<void>
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
         <span className="secondary">Canonical name</span>
-        <input value={form.canonical_name} onChange={(e) => setForm({ ...form, canonical_name: e.target.value })} placeholder="e.g. Lead a reserving process" />
+        <input readOnly={!!existing} value={form.canonical_name} onChange={(e) => setForm({ ...form, canonical_name: e.target.value })} placeholder="e.g. Lead a reserving process" />
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
         <span className="secondary">Definition (optional)</span>
-        <input value={form.definition ?? ''} onChange={(e) => setForm({ ...form, definition: e.target.value })} />
+        <input readOnly={!!existing} value={form.definition ?? ''} onChange={(e) => setForm({ ...form, definition: e.target.value })} />
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
         <span className="secondary">Demonstration standard — what would have to be true for this to count?</span>
@@ -137,9 +141,9 @@ function AddCapabilityForm({ onAdded }: { onAdded: (id: string) => Promise<void>
       {error && <p style={{ color: 'var(--critical)', fontSize: 13, margin: 0 }}>{error}</p>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" disabled={busy || !form.canonical_name.trim() || !form.demonstration_standard.trim()} onClick={submit}>
-          {busy ? 'Creating…' : 'Create capability'}
+          {busy ? 'Saving…' : existing ? 'Save specification' : 'Create capability'}
         </button>
-        <button onClick={() => setOpen(false)} disabled={busy}>
+        <button onClick={() => { setOpen(false); onCancel?.() }} disabled={busy}>
           Cancel
         </button>
       </div>
@@ -529,6 +533,15 @@ function CapabilityDetail({ id, onListChanged }: { id: string; onListChanged: ()
               onChange={(e) => setDraft({ ...draft, min_core_required: e.target.value === '' ? null : Number(e.target.value) })}
             />
           )}
+          <label>
+            Economic salience
+            <select value={draft.economic_salience ?? ''} onChange={(e) => setDraft({ ...draft, economic_salience: (e.target.value || null) as CapabilityInput['economic_salience'] })}>
+              <option value="">(unset)</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
           <textarea rows={2} placeholder="notes" value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
           {error && <p style={{ color: 'var(--critical)', fontSize: 13, margin: 0 }}>{error}</p>}
           <div style={{ display: 'flex', gap: 8 }}>
@@ -569,6 +582,8 @@ function CapabilityDetail({ id, onListChanged }: { id: string; onListChanged: ()
 
 export default function Capabilities() {
   const [capabilities, setCapabilities] = useState<CapabilitySummary[]>([])
+  const [unconfigured, setUnconfigured] = useState<UnconfiguredCapability[]>([])
+  const [configuring, setConfiguring] = useState<UnconfiguredCapability | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('active')
   const [q, setQ] = useState('')
@@ -576,7 +591,27 @@ export default function Capabilities() {
   const [rebuildBusy, setRebuildBusy] = useState(false)
   const [rebuildResult, setRebuildResult] = useState<RebuildSummary | null>(null)
 
-  const reload = () => api.listCapabilities({ status: statusFilter, q: q || undefined }).then(setCapabilities)
+  const requestVersion = useRef(0)
+  const reload = async () => {
+    const version = ++requestVersion.current
+    const [ready, pending] = await Promise.all([
+      api.listCapabilities({ status: statusFilter, q: q || undefined }),
+      api.listUnconfiguredCapabilities(q || undefined),
+    ])
+    if (version !== requestVersion.current) return
+    setCapabilities(ready)
+    setUnconfigured(pending)
+  }
+  const onAdded = async (id: string) => {
+    ++requestVersion.current
+    setStatusFilter('active')
+    setQ('')
+    const [ready, pending] = await Promise.all([api.listCapabilities({ status: 'active' }), api.listUnconfiguredCapabilities()])
+    setCapabilities(ready)
+    setUnconfigured(pending)
+    setConfiguring(null)
+    setSelectedId(id)
+  }
 
   useEffect(() => {
     reload().catch((e) => setError(String(e)))
@@ -600,8 +635,7 @@ export default function Capabilities() {
     <div>
       <h1 style={{ fontSize: 22, margin: 0 }}>Capability catalogue</h1>
       <p className="secondary" style={{ marginTop: 4 }}>
-        Curated, economically meaningful units of "what a person can do" — deliberately not renamed skills. Each one
-        composes from core/supporting/contextual atomic concepts and carries its own demonstration standard.
+        Capability concepts originate in the Vocabulary. Add an assessment specification here to make them usable by the capability engine.
       </p>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '16px 0' }}>
@@ -625,19 +659,23 @@ export default function Capabilities() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <AddCapabilityForm
-            onAdded={async (id) => {
-              await reload()
-              setSelectedId(id)
-            }}
-          />
-          {capabilities.length === 0 && <p className="muted">No capabilities yet.</p>}
+          <h2 style={{ fontSize: 16, margin: 0 }}>Needs specification</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {unconfigured.length} capability concepts in Vocabulary need assessment specifications{q ? ' matching this search' : ''}.
+          </p>
+          {unconfigured.map((c) => (
+            <button key={c.id} className="primary" style={{ textAlign: 'left' }} onClick={() => { setConfiguring(c); setSelectedId(null) }}>
+              Configure {c.canonical_name}
+            </button>
+          ))}
+          <h2 style={{ fontSize: 16 }}> {statusFilter === 'active' ? 'Assessment-ready' : 'Configured — ' + statusFilter}</h2>
+          {capabilities.length === 0 && <p className="muted">No configured capabilities match this view.</p>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {capabilities.map((c) => (
               <div
                 key={c.id}
                 className="card"
-                onClick={() => setSelectedId(c.id)}
+                onClick={() => { setSelectedId(c.id); setConfiguring(null) }}
                 style={{ cursor: 'pointer', borderColor: selectedId === c.id ? 'var(--series-1)' : undefined }}
               >
                 <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -655,12 +693,15 @@ export default function Capabilities() {
               </div>
             ))}
           </div>
+          <AddCapabilityForm onAdded={onAdded} />
         </div>
         <div>
-          {selectedId ? (
+          {configuring ? (
+            <AddCapabilityForm key={configuring.id} existing={configuring} onAdded={onAdded} onCancel={() => setConfiguring(null)} />
+          ) : selectedId ? (
             <CapabilityDetail id={selectedId} onListChanged={reload} />
           ) : (
-            <p className="muted">Select a capability on the left, or create a new one.</p>
+            <p className="muted">Select a Vocabulary capability under Needs specification, or open an assessment-ready capability.</p>
           )}
         </div>
       </div>

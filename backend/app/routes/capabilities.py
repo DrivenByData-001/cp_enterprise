@@ -1,12 +1,10 @@
-"""Capability catalogue curation + coverage (brief §5/§6/§27).
+"""Assessment specifications for Vocabulary capability concepts.
 
-`jobber.capability_detail` already exists (0002) — this reuses it rather
-than creating a second capability model. A capability is one
-`jobber.concept` row with `type_code = 'capability'` plus its one
-`capability_detail` row, created/edited together so the two can never drift
-out of sync in the API surface (even though they are, and stay, two rows).
+An active capability without detail legitimately awaits specification. Configure
+adds only detail to its existing identity; create-new remains a secondary path.
 """
 
+from uuid import UUID
 from datetime import datetime, timezone
 
 import psycopg
@@ -15,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from .. import capability_engine as engine
 from ..db import db_cursor
 from ..models import (
+    CapabilityConfigure,
     CapabilityCreate,
     CapabilityMerge,
     CapabilityUpdate,
@@ -65,6 +64,50 @@ def list_capabilities(status: str = "active", q: str | None = None):
         for row in rows:
             row.update(_component_summary(cur, row["id"]))
     return rows
+
+
+@router.get("/unconfigured")
+def list_unconfigured_capabilities(q: str | None = None):
+    query = """
+        SELECT c.id, c.canonical_name, c.definition, c.status, c.origin, c.created_at, c.reviewed_at
+        FROM jobber.concept c
+        WHERE c.type_code = 'capability' AND c.status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM jobber.capability_detail cd WHERE cd.concept_id = c.id)
+    """
+    params = []
+    if q:
+        query += " AND c.canonical_name ILIKE %s"
+        params.append(f"%{q}%")
+    query += " ORDER BY c.canonical_name"
+    with db_cursor() as cur:
+        cur.execute(query, params)
+        return [_row_to_capability(row) for row in cur.fetchall()]
+
+
+@router.post("/{capability_id}/configure")
+def configure_capability(capability_id: UUID, payload: CapabilityConfigure):
+    with db_cursor() as cur:
+        # Serialize against another configuration or concurrent Vocabulary edit.
+        cur.execute("SELECT type_code, status FROM jobber.concept WHERE id = %s FOR UPDATE", (capability_id,))
+        concept = cur.fetchone()
+        if not concept:
+            raise HTTPException(404, "concept not found")
+        if concept["type_code"] != "capability" or concept["status"] != "active":
+            raise HTTPException(400, "concept must be an active capability")
+        cur.execute(
+            """
+            INSERT INTO jobber.capability_detail
+                (concept_id, demonstration_standard, min_depth, min_autonomy, requires_all_core,
+                 min_core_required, economic_salience, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (concept_id) DO NOTHING RETURNING concept_id
+            """,
+            (capability_id, payload.demonstration_standard, payload.min_depth, payload.min_autonomy,
+             payload.requires_all_core, payload.min_core_required, payload.economic_salience, payload.notes),
+        )
+        if not cur.fetchone():
+            raise HTTPException(409, "capability already has an assessment specification")
+    return {"id": str(capability_id), "status": "configured"}
 
 
 @router.post("")
@@ -173,7 +216,7 @@ def update_capability(capability_id: str, payload: CapabilityUpdate):
                 ("economic_salience", payload.economic_salience),
                 ("notes", payload.notes),
             )
-            if v is not None
+            if k in payload.model_fields_set and (v is not None or k in {"min_autonomy", "min_core_required", "economic_salience", "notes"})
         }
         if detail_fields:
             set_clause = ", ".join(f"{k} = %s" for k in detail_fields)
