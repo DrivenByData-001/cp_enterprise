@@ -1,27 +1,41 @@
 """Target requirements retain their wording and an explicit vocabulary resolution."""
 from fastapi import HTTPException
 
-from .concept_linking import exact_match_concept_id, normalize_name
+from .concept_linking import bulk_exact_match_concept_ids, normalize_name
 
 
 def resolve_requirements(cur, skills):
     items = [dict(skill) for skill in skills]
-    # Per-item candidate resolution (explicit concept_id, or an exact-match
-    # lookup against the vocabulary) stays one call per item — that lookup
-    # is name/alias text matching, not a batchable id fetch, and
-    # concept_linking.exact_match_concept_id is deliberately the same
-    # "cheap enough to call inline" helper every other extraction path uses.
-    # The one check genuinely worth batching is the *candidate id ->
-    # still-active concept* verification below: with N skills that was N
-    # single-row SELECTs; a target's requirement list is edited and
-    # re-previewed live as the user types, so this runs often.
-    candidate_ids: list[str] = []
+    # Two batched lookups, each in a bounded number of queries regardless of
+    # how many skills there are — a target's requirement list is edited and
+    # re-previewed live as the user types, so this runs often, and N skills
+    # must not mean O(N) round trips:
+    #
+    # 1. Auto-match candidates (no explicit concept_id, not already marked
+    #    reviewed — an item explicitly marked reviewed with nothing chosen
+    #    means "treat as unmapped", not "go try to auto-match it") resolved
+    #    together via bulk_exact_match_concept_ids, which was previously one
+    #    exact_match_concept_id() call — up to two single-row SELECTs — per
+    #    such item.
+    names_to_match = [
+        normalize_name(item["name"]) for item in items
+        if not item.get("concept_id") and not item.get("mapping_reviewed")
+    ]
+    matched_by_name = bulk_exact_match_concept_ids(cur, names_to_match)
+
+    candidate_ids: list[str | None] = []
     for item in items:
         explicit = item.get("concept_id")
-        cid = explicit or (None if item.get("mapping_reviewed") else
-                           exact_match_concept_id(cur, normalize_name(item["name"])))
+        if explicit:
+            cid = explicit
+        elif item.get("mapping_reviewed"):
+            cid = None
+        else:
+            cid = matched_by_name.get(normalize_name(item["name"]))
         candidate_ids.append(cid)
 
+    # 2. Every resulting candidate id (explicit or auto-matched) verified as
+    #    a currently-active concept in one WHERE id = ANY(...) query.
     concepts_by_id: dict[str, dict] = {}
     unique_ids = list({cid for cid in candidate_ids if cid})
     if unique_ids:

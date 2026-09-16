@@ -3,7 +3,7 @@
 This change implements the eight recommendations from the repository review.
 
 ## Consistent role discovery
-Dashboard concept filters and facet counts now use the canonical requirement-evidence loader used by comparison and economics. Non-superseded, non-rejected requirement claims take precedence at role level. When no usable claims exist, mapped legacy observations participate, except where a rejected or superseded claim vetoes that concept. Facets count distinct observed postings, excluding target roles. Pending claims remain eligible for discovery under the existing comparison policy; this does not accept them as reviewed.
+Dashboard concept filters and facet counts now use the canonical requirement-evidence loader used by comparison and economics. Current, accepted requirement claims take precedence at role level — an unreviewed claim is a visible proposal only and is not treated as usable evidence merely because nobody has rejected it yet. When no usable claims exist, mapped legacy observations participate, except for a concept a curator has explicitly rejected or corrected away for that role; a claim that is merely superseded without ever having been reviewed (for instance by a newer unreviewed proposal from a re-extraction) does not veto. Facets count distinct observed postings, excluding target roles.
 
 Filters and pagination are represented in the URL. Changing the facet category clears its concept and resets pagination in the same navigation. Obsolete responses cannot overwrite current results. Failed requests offer retry; empty filtered results offer clear filters, while an empty all-years collection offers import.
 

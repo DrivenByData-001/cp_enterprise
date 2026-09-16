@@ -78,6 +78,47 @@ def test_resolve_requirements_dedupes_repeated_concept_across_skills(client):
     assert counting.query_count == 1
 
 
+def test_resolve_requirements_query_count_does_not_grow_with_requirement_count(client):
+    """The full mix in one call — several requirements that auto-match a
+    canonical name, several that only auto-match via an alias, and several
+    that match nothing at all — must still cost a small, fixed number of
+    queries: one bulk canonical-name match, one bulk alias match, one
+    active-concept verification for whatever resolved. Before batching the
+    auto-match step, this alone cost up to 2 queries per auto-matched
+    requirement (exact_match_concept_id) plus 1 per resolved requirement
+    (the old per-item verification) — here that would have been up to
+    8*2 + 8*2 + 8 = 40 queries for 24 requirements; batched, it's 3."""
+    with db.db_cursor() as raw_cur:
+        canonical_names = [f"Auto Match {i}" for i in range(8)]
+        for name in canonical_names:
+            _active_concept(raw_cur, name)
+
+        aliased_id = _active_concept(raw_cur, "Aliased Target Concept")
+        alias_names = [f"target-alias-{i}" for i in range(8)]
+        for alias in alias_names:
+            raw_cur.execute(
+                "INSERT INTO jobber.concept_alias (concept_id, alias, origin, created_at) VALUES (%s, %s, 'curator', now())",
+                (aliased_id, alias),
+            )
+
+        unmatched_names = [f"nobody curated this {i}" for i in range(8)]
+
+        counting = _CountingCursor(raw_cur)
+        skills = (
+            [{"name": name} for name in canonical_names]
+            + [{"name": alias} for alias in alias_names]
+            + [{"name": name} for name in unmatched_names]
+        )
+        result = resolve_requirements(counting, skills)
+
+    mapped = [r for r in result if r["mapping_status"] == "mapped"]
+    unmapped = [r for r in result if r["mapping_status"] == "unmapped"]
+    assert len(mapped) == 16  # 8 canonical + 8 alias
+    assert len(unmapped) == 8
+    assert all(r["concept_id"] == aliased_id for r in result[8:16])
+    assert counting.query_count == 3  # bulk canonical match, bulk alias match, active-id verification
+
+
 def test_resolve_requirements_skips_the_verification_query_when_nothing_resolves(client):
     """`mapping_reviewed=True` with no explicit concept_id skips the
     exact-match lookup too (per resolve_requirements' own short-circuit —
