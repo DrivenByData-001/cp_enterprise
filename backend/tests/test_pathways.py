@@ -10,6 +10,7 @@ from datetime import date
 
 from app import pathways
 from app import personal_earnings as earnings
+from app.economics_freshness import record_rebuild
 from app.db import create_document, db_cursor, to_json_param, upsert_role_instance
 from query_counter import count_queries
 
@@ -208,6 +209,14 @@ def _scenario(cur, *, with_intermediate=True, with_compensation=True, with_perso
 
     if with_personal:
         _personal_observation(cur)
+
+    # These fixtures write the derived economics tables directly, which a real
+    # `POST /api/economics/rebuild` would also have recorded its source state
+    # for. Without that record the derived figures are correctly treated as
+    # never-rebuilt and withheld — so the scenario has to say a rebuild
+    # happened, last, once every source row exists.
+    if with_compensation:
+        record_rebuild(cur, "test-engine")
 
     return {
         "market_id": market_id, "target_id": target_id, "target_archetype": target_archetype,

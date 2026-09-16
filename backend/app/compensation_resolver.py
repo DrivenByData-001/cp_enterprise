@@ -21,12 +21,40 @@ visibly distinct things ("Advert salary" / "Market estimate" / "Legacy
 estimate" / "Insufficient evidence"); nothing here merges them, and there is
 no code path that promotes a lower tier's number into a higher tier's label.
 
-Within tier 1, a *reviewed* stated observation (one carrying a verbatim
-`evidence_span` quoted from the immutable source document — see
+### Which stated figure is the headline (tier 1)
+
+A posting can legitimately state several different things — a base salary, a
+bonus percentage, a total package, a contractor day rate — and the extractor
+deliberately produces one observation per stated figure. Picking "the first
+accepted row" would let a bonus or a package become the role's headline
+"Advert salary", nondeterministically. `_PRIMARY_COMPONENT_PRIORITY` fixes
+that with explicit primary-compensation semantics:
+
+    1. base / annual      — ordinary salaried pay, the normal headline
+    2. day_rate (or base / daily) — genuine contracting
+    3. total_package      — a real figure, but labelled as a package, never
+                            silently shown as base salary
+    x. bonus_pct          — supplementary, never the headline
+
+Everything not chosen stays visible on the result as `supplementary`, so a
+stated bonus is reported rather than discarded.
+
+Within one component, the order is fully deterministic and every tiebreak is
+a real signal, never row order: a *reviewed* observation (one carrying a
+verbatim `evidence_span` quoted from the immutable source — see
 app/posting_compensation.py) outranks the mechanical 0013 backfill
-projection of the legacy `role_instance.salary_min/max` columns, which has
-no quote behind it. Both are genuinely "stated on the advert"; the reviewed
-one simply has better provenance, so it is the one shown.
+projection of the legacy `role_instance.salary_min/max` columns, which has no
+quote behind it; then the most recent human review decision (`reviewed_at`),
+so a correction accepted after an earlier mistake wins; then `observed_at`;
+then id.
+
+### Derived-economics freshness (tier 2)
+
+Tier 2 reads `d_archetype_comp`, which is only ever written by an explicit
+economics rebuild. When source evidence has changed since that rebuild, the
+benchmark is **withheld** — resolution falls through to
+`insufficient_evidence` with a reason naming the rebuild — rather than
+presenting last week's number as current. See `app/economics_freshness.py`.
 
 ## Comparison compatibility (build §4)
 
@@ -60,11 +88,43 @@ BASIS_LABELS = {
 _DEFAULT_COMPONENT = "base"
 _DEFAULT_PAY_PERIOD = "annual"
 
+# Primary-compensation semantics for a role's headline figure (see module
+# docstring). A component absent from this mapping — `bonus_pct` is the only
+# one — can never be the headline, however it is ordered in the table.
+_PRIMARY_COMPONENT_PRIORITY = {
+    ("base", "annual"): 0,
+    ("day_rate", "daily"): 1,
+    ("base", "daily"): 1,
+    ("day_rate", "annual"): 1,
+    ("total_package", "annual"): 2,
+    ("total_package", "daily"): 2,
+}
+
+# What each headline component is actually called, so a package is never
+# presented as a base salary and a day rate is never presented as one either.
+COMPONENT_HEADLINE_LABEL = {
+    ("base", "annual"): "base salary",
+    ("base", "daily"): "day rate",
+    ("day_rate", "daily"): "day rate",
+    ("day_rate", "annual"): "day rate",
+    ("total_package", "annual"): "total package",
+    ("total_package", "daily"): "total package",
+    ("bonus_pct", "annual"): "bonus",
+    ("bonus_pct", "daily"): "bonus",
+}
+
+
+def _primary_rank(observation: dict) -> int | None:
+    """None means this observation can never be a headline figure."""
+    return _PRIMARY_COMPONENT_PRIORITY.get((observation["component"], observation["pay_period"]))
+
 
 def _insufficient(reason: str, trace: dict | None = None) -> dict:
     return {
         "basis": BASIS_INSUFFICIENT,
         "basis_label": BASIS_LABELS[BASIS_INSUFFICIENT],
+        "component_label": None,
+        "supplementary": [],
         "currency": None,
         "amount_min": None,
         "amount_reference": None,
@@ -121,20 +181,27 @@ def _load_roles(cur, role_ids: list[str]) -> dict[str, dict]:
 
 def _load_role_observations(cur, role_ids: list[str]) -> dict[str, list[dict]]:
     """Every accepted compensation observation attached directly to these
-    roles, in one query. Ordered so the caller can take the first row per
-    (role, basis) without re-sorting: reviewed source-quoted evidence first,
-    then the most recently observed."""
+    roles, in one query.
+
+    The ORDER BY is the deterministic tiebreak *within* a component, not the
+    headline choice itself — `_select_primary_stated` applies the component
+    priority first. Every term here is a real signal: source-quoted evidence
+    before the unquoted backfill projection, then the most recent human
+    review decision (so an accepted correction beats the figure it corrects),
+    then the observation date, then id so identical candidates never flip."""
     if not role_ids:
         return {}
     cur.execute(
         """
         SELECT co.id, co.role_instance_id, co.basis, co.component, co.pay_period, co.employment_basis,
-               co.amount_min, co.amount_mid, co.amount_max, co.currency, co.evidence_span,
-               co.observed_at, co.document_id, co.source_note, co.market_id, m.label AS market_label
+               co.amount_min, co.amount_mid, co.amount_max, co.bonus_pct, co.currency, co.evidence_span,
+               co.observed_at, co.reviewed_at, co.document_id, co.source_note,
+               co.market_id, m.label AS market_label
         FROM jobber.compensation_observation co
         LEFT JOIN jobber.market m ON m.id = co.market_id
         WHERE co.review_status = 'accepted' AND co.role_instance_id = ANY(%s::uuid[])
-        ORDER BY (co.evidence_span IS NULL), co.observed_at DESC NULLS LAST, co.id
+        ORDER BY (co.evidence_span IS NULL), co.reviewed_at DESC NULLS LAST,
+                 co.observed_at DESC NULLS LAST, co.id
         """,
         (role_ids,),
     )
@@ -142,6 +209,49 @@ def _load_role_observations(cur, role_ids: list[str]) -> dict[str, list[dict]]:
     for row in cur.fetchall():
         grouped.setdefault(str(row["role_instance_id"]), []).append(dict(row))
     return grouped
+
+
+def _select_primary_stated(observations: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Split this role's accepted `posting_stated` observations into the one
+    headline figure and everything else.
+
+    A bonus percentage is never eligible to be the headline, whatever else
+    the role has — returning it as "Advert salary" was the defect this
+    replaces. The remainder is returned so a stated bonus or package is still
+    reported alongside the headline rather than silently dropped."""
+    stated = [o for o in observations if o["basis"] == "posting_stated"]
+    if not stated:
+        return None, []
+    eligible = [o for o in stated if _primary_rank(o) is not None]
+    if not eligible:
+        # e.g. a posting that states only a bonus percentage: there is no
+        # headline pay figure here, and inventing one from the bonus would be
+        # exactly the error this function exists to prevent.
+        return None, stated
+    # `stated` already arrives in the deterministic within-component order
+    # from the query above, so a stable sort on component priority alone
+    # preserves it as the secondary key.
+    primary = min(eligible, key=lambda o: (_primary_rank(o), eligible.index(o)))
+    return primary, [o for o in stated if o["id"] != primary["id"]]
+
+
+def _supplementary(observations: list[dict]) -> list[dict]:
+    """Accepted stated figures that are not the headline — reported, never
+    merged into it and never used as a fallback headline."""
+    return [
+        {
+            "observation_id": str(o["id"]),
+            "component": o["component"],
+            "pay_period": o["pay_period"],
+            "label": COMPONENT_HEADLINE_LABEL.get((o["component"], o["pay_period"]), o["component"]),
+            "amount_min": float(o["amount_min"]) if o["amount_min"] is not None else None,
+            "amount_max": float(o["amount_max"]) if o["amount_max"] is not None else None,
+            "bonus_pct": float(o["bonus_pct"]) if o["bonus_pct"] is not None else None,
+            "currency": o["currency"],
+            "evidence_span": o["evidence_span"],
+        }
+        for o in observations
+    ]
 
 
 def load_archetype_benchmarks(
@@ -185,12 +295,15 @@ def load_archetype_benchmarks(
 
 # --- Resolution -------------------------------------------------------------
 
-def _from_stated_observation(observation: dict, role: dict) -> dict:
+def _from_stated_observation(observation: dict, role: dict, supplementary: list[dict] | None = None) -> dict:
     lo = float(observation["amount_min"]) if observation["amount_min"] is not None else None
     hi = float(observation["amount_max"]) if observation["amount_max"] is not None else None
     mid = float(observation["amount_mid"]) if observation["amount_mid"] is not None else None
     reference = mid if mid is not None else ((lo + hi) / 2 if lo is not None and hi is not None else (lo if lo is not None else hi))
+    headline = COMPONENT_HEADLINE_LABEL.get((observation["component"], observation["pay_period"]), observation["component"])
     return {
+        "component_label": headline,
+        "supplementary": _supplementary(supplementary or []),
         "basis": BASIS_ADVERT_STATED,
         "basis_label": BASIS_LABELS[BASIS_ADVERT_STATED],
         "currency": observation["currency"],
@@ -214,9 +327,9 @@ def _from_stated_observation(observation: dict, role: dict) -> dict:
         "reference_source": "posting_stated",
         "evidence_quality": "good" if observation["evidence_span"] else "moderate",
         "reason": (
-            "Compensation stated on this posting, reviewed against a verbatim quote from the source document."
+            f"The {headline} stated on this posting, reviewed against a verbatim quote from the source document."
             if observation["evidence_span"]
-            else "Compensation stated on this posting (projected from the captured salary fields; no source quote recorded)."
+            else f"The {headline} stated on this posting (projected from the captured salary fields; no source quote recorded)."
         ),
         "trace": {
             "tier": 1,
@@ -235,6 +348,8 @@ def _from_archetype_benchmark(benchmark: dict, role: dict | None = None) -> dict
     return {
         "basis": BASIS_MARKET_ESTIMATE,
         "basis_label": BASIS_LABELS[BASIS_MARKET_ESTIMATE],
+        "component_label": COMPONENT_HEADLINE_LABEL.get((benchmark["component"], benchmark["pay_period"]), benchmark["component"]),
+        "supplementary": [],
         "currency": benchmark["currency"],
         "amount_min": lo,
         "amount_reference": reference,
@@ -305,6 +420,8 @@ def _from_legacy_estimate(role: dict, observations: list[dict]) -> dict | None:
     return {
         "basis": BASIS_LEGACY_ESTIMATE,
         "basis_label": BASIS_LABELS[BASIS_LEGACY_ESTIMATE],
+        "component_label": COMPONENT_HEADLINE_LABEL.get((component, pay_period), component),
+        "supplementary": [],
         "currency": currency,
         "amount_min": lo,
         "amount_reference": reference,
@@ -332,11 +449,20 @@ def _from_legacy_estimate(role: dict, observations: list[dict]) -> dict | None:
 
 def resolve_role_compensation_bulk(
     cur, role_ids: list[str], *, market_id: str | None = None, currency: str | None = None,
+    freshness: dict | None = None,
 ) -> dict[str, dict]:
     """The precedence rule applied to many roles in a fixed number of
-    queries (three, regardless of how many roles) — Pathways resolves
+    queries (four, regardless of how many roles) — Pathways resolves
     compensation for every candidate archetype's supporting postings and must
-    not issue one query per role."""
+    not issue one query per role.
+
+    `freshness` is the derived-economics verdict (`economics_freshness.
+    economics_freshness`). Pass a pre-computed one when resolving inside a
+    larger composition so it is not recomputed per call; omitted, it is read
+    here. When it is not fresh, tier 2 is skipped entirely — a benchmark
+    built before the current evidence is not presented as current."""
+    from .economics_freshness import economics_freshness
+
     role_ids = [str(r) for r in role_ids]
     if not role_ids:
         return {}
@@ -344,6 +470,8 @@ def resolve_role_compensation_bulk(
     observations = _load_role_observations(cur, role_ids)
     archetype_ids = sorted({str(r["archetype_concept_id"]) for r in roles.values() if r["archetype_concept_id"]})
     benchmarks = load_archetype_benchmarks(cur, archetype_ids, market_id=market_id, currency=currency)
+    if freshness is None:
+        freshness = economics_freshness(cur)
 
     resolved: dict[str, dict] = {}
     for role_id in role_ids:
@@ -353,46 +481,68 @@ def resolve_role_compensation_bulk(
             continue
         role_observations = observations.get(role_id, [])
 
-        stated = next((o for o in role_observations if o["basis"] == "posting_stated"), None)
-        if stated is not None:
-            resolved[role_id] = _from_stated_observation(stated, role)
+        primary, other_stated = _select_primary_stated(role_observations)
+        if primary is not None:
+            resolved[role_id] = _from_stated_observation(primary, role, other_stated)
             continue
 
         archetype_id = str(role["archetype_concept_id"]) if role["archetype_concept_id"] else None
         benchmark = benchmarks.get(archetype_id) if archetype_id else None
-        if benchmark is not None and benchmark["reference_comp"] is not None:
+        usable_benchmark = benchmark is not None and benchmark["reference_comp"] is not None
+        if usable_benchmark and freshness["fresh"]:
             resolved[role_id] = _from_archetype_benchmark(benchmark, role)
+            resolved[role_id]["supplementary"] = _supplementary(other_stated)
             continue
 
         legacy = _from_legacy_estimate(role, role_observations)
-        if legacy is not None:
+        if legacy is not None and not usable_benchmark:
+            # A stale benchmark must not silently fall through to an even
+            # weaker legacy estimate dressed up as the best available answer:
+            # the honest report is that the benchmark exists but is out of
+            # date. Legacy is only reached when there is genuinely no usable
+            # benchmark at all.
+            legacy["supplementary"] = _supplementary(other_stated)
             resolved[role_id] = legacy
             continue
 
-        if archetype_id is None:
+        if usable_benchmark:
+            reason = (
+                f"No compensation is stated on this role. The {role['archetype_name']} archetype has a market "
+                f"benchmark, but it is withheld: {freshness['reason']}"
+            )
+            trace = {"tier": 2, "withheld": "stale_derived_economics", "freshness": freshness["state"],
+                     "archetype_concept_id": archetype_id}
+        elif archetype_id is None:
             reason = (
                 "No compensation is stated on this role, and it has no reviewed archetype, so no market "
                 "benchmark applies. Assign an archetype, or review stated compensation from the source."
             )
+            trace = {"tier": 4, "archetype_concept_id": None, "has_archetype_comp_row": False}
         elif benchmark is None:
             reason = (
                 f"No compensation is stated on this role, and no compensation evidence has been accepted for the "
                 f"{role['archetype_name']} archetype in this market yet."
             )
+            trace = {"tier": 4, "archetype_concept_id": archetype_id, "has_archetype_comp_row": False}
         else:
             reason = (
                 f"No compensation is stated on this role, and the {role['archetype_name']} archetype has "
                 "compensation evidence but not enough for a reference benchmark."
             )
-        resolved[role_id] = _insufficient(
-            reason,
-            {"tier": 4, "archetype_concept_id": archetype_id, "has_archetype_comp_row": benchmark is not None},
-        )
+            trace = {"tier": 4, "archetype_concept_id": archetype_id, "has_archetype_comp_row": True}
+
+        withheld = _insufficient(reason, trace)
+        withheld["supplementary"] = _supplementary(other_stated)
+        resolved[role_id] = withheld
     return resolved
 
 
-def resolve_role_compensation(cur, role_id: str, *, market_id: str | None = None, currency: str | None = None) -> dict:
-    return resolve_role_compensation_bulk(cur, [role_id], market_id=market_id, currency=currency)[str(role_id)]
+def resolve_role_compensation(
+    cur, role_id: str, *, market_id: str | None = None, currency: str | None = None, freshness: dict | None = None,
+) -> dict:
+    return resolve_role_compensation_bulk(
+        cur, [role_id], market_id=market_id, currency=currency, freshness=freshness
+    )[str(role_id)]
 
 
 # Public names for the two builders Pathways needs directly: it has already
@@ -404,13 +554,26 @@ insufficient_compensation = _insufficient
 
 def resolve_archetype_compensation(
     cur, archetype_concept_id: str, *, market_id: str | None = None, currency: str | None = None,
+    freshness: dict | None = None,
 ) -> dict:
     """An archetype has no advert of its own, so its resolution starts at
-    tier 2 and falls straight to 'insufficient evidence'."""
+    tier 2 and falls straight to 'insufficient evidence' — including when the
+    benchmark exists but the derived tables behind it are out of date."""
+    from .economics_freshness import economics_freshness
+
     benchmarks = load_archetype_benchmarks(cur, [str(archetype_concept_id)], market_id=market_id, currency=currency)
     benchmark = benchmarks.get(str(archetype_concept_id))
-    if benchmark is not None and benchmark["reference_comp"] is not None:
+    if freshness is None:
+        freshness = economics_freshness(cur)
+    usable = benchmark is not None and benchmark["reference_comp"] is not None
+    if usable and freshness["fresh"]:
         return _from_archetype_benchmark(benchmark)
+    if usable:
+        return _insufficient(
+            f"This archetype has a market benchmark, but it is withheld: {freshness['reason']}",
+            {"tier": 2, "withheld": "stale_derived_economics", "freshness": freshness["state"],
+             "archetype_concept_id": str(archetype_concept_id)},
+        )
     return _insufficient(
         "No accepted compensation evidence qualifies as a benchmark for this archetype in this market yet.",
         {"tier": 4, "archetype_concept_id": str(archetype_concept_id), "has_archetype_comp_row": benchmark is not None},

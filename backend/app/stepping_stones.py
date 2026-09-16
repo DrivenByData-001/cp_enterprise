@@ -22,16 +22,59 @@ def measured(result, started, cache_hit, evaluated):
     return result
 
 
-def assess_candidate(requirements, target_requirements, status_by_concept, pending=0, target_pending=0):
+# The three things `load_requirement_review_summary`'s `complete` flag folds
+# together, in the user's terms. Unreviewed claims alone were previously the
+# only one checked here, which let a role with an unresolved vocabulary
+# proposal — or one needing re-extraction after a proposal was resolved —
+# pass as fully reviewed.
+REVIEW_BLOCKER_LABELS = {
+    "unreviewed": "requirement claims still unreviewed",
+    "unresolved_proposals": "vocabulary proposals still unresolved",
+    "needs_reextraction": "concepts needing re-extraction after vocabulary resolution",
+}
+
+
+def review_blockers(summary) -> list[dict]:
+    """Which parts of the review gate are still open for one role, with
+    counts. Empty exactly when `summary['complete']` is true."""
+    summary = summary or {}
+    return [
+        {"kind": kind, "label": label, "count": summary.get(kind, 0)}
+        for kind, label in REVIEW_BLOCKER_LABELS.items()
+        if summary.get(kind, 0)
+    ]
+
+
+def review_is_complete(summary) -> bool:
+    """A missing summary means "nothing is known about this role's review
+    state", which is not the same as complete — but `load_requirement_review
+    _summary_bulk` always returns an entry for every id it is asked about, so
+    in practice this only guards a caller passing an unknown id."""
+    if not summary:
+        return True
+    return bool(summary.get("complete", not review_blockers(summary)))
+
+
+def assess_candidate(requirements, target_requirements, status_by_concept, review=None, target_review=None):
     """`requirements`/`target_requirements` come from the canonical
     `role_requirements` loader, which only ever returns *usable* evidence
     (accepted claims + fallback observations) — an unreviewed claim never
     appears in these lists at all, so it cannot be detected by inspecting
-    row content. `pending`/`target_pending` (current unreviewed-claim counts
-    from `role_requirements.load_requirement_review_summary_bulk`) are how
-    the caller tells this function "review is incomplete" instead —
-    preserved as an explicit gate below so a partially-reviewed role's
-    requirement set is never silently treated as final."""
+    row content. `review`/`target_review` (the full per-role summaries from
+    `role_requirements.load_requirement_review_summary_bulk`) are how the
+    caller tells this function "review is incomplete" instead — preserved as
+    an explicit gate below so a partially-reviewed role's requirement set is
+    never silently treated as final.
+
+    The *whole* summary is used, not just its unreviewed count: the canonical
+    gate is complete only when unreviewed, unresolved_proposals AND
+    needs_reextraction are all zero. A role with zero unreviewed claims but
+    an unresolved vocabulary term is not reviewed, and must not be assessed
+    as though it were."""
+    pending = (review or {}).get("unreviewed", 0)
+    target_pending = (target_review or {}).get("unreviewed", 0)
+    candidate_blockers = review_blockers(review)
+    target_blockers = review_blockers(target_review)
     # Repeated claims do not give a role extra weight. A required occurrence wins.
     unique = {}
     for row in requirements:
@@ -55,9 +98,14 @@ def assess_candidate(requirements, target_requirements, status_by_concept, pendi
     easier_than_target = (candidate_required_gaps < target_required_gaps or
                           (candidate_required_gaps <= target_required_gaps and coverage is not None
                            and target_coverage is not None and coverage > target_coverage))
-    if not reviewed or not required or not target or pending or target_pending:
+    if not reviewed or not required or not target or candidate_blockers or target_blockers:
         state = "insufficient_evidence"
         reason = "Review candidate and target requirements, including which are required, before assessing this step."
+        if candidate_blockers or target_blockers:
+            outstanding = "; ".join(
+                f"{b['count']} {b['label']}" for b in (candidate_blockers + target_blockers)
+            )
+            reason = f"Requirement review is not complete ({outstanding}). Resolve these before assessing this step."
     elif not target_gaps:
         state = "target_evidenced"
         reason = "Your evidence already covers the mapped target requirements; no development step is inferred."
@@ -82,6 +130,8 @@ def assess_candidate(requirements, target_requirements, status_by_concept, pendi
         "missing_required": missing, "unverified_required": unverified,
         "target_gaps_addressed": shared, "pending_requirements": pending,
         "target_pending_requirements": target_pending,
+        "review_complete": not candidate_blockers, "review_blockers": candidate_blockers,
+        "target_review_complete": not target_blockers, "target_review_blockers": target_blockers,
         "target_required_evidence_gaps": target_required_gaps,
         "legacy_requirements": sum(r["source"] == "role_skill_observation" for r in reviewed),
     }
@@ -127,14 +177,14 @@ def assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revi
                 save_status(cur, evidence_revision, key, evidence["status"])
                 evaluated += 1
     mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
-    target_pending = review_summary.get(target_id, {}).get("unreviewed", 0)
+    target_review = review_summary.get(str(target_id), {})
+    target_pending = target_review.get("unreviewed", 0)
     ranked = []
     for c in candidates:
         key = str(c["id"])
         vector = vectors.get(key, [])
-        candidate_pending = review_summary.get(key, {}).get("unreviewed", 0)
         assessment = assess_candidate(requirements.get(key, []), requirements.get(target_id, []), statuses,
-                                       pending=candidate_pending, target_pending=target_pending)
+                                       review=review_summary.get(key, {}), target_review=target_review)
         if not mapping["complete"]:
             assessment.update(assessment="incomplete_target_mapping", ranking_score=0,
                               explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.")
@@ -151,8 +201,8 @@ def assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revi
     return {
         "ranked": ranked, "target_mapping": mapping, "statuses": statuses,
         "target_requirements": requirements.get(target_id, []),
-        "target_pending_requirements": target_pending, "distinct_concepts": len(concepts),
-        "concepts_evaluated": evaluated,
+        "target_pending_requirements": target_pending, "target_review": target_review,
+        "distinct_concepts": len(concepts), "concepts_evaluated": evaluated,
     }
 
 

@@ -31,13 +31,29 @@ What this module deliberately does NOT do:
   `review_status = 'accepted'` rows participate, exactly as the jobber-side
   compensation layer requires accepted rows.
 
-"Current" vs "latest known" is a decision about the *source's own stated
-period*, not a guess about the present: an observation whose period is
-open-ended (no `period_end`) and whose known start is not in the future is
-current; one whose period has ended is historical. When no current evidence
-exists at all, the most recent historical evidence is returned instead with
-`status='historical'` and a note saying so — never silently presented as
-today's pay.
+"Current" vs "latest known" is a decision about what the *sources* actually
+establish, never a guess about the present — and, critically, never an
+assumption that an open-ended row is still in force. Two sources are
+consulted together:
+
+1. the observation's own stated period; and
+2. the **employment episode it belongs to** (`profile360.episodes`, joined
+   through `compensation_observation.episode_id`).
+
+An open-ended salary observation attached to an episode that ended in 2022 is
+*not* your current salary in 2026, however open-ended the observation row
+looks on its own — that was a real mislabelling this module previously
+produced, and it matters most for exactly the historical data this app is
+built to hold. An episode that has ended, or whose status is not one this
+module recognises as ongoing, makes its observations historical.
+
+An observation with no dates of its own at all is likewise not called current
+unless an ongoing episode genuinely establishes it. "No dates recorded" is
+absence of evidence, not evidence of currency.
+
+When no current evidence exists, the most recent historical evidence is
+returned with `status='historical'` and a note saying so — never silently
+presented as today's pay.
 """
 
 import hashlib
@@ -55,6 +71,12 @@ _BASE_COMPONENT_PRIORITY = ("annual_base", "day_rate", "periodic_base", "gross_p
 # Everything else is a real, accepted earnings fact that must stay visible
 # and separately identifiable, but is never the base-pay baseline.
 _OTHER_COMPONENTS = ("bonus", "allowance", "employer_pension", "other")
+
+# profile360.episodes.status values this module accepts as "still ongoing".
+# Deliberately a small allow-list rather than a deny-list: an unrecognised
+# status is treated as NOT ongoing, so an unfamiliar value can only ever make
+# this module more cautious about calling something current, never less.
+_ONGOING_EPISODE_STATUSES = {"active", "current", "ongoing"}
 
 # profile360 employment_basis -> the jobber-side vocabulary
 # (compensation_observation.employment_basis: permanent | contract | unknown).
@@ -114,15 +136,22 @@ def save_planning_assumption(cur, *, contract_billable_days_per_year: float | No
 # --- Reading the accepted person-side observations -------------------------
 
 def _accepted_observations(cur) -> list[dict]:
+    """Accepted person-side observations, each carrying its employment
+    episode's end date, status and label. One LEFT JOIN rather than a second
+    query per observation — and the episode context is not optional colour:
+    `_is_current` cannot answer correctly without it."""
     try:
         cur.execute(
             """
-            SELECT id, episode_id, source_kind, employment_basis, component,
-                   period_start, period_end, pay_date, amount, currency, unit, quantity,
-                   notes, uncertainty, created_at
-            FROM profile360.compensation_observation
-            WHERE review_status = 'accepted'
-            ORDER BY component, currency
+            SELECT co.id, co.episode_id, co.source_kind, co.employment_basis, co.component,
+                   co.period_start, co.period_end, co.pay_date, co.amount, co.currency, co.unit, co.quantity,
+                   co.notes, co.uncertainty, co.created_at,
+                   e.end_date AS episode_end_date, e.start_date AS episode_start_date,
+                   e.status AS episode_status, e.title AS episode_title, e.organisation AS episode_organisation
+            FROM profile360.compensation_observation co
+            LEFT JOIN profile360.episodes e ON e.id = co.episode_id
+            WHERE co.review_status = 'accepted'
+            ORDER BY co.component, co.currency
             """
         )
     except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege) as e:
@@ -170,19 +199,51 @@ def _effective_from(observation: dict) -> date | None:
     return observation["period_start"] or observation["pay_date"] or observation["period_end"]
 
 
-def _is_current(observation: dict, today: date) -> bool:
-    """Current means the *source's own stated period* has not ended.
+def _episode_is_ongoing(observation: dict, today: date) -> bool | None:
+    """Whether the employment episode this observation belongs to is still
+    running. `None` means there is no linked episode to consult — not "yes"."""
+    if observation.get("episode_id") is None:
+        return None
+    end = observation.get("episode_end_date")
+    if end is not None and end < today:
+        return False
+    status = observation.get("episode_status")
+    if status is not None and status not in _ONGOING_EPISODE_STATUSES:
+        return False
+    return True
 
-    An open-ended observation (no period_end) that has already started is
-    current — that is what "no end date recorded" means on a payslip or
-    contract, and inventing a staleness cut-off here would be this build's
-    own guesswork rather than the source's statement. An observation whose
-    period has ended, or that starts in the future, is not current."""
+
+def _is_current(observation: dict, today: date) -> bool:
+    """Whether this observation describes what the person is paid *now*.
+
+    Four rules, each of which can only ever demote to historical — nothing
+    here promotes an observation to current on weak grounds:
+
+    1. The observation's own stated period has ended -> historical.
+    2. It starts in the future -> not current yet.
+    3. The employment episode it belongs to has ended, or is not in a status
+       this module recognises as ongoing -> historical, however open-ended
+       the observation row itself looks. This is the rule that stops a 2019
+       salary from an employment that ended in 2022 being reported as your
+       current pay in 2026.
+    4. An observation with no dates of its own is current only if a linked
+       episode is genuinely ongoing. With no episode and no dates there is
+       nothing establishing currency, so it is historical — absence of
+       evidence is not evidence of currency.
+    """
     if observation["period_end"] is not None and observation["period_end"] < today:
         return False
     start = observation["period_start"] or observation["pay_date"]
     if start is not None and start > today:
         return False
+
+    episode_ongoing = _episode_is_ongoing(observation, today)
+    if episode_ongoing is False:
+        return False
+
+    if start is None and observation["period_end"] is None:
+        return episode_ongoing is True
+
     return True
 
 
@@ -199,10 +260,38 @@ def _evidence_period(observation: dict) -> str | None:
     return None
 
 
-def _serialize(observation: dict, *, evidence_status: str) -> dict:
+def _evidence_status_reason(observation: dict, today: date, evidence_status: str) -> str | None:
+    """Why this observation is not current, in the user's terms. Only ever
+    populated for a historical item, so a UI can explain the label instead of
+    leaving the user to wonder why a salary they still hold reads as past."""
+    if evidence_status == "current":
+        return None
+    if observation["period_end"] is not None and observation["period_end"] < today:
+        return f"Its stated period ended on {observation['period_end'].isoformat()}."
+    start = observation["period_start"] or observation["pay_date"]
+    if start is not None and start > today:
+        return f"It does not take effect until {start.isoformat()}."
+    if _episode_is_ongoing(observation, today) is False:
+        end = observation.get("episode_end_date")
+        where = observation.get("episode_title") or observation.get("episode_organisation") or "the linked episode"
+        if end is not None:
+            return f"{where} ended on {end.isoformat()}, so this pay is no longer in force."
+        return f"{where} is no longer recorded as ongoing, so this pay is no longer in force."
+    return (
+        "No period, pay date or ongoing employment episode establishes that this is still in force, "
+        "so it is reported as latest known rather than current."
+    )
+
+
+def _serialize(observation: dict, *, evidence_status: str, today: date) -> dict:
     return {
         "observation_id": str(observation["id"]),
         "episode_id": str(observation["episode_id"]) if observation["episode_id"] else None,
+        "episode_title": observation.get("episode_title"),
+        "episode_organisation": observation.get("episode_organisation"),
+        "episode_end_date": observation.get("episode_end_date"),
+        "episode_status": observation.get("episode_status"),
+        "evidence_status_reason": _evidence_status_reason(observation, today, evidence_status),
         "source_kind": observation["source_kind"],
         "employment_basis": observation["employment_basis"],
         "employment_basis_equivalent": EMPLOYMENT_BASIS_EQUIVALENT.get(observation["employment_basis"] or ""),
@@ -297,7 +386,7 @@ def personal_earnings_state(cur, *, today: date | None = None) -> dict:
     other_items: list[dict] = []
     for observation in observations:
         evidence_status = "current" if _is_current(observation, today) else "historical"
-        item = _serialize(observation, evidence_status=evidence_status)
+        item = _serialize(observation, evidence_status=evidence_status, today=today)
         if observation["component"] in _BASE_COMPONENT_PRIORITY:
             base_items.append(item)
         elif observation["component"] in _OTHER_COMPONENTS:
@@ -343,6 +432,24 @@ def personal_earnings_state(cur, *, today: date | None = None) -> dict:
     notes: list[str] = []
     if status == "historical":
         notes.append("No current compensation evidence — showing the latest known earnings instead.")
+        ended = [b for b in baselines if b.get("episode_end_date") is not None]
+        if ended:
+            where = ", ".join(
+                sorted({b.get("episode_title") or b.get("episode_organisation") or "an earlier role" for b in ended})
+            )
+            notes.append(
+                f"The most recent accepted pay evidence belongs to employment that has ended ({where}), "
+                "so it is not reported as your current earnings."
+            )
+        undated = [
+            b for b in baselines
+            if b["effective_from"] is None and b["period_end"] is None and b.get("episode_id") is None
+        ]
+        if undated:
+            notes.append(
+                "Some accepted compensation evidence carries no period, pay date or employment episode. "
+                "Without one of those, nothing establishes that it is still in force."
+            )
     if len(currencies) > 1:
         notes.append(
             "Accepted compensation evidence exists in more than one currency. "

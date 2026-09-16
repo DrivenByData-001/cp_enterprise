@@ -32,6 +32,7 @@ export const NO_COMPENSATION = {
   role_instance_id: 'role',
   compensation: {
     basis: 'insufficient_evidence' as const, basis_label: 'Insufficient compensation evidence',
+    component_label: null, supplementary: [],
     currency: null, amount_min: null, amount_reference: null, amount_max: null, component: null,
     pay_period: null, employment_basis: null, market: null, period: null, as_of: null, archetype: null,
     evidence: { n_observations: 0, n_posting_stated: 0, n_survey_sources: 0 },

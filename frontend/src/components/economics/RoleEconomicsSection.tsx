@@ -50,6 +50,18 @@ function CompensationReview({
     }
   }
 
+  // "Edit & accept": the reviewer's corrections to the proposed figures. The
+  // server re-applies every rule to an edited item exactly as it does to an
+  // untouched one, so this is a convenience, never a shortcut past validation.
+  const [editing, setEditing] = useState<number | null>(null)
+  const [draft, setDraft] = useState<CompensationProposalItem | null>(null)
+
+  const startEdit = (item: CompensationProposalItem, index: number) => {
+    setEditing(index)
+    setDraft({ ...item })
+    setError(null)
+  }
+
   const accept = async (item: CompensationProposalItem, index: number) => {
     setBusy(true)
     setError(null)
@@ -57,7 +69,8 @@ function CompensationReview({
       await api.acceptRoleCompensation(roleId, {
         amount_min: item.amount_min,
         amount_max: item.amount_max,
-        currency: item.currency as string,
+        bonus_pct: item.bonus_pct,
+        currency: item.currency,
         component: item.component as string,
         pay_period: item.pay_period as string,
         employment_basis: item.employment_basis,
@@ -65,6 +78,7 @@ function CompensationReview({
         note: item.note,
       })
       setAccepted((prior) => [...prior, index])
+      setEditing(null)
       onAccepted()
     } catch (e) {
       setError(String(e))
@@ -72,6 +86,8 @@ function CompensationReview({
       setBusy(false)
     }
   }
+
+  const numeric = (value: string) => (value.trim() === '' ? null : Number(value))
 
   if (!hasSourceDocument) {
     return (
@@ -131,10 +147,69 @@ function CompensationReview({
                 <span className="muted" style={{ fontSize: 12 }}>
                   Accepted as advert-stated compensation.
                 </span>
+              ) : editing === index && draft ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  {draft.component === 'bonus_pct' ? (
+                    <label style={{ fontSize: 12 }}>
+                      Bonus %
+                      <input
+                        type="number"
+                        aria-label="Bonus percentage"
+                        value={draft.bonus_pct ?? ''}
+                        onChange={(e) => setDraft({ ...draft, bonus_pct: numeric(e.target.value) })}
+                        style={{ display: 'block', width: 90 }}
+                      />
+                    </label>
+                  ) : (
+                    <>
+                      <label style={{ fontSize: 12 }}>
+                        Minimum
+                        <input
+                          type="number"
+                          aria-label="Minimum amount"
+                          value={draft.amount_min ?? ''}
+                          onChange={(e) => setDraft({ ...draft, amount_min: numeric(e.target.value) })}
+                          style={{ display: 'block', width: 110 }}
+                        />
+                      </label>
+                      <label style={{ fontSize: 12 }}>
+                        Maximum
+                        <input
+                          type="number"
+                          aria-label="Maximum amount"
+                          value={draft.amount_max ?? ''}
+                          onChange={(e) => setDraft({ ...draft, amount_max: numeric(e.target.value) })}
+                          style={{ display: 'block', width: 110 }}
+                        />
+                      </label>
+                      <label style={{ fontSize: 12 }}>
+                        Currency
+                        <input
+                          type="text"
+                          aria-label="Currency"
+                          value={draft.currency ?? ''}
+                          onChange={(e) => setDraft({ ...draft, currency: e.target.value.toUpperCase() })}
+                          style={{ display: 'block', width: 70 }}
+                        />
+                      </label>
+                    </>
+                  )}
+                  <button type="button" onClick={() => accept(draft, index)} disabled={busy}>
+                    Save & accept
+                  </button>
+                  <button type="button" onClick={() => setEditing(null)} disabled={busy}>
+                    Cancel
+                  </button>
+                </div>
               ) : (
-                <button type="button" onClick={() => accept(item, index)} disabled={busy || !item.acceptable}>
-                  Accept
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" onClick={() => accept(item, index)} disabled={busy || !item.acceptable}>
+                    Accept
+                  </button>
+                  <button type="button" onClick={() => startEdit(item, index)} disabled={busy}>
+                    Edit &amp; accept
+                  </button>
+                </div>
               )}
             </li>
           ))}
@@ -272,6 +347,141 @@ function ArchetypeReview({
   )
 }
 
+/** One accepted or rejected observation, with the affordances to correct or
+ * retire it. Both go through the compensation review lifecycle that already
+ * exists (`reviewCompensationObservation` / `correctCompensationObservation`),
+ * rather than a second mechanism specific to Role Detail. */
+function ObservationRow({
+  observation,
+  onChanged,
+}: {
+  observation: RoleCompensationResponse['observations'][number]
+  onChanged: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [min, setMin] = useState(observation.amount_min?.toString() ?? '')
+  const [max, setMax] = useState(observation.amount_max?.toString() ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const act = async (run: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await run()
+      setEditing(false)
+      onChanged()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const amount =
+    observation.bonus_pct !== null && observation.bonus_pct !== undefined
+      ? `${observation.bonus_pct}%`
+      : `${observation.amount_min ?? '?'} – ${observation.amount_max ?? '?'} ${observation.currency}`
+
+  return (
+    <li style={{ marginBottom: 8 }}>
+      <span style={{ textDecoration: observation.review_status === 'rejected' ? 'line-through' : undefined }}>
+        {amount}
+      </span>{' '}
+      <span className="muted">
+        ({observation.component}, {observation.basis}, {observation.review_status})
+      </span>
+      {observation.evidence_span && (
+        <div className="secondary" style={{ fontSize: 12 }}>
+          “{observation.evidence_span}”
+        </div>
+      )}
+      {observation.source_note && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          {observation.source_note}
+        </div>
+      )}
+
+      {observation.review_status === 'accepted' && !editing && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <button type="button" onClick={() => setEditing(true)} disabled={busy}>
+            Correct
+          </button>
+          <button
+            type="button"
+            onClick={() => act(() => api.reviewCompensationObservation(observation.id, 'reject'))}
+            disabled={busy}
+          >
+            Reject
+          </button>
+        </div>
+      )}
+
+      {observation.review_status === 'rejected' && (
+        <button
+          type="button"
+          onClick={() => act(() => api.reviewCompensationObservation(observation.id, 'accept'))}
+          disabled={busy}
+          style={{ marginTop: 4 }}
+        >
+          Re-accept
+        </button>
+      )}
+
+      {editing && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12 }}>
+            Minimum
+            <input
+              type="number"
+              aria-label={`Minimum amount for ${observation.component}`}
+              value={min}
+              onChange={(e) => setMin(e.target.value)}
+              style={{ display: 'block', width: 110 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            Maximum
+            <input
+              type="number"
+              aria-label={`Maximum amount for ${observation.component}`}
+              value={max}
+              onChange={(e) => setMax(e.target.value)}
+              style={{ display: 'block', width: 110 }}
+            />
+          </label>
+          <button
+            type="button"
+            // The shared correction endpoint only ever changes fields that
+            // are supplied, so a blank box means "leave as is", not "clear".
+            // With both blank there is nothing to correct.
+            disabled={busy || (min.trim() === '' && max.trim() === '')}
+            onClick={() =>
+              act(() =>
+                api.correctCompensationObservation(observation.id, {
+                  ...(min.trim() === '' ? {} : { amount_min: Number(min) }),
+                  ...(max.trim() === '' ? {} : { amount_max: Number(max) }),
+                }),
+              )
+            }
+          >
+            Save correction
+          </button>
+          <button type="button" onClick={() => setEditing(false)} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p style={{ color: 'var(--critical)', fontSize: 12 }} role="alert">
+          {error}
+        </p>
+      )}
+    </li>
+  )
+}
+
 export function RoleEconomicsSection({
   roleId,
   isTarget,
@@ -317,17 +527,7 @@ export function RoleEconomicsSection({
                 </summary>
                 <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13 }}>
                   {data.observations.map((observation) => (
-                    <li key={observation.id} style={{ marginBottom: 6 }}>
-                      {observation.amount_min ?? '?'} – {observation.amount_max ?? '?'} {observation.currency}{' '}
-                      <span className="muted">
-                        ({observation.basis}, {observation.review_status})
-                      </span>
-                      {observation.evidence_span && (
-                        <div className="secondary" style={{ fontSize: 12 }}>
-                          “{observation.evidence_span}”
-                        </div>
-                      )}
-                    </li>
+                    <ObservationRow key={observation.id} observation={observation} onChanged={load} />
                   ))}
                 </ul>
               </details>

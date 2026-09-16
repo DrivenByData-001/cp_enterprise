@@ -19,6 +19,8 @@ vi.mock('../lib/api', () => ({
     getArchetypeCatalogue: vi.fn(),
     proposeRoleArchetype: vi.fn(),
     setRoleArchetype: vi.fn(),
+    reviewCompensationObservation: vi.fn(),
+    correctCompensationObservation: vi.fn(),
     deleteRole: vi.fn(),
   },
 }))
@@ -64,6 +66,8 @@ function compensation(overrides: Partial<RoleCompensationResponse> = {}): RoleCo
     compensation: {
       basis: 'advert_stated',
       basis_label: 'Advert salary',
+      component_label: 'base salary',
+      supplementary: [],
       currency: 'GBP',
       amount_min: 120000,
       amount_reference: 132500,
@@ -125,6 +129,7 @@ function compensation(overrides: Partial<RoleCompensationResponse> = {}): RoleCo
         amount_min: 120000,
         amount_mid: null,
         amount_max: 145000,
+        bonus_pct: null,
         evidence_span: '£120,000 - £145,000 per annum',
         observed_at: '2026-01-15',
         source_note: null,
@@ -325,6 +330,7 @@ describe('Role Detail — compensation', () => {
           {
             amount_min: 99999,
             amount_max: null,
+            bonus_pct: null,
             currency: 'GBP',
             component: 'base',
             pay_period: 'annual',
@@ -450,5 +456,166 @@ describe('Role Detail — Pathways entry point', () => {
     renderRole()
 
     expect(await screen.findByText(/Pathways is built around a target/)).toBeTruthy()
+  })
+})
+
+describe('Role Detail — review findings', () => {
+  it('labels a total package as a package, never as a base salary', async () => {
+    const data = compensation()
+    data.compensation = {
+      ...data.compensation,
+      component: 'total_package',
+      component_label: 'total package',
+      reason: 'The total package stated on this posting, reviewed against a verbatim quote.',
+    }
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    renderRole()
+
+    expect(await screen.findByText('Advert total package')).toBeTruthy()
+    expect(screen.queryByText('Advert salary')).toBeNull()
+  })
+
+  it('labels a contract day rate as a day rate', async () => {
+    const data = compensation()
+    data.compensation = {
+      ...data.compensation,
+      component: 'day_rate',
+      pay_period: 'daily',
+      component_label: 'day rate',
+      amount_min: 650,
+      amount_max: 650,
+      amount_reference: 650,
+    }
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    renderRole()
+
+    expect(await screen.findByText('Advert day rate')).toBeTruthy()
+  })
+
+  it('reports a stated bonus alongside the headline, never as the headline', async () => {
+    const data = compensation()
+    data.compensation = {
+      ...data.compensation,
+      supplementary: [
+        {
+          observation_id: 'obs2',
+          component: 'bonus_pct',
+          pay_period: 'annual',
+          label: 'bonus',
+          amount_min: null,
+          amount_max: null,
+          bonus_pct: 15,
+          currency: 'GBP',
+          evidence_span: 'plus an annual bonus of up to 15%',
+        },
+      ],
+    }
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    renderRole()
+
+    // The headline stays the base salary…
+    expect(await screen.findByText('Advert salary')).toBeTruthy()
+    expect(screen.getByText('£120,000 – £145,000')).toBeTruthy()
+    // …and the bonus is reported as a percentage, not a currency amount.
+    expect(screen.getByText('Also stated on this posting')).toBeTruthy()
+    expect(screen.getByText(/bonus: 15%/)).toBeTruthy()
+  })
+
+  it('offers Edit & accept for a proposed figure', async () => {
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.proposeRoleCompensation).mockResolvedValue({
+      status: 'ok',
+      extraction_run_id: 'run',
+      error: null,
+      error_type: null,
+      document_id: 'doc',
+      provenance_quality: 'original',
+      proposal: {
+        no_compensation_stated: false,
+        notes: null,
+        items: [
+          {
+            amount_min: 12000,
+            amount_max: 14500,
+            bonus_pct: null,
+            currency: 'GBP',
+            component: 'base',
+            pay_period: 'annual',
+            employment_basis: null,
+            evidence_span: '£120,000 - £145,000 per annum',
+            note: null,
+            acceptable: true,
+            problems: [],
+          },
+        ],
+      },
+    })
+    vi.mocked(api.acceptRoleCompensation).mockResolvedValue({
+      id: 'obs9',
+      created: true,
+      status: 'accepted',
+      market_unassigned_reason: null,
+      superseded_observation_ids: [],
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Extract stated compensation from source'))
+    fireEvent.click(await screen.findByText('Edit & accept'))
+
+    // A mis-scaled figure can be corrected before it becomes a stated fact.
+    fireEvent.change(screen.getByLabelText('Minimum amount'), { target: { value: '120000' } })
+    fireEvent.change(screen.getByLabelText('Maximum amount'), { target: { value: '145000' } })
+    fireEvent.click(screen.getByText('Save & accept'))
+
+    await waitFor(() =>
+      expect(api.acceptRoleCompensation).toHaveBeenCalledWith(
+        'role',
+        expect.objectContaining({ amount_min: 120000, amount_max: 145000 }),
+      ),
+    )
+  })
+
+  it('lets an accepted observation be corrected or rejected', async () => {
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.reviewCompensationObservation).mockResolvedValue({ id: 'obs1', review_status: 'rejected' })
+    vi.mocked(api.correctCompensationObservation).mockResolvedValue({ id: 'obs1', status: 'updated' })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Correct'))
+    fireEvent.change(screen.getByLabelText('Minimum amount for base'), { target: { value: '125000' } })
+    fireEvent.click(screen.getByText('Save correction'))
+
+    await waitFor(() =>
+      expect(api.correctCompensationObservation).toHaveBeenCalledWith('obs1', { amount_min: 125000, amount_max: 145000 }),
+    )
+  })
+
+  it('rejects an accepted observation through the shared review lifecycle', async () => {
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.reviewCompensationObservation).mockResolvedValue({ id: 'obs1', review_status: 'rejected' })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Reject'))
+
+    await waitFor(() => expect(api.reviewCompensationObservation).toHaveBeenCalledWith('obs1', 'reject'))
+  })
+
+  it('shows a retired observation as superseded rather than hiding it', async () => {
+    const data = compensation()
+    data.observations = [
+      {
+        ...data.observations[0],
+        review_status: 'rejected',
+        source_note: 'superseded by reviewed observation obs2',
+      },
+    ]
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    expect(screen.getByText(/superseded by reviewed observation obs2/)).toBeTruthy()
+    expect(screen.getByText('Re-accept')).toBeTruthy()
   })
 })

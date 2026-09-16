@@ -48,10 +48,28 @@ this application's analysis, not a person-side source fact.
 person-side observations only. Unreviewed and rejected rows never
 participate.
 
-**Current** means the *source's own stated period* has not ended: an
-open-ended observation that has already started is current; one whose
-`period_end` has passed is historical. This is a statement about the source,
-not a guess about today — no staleness cut-off is invented.
+**Current** is decided from what the sources actually establish, consulting
+both the observation's own stated period **and the employment episode it
+belongs to** (`profile360.episodes`, joined through
+`compensation_observation.episode_id`). Four rules, each of which can only
+demote to historical — nothing promotes an observation to current on weak
+grounds:
+
+1. the observation's own stated period has ended → historical;
+2. it starts in the future → not current yet;
+3. the employment episode has ended, or is not in a status recognised as
+   ongoing (`active` / `current` / `ongoing`; an unrecognised status is
+   treated as not ongoing, so unfamiliar data makes the answer more cautious,
+   never less) → historical, **however open-ended the observation row looks
+   on its own**;
+4. an observation with no dates at all is current only if a linked episode is
+   genuinely ongoing — absence of evidence is not evidence of currency.
+
+Rule 3 is the one that matters most for a corpus of historical data: an
+open-ended salary observation attached to an employment that ended in 2022
+is not your current salary in 2026. Each historical baseline carries an
+`evidence_status_reason` explaining in the user's terms why it reads as past,
+so the label is never unexplained.
 
 When no current evidence exists at all, the most recent historical evidence
 is returned with `status='historical'` and a note saying exactly that. It is
@@ -130,8 +148,9 @@ Server-side validation on accept, in order:
 - the document's `provenance_quality` is `original` — a legacy,
   reconstructed or unknown-provenance document can never back a stated fact,
   however plausible the quote looks;
-- the currency is a three-letter code and the amounts form an ordered,
-  non-negative range;
+- the value shape matches the component: an amount range in a three-letter
+  currency for base / day_rate / total_package, or a percentage in
+  `bonus_pct` with no cash amount for a bonus;
 - component / pay_period / employment_basis are in the controlled sets.
 
 Only source-supported fields are extracted: amount min/max, currency,
@@ -296,9 +315,19 @@ Five conditions each produce an explicit state rather than a confident
 number, reported both as booleans in `gates` and as each node's own
 `state` / `state_reason`:
 
-- incomplete target requirement review (`review_incomplete`);
+- incomplete target requirement review (`review_incomplete`) — using the
+  canonical `complete` flag, which is true only when unreviewed claims,
+  unresolved vocabulary proposals **and** concepts needing re-extraction are
+  all zero. Checking the unreviewed count alone let a target with a dangling
+  vocabulary term pass as fully reviewed; `review_blockers` now names
+  whichever parts are outstanding, with counts, on the gate and on each
+  node's fit;
 - incomplete target vocabulary mapping (`mapping_incomplete`);
-- incomplete candidate review;
+- incomplete candidate review — scoped to the candidates that actually
+  support a route shown here (the postings under an intermediate archetype,
+  plus the useful-but-unclassified ones reported alongside them). Checking
+  every posting in the corpus made this gate false because of unrelated roles
+  the user is not being shown, which is noise rather than signal;
 - insufficient compensation evidence (`insufficient_evidence` /
   `route_without_compensation`);
 - missing archetype assignment.
@@ -495,6 +524,35 @@ Performance is a design constraint here, not an afterthought.
   which bulk-loads requirements, review summaries and embeddings and
   evaluates each distinct concept at most once per request. Both have
   query-count regression tests (`backend/tests/query_counter.py`).
+- **Derivation freshness is separate from cache invalidation.** This is the
+  subtlest correctness rule in the build. The `economics` counter makes a
+  Pathways cache entry *miss* when compensation changes — but a miss only
+  recomposes Pathways **from** `d_archetype_comp` / `d_archetype_demand` /
+  `d_gap_value`, which are written only by an explicit
+  `POST /api/economics/rebuild`. Without a separate check, accepting a salary
+  produced a freshly-computed answer over stale derived numbers, presented as
+  current.
+
+  `jobber.economics_rebuild_state` (migration 0024) records which source
+  state the last rebuild saw — all three counters, since `path` changes
+  archetype demand and `evidence` changes the structural model gap value is a
+  counterfactual over. `app/economics_freshness.py` compares them at read
+  time and returns `fresh` / `stale` / `never_rebuilt`.
+
+  When not fresh, the market-estimate tier is **skipped entirely**: role and
+  archetype resolution fall through to `insufficient_evidence` naming the
+  rebuild, and gap value reports no market option value at all. Nothing is
+  auto-rebuilt — a rebuild walks every role's fit and is far too expensive
+  for a request path — so the honest response is to say so and withhold,
+  which Pathways and Role Detail both surface with a "Rebuild economics"
+  action.
+
+- **Review-gate inputs invalidate the cache too.** Migration 0024 adds
+  `path` triggers to `concept_proposal` and `concept_proposal_occurrence`,
+  which 0019 did not cover. They are part of the canonical review summary, so
+  without them a pending proposal could appear while a cached Pathways result
+  kept reporting the old review verdict.
+
 - **Pathways cache.** `jobber.d_pathways` is keyed by
   `(target_role_id, context_key)` where `context_key` is the selected
   market/currency, and carries a `revision` folding in:
@@ -520,7 +578,7 @@ Performance is a design constraint here, not an afterthought.
 
 ---
 
-## 16. Migration 0023 and backward compatibility
+## 16. Migrations 0023 / 0024 and backward compatibility
 
 `backend/migrations/0023_economic_pathways.sql` is **additive only**: no
 existing column is dropped or retyped, no existing row is touched, and every
@@ -540,6 +598,20 @@ new column is nullable or defaulted. It adds:
    function and the new economics triggers, and `jobber.d_pathways`;
 6. two optional human planning columns on `development_action`.
 
+`backend/migrations/0024_economics_rebuild_state.sql` is likewise additive:
+`jobber.economics_rebuild_state` (a seeded singleton whose NULL revisions
+read as "never rebuilt"), plus the two `path` triggers on
+`concept_proposal` / `concept_proposal_occurrence` described in §15. The
+rebuild-state row deliberately has *no* invalidation trigger of its own —
+bumping the economics counter from it would immediately invalidate the
+rebuild it just recorded.
+
+**Deployment note:** after applying 0024, market estimates read as
+`never_rebuilt` and are withheld until `POST /api/economics/rebuild` runs
+once. That is the intended behaviour — the derived tables genuinely have no
+recorded provenance until then — and the UI says so with a rebuild action
+rather than failing.
+
 Handled without any destructive backfill: old full-JSON roles, source-aware
 roles, legacy salary fields, existing compensation observations, roles with
 no compensation, roles with and without archetypes, targets with and without
@@ -557,7 +629,7 @@ remains explicit, deterministic and idempotent.
 | `GET /api/pathways/{target_id}` | The composed Pathways answer. Pure read, cached. |
 | `GET /api/pathways/market-contexts` | (market, currency) pairs with accepted evidence. |
 | `GET /api/pathways/personal-earnings` | Current / latest-known earnings state. |
-| `GET|PUT /api/pathways/planning-assumptions` | The billable-days assumption. |
+| `GET|PUT /api/pathways/planning-assumptions` | The billable-days assumption, editable from Pathways' "Contract comparison assumption" control. |
 | `GET /api/role-instances/{id}/compensation` | Resolved figure + personal comparison + evidence. |
 | `POST /api/role-instances/{id}/compensation/propose` | Explicit extraction. Writes no observation. |
 | `POST /api/role-instances/{id}/compensation/accept` | The only writer of reviewed stated compensation. |

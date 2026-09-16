@@ -10,7 +10,13 @@ import {
   type PersonalEarningsState,
   type Role,
 } from '../lib/api'
-import { CompensationFigure, EvidenceQualityBadge, PersonalComparisonPanel } from '../components/economics/Compensation'
+import {
+  CompensationFigure,
+  EvidenceQualityBadge,
+  PersonalComparisonPanel,
+  StaleEconomicsNotice,
+} from '../components/economics/Compensation'
+import { PlanningAssumptionEditor } from '../components/economics/PlanningAssumption'
 import { DayInTheLife } from '../components/economics/DayInTheLife'
 import { formatMoney } from '../lib/money'
 
@@ -260,7 +266,10 @@ function DirectRouteCard({ route }: { route: DirectRoute }) {
           <GapList title="Blocking gaps" names={route.fit.blocking_required_gaps} colour="var(--critical)" />
           <GapList title="Unverified gaps" names={route.fit.unverified_required_gaps} colour="var(--warning)" />
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-            Requirement review: {route.fit.review_complete ? 'complete' : `${route.fit.unreviewed_requirement_claims} still unreviewed`}
+            Requirement review:{' '}
+            {route.fit.review_complete
+              ? 'complete'
+              : route.fit.review_blockers.map((b) => `${b.count} ${b.label}`).join('; ')}
             {' · '}
             Vocabulary mapping: {route.fit.mapping_complete ? 'complete' : `${route.fit.unmapped_requirements} unresolved`}
           </div>
@@ -309,7 +318,9 @@ function IntermediateCard({ node }: { node: IntermediateArchetypeRoute }) {
           <GapList title="Unverified gaps" names={node.fit.unverified_required_gaps} colour="var(--warning)" />
           <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
             Requirement review:{' '}
-            {node.fit.review_complete ? 'complete' : `${node.fit.unreviewed_requirement_claims} still unreviewed`}
+            {node.fit.review_complete
+              ? 'complete'
+              : node.fit.review_blockers.map((b) => `${b.count} ${b.label}`).join('; ')}
           </div>
         </div>
       }
@@ -433,7 +444,13 @@ function EarningsHeader({ earnings }: { earnings: PersonalEarningsState }) {
           <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
             {baseline.employment_basis ?? 'unknown basis'} · {baseline.component.replace('_', ' ')}
             {baseline.evidence_period ? ` · ${baseline.evidence_period}` : ''}
+            {baseline.episode_title ? ` · ${baseline.episode_title}` : ''}
           </span>
+          {baseline.evidence_status_reason && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              {baseline.evidence_status_reason}
+            </div>
+          )}
           {baseline.planning_equivalent && (
             <div className="muted" style={{ fontSize: 12 }}>
               Planning equivalent{' '}
@@ -460,6 +477,7 @@ export default function Pathways() {
   const [contextKey, setContextKey] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
 
   useEffect(() => {
     api.listTargets().then(setTargets).catch((e) => setError(String(e)))
@@ -483,6 +501,29 @@ export default function Pathways() {
     if (id) load(id, contextKey)
     else setResult(null)
   }, [id, contextKey, load])
+
+  const reload = () => {
+    if (id) load(id, contextKey)
+  }
+
+  const rebuildEconomics = async () => {
+    setRebuilding(true)
+    setError(null)
+    try {
+      await api.rebuildEconomics()
+      reload()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRebuilding(false)
+    }
+  }
+
+  // The day rate the contract assumption would apply to, so the editor can
+  // show the actual arithmetic rather than an abstract multiplier.
+  const contractBaseline = result?.personal_earnings.baselines.find(
+    (baseline) => baseline.component === 'day_rate' || baseline.unit === 'daily',
+  )
 
   return (
     <div>
@@ -531,6 +572,14 @@ export default function Pathways() {
         )}
 
         {result && <EarningsHeader earnings={result.personal_earnings} />}
+
+        {result && (
+          <PlanningAssumptionEditor
+            dayRate={contractBaseline?.amount ?? null}
+            currency={contractBaseline?.currency ?? null}
+            onChanged={reload}
+          />
+        )}
       </div>
 
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
@@ -545,6 +594,12 @@ export default function Pathways() {
 
       {result && !loading && (
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <StaleEconomicsNotice
+            freshness={result.economics_freshness}
+            onRebuild={rebuildEconomics}
+            busy={rebuilding}
+          />
+
           {result.incomplete.length > 0 && (
             <div className="card" style={{ padding: 12, borderLeft: '3px solid var(--warning)' }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Some inputs are incomplete</div>

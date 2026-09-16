@@ -138,9 +138,19 @@ kept for reproducibility.
   here; role/market compensation lives in `jobber`. Nothing copies one into
   the other. A day rate is never silently annualised, currencies are never
   converted, PAYE and contracting are never merged, and a bonus never stands
-  in for base pay. Every displayed figure names its basis — advert salary,
-  market estimate, legacy estimate, or insufficient evidence — and those four
-  are never blurred together. See `docs/30-economic-pathways.md`.
+  in for base pay. An open-ended salary belonging to an employment episode
+  that has ended is reported as latest-known, not current. Every displayed
+  figure names its basis — advert salary, market estimate, legacy estimate,
+  or insufficient evidence — those four are never blurred together, and an
+  advert figure says whether it is a base salary, a day rate or a total
+  package. A bonus is reported as a percentage alongside the headline, never
+  as the headline. See `docs/30-economic-pathways.md`.
+- **Derived numbers are withheld when they no longer reflect the evidence.**
+  Invalidating a cache only forces recomputation *from* the derived economics
+  tables; it never rebuilds them. Every rebuild records the source state it
+  saw, and a benchmark built before the current evidence is withheld with a
+  "rebuild economics" reason rather than shown as current. See
+  `docs/30-economic-pathways.md` §15.
 - **Pathways composes; it does not predict.** It reuses the capability
   engine, the stepping-stone analysis, reviewed archetypes, `d_archetype_comp`
   and `d_gap_value` without adding a new score, and makes no AI call at all.

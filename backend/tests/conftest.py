@@ -88,6 +88,7 @@ _RESETTABLE_JOBBER_TABLES = [
     "d_archetype_demand",
     "compensation_observation",
     "planning_assumption",
+    "economics_rebuild_state",
     "market",
     "d_role_fit",
     "d_capability_coverage",
@@ -184,6 +185,13 @@ def _reset_data(_configure_app_database):
         # row being absent too, but tests should exercise the normal shape.
         cur.execute(
             "INSERT INTO jobber.planning_assumption (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING"
+        )
+        # Reseeded with NULL revisions, i.e. "never rebuilt" — the correct
+        # starting state for a fresh deployment, and the one that makes a
+        # test's own `record_rebuild` meaningful instead of inheriting a
+        # previous test's.
+        cur.execute(
+            "INSERT INTO jobber.economics_rebuild_state (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING"
         )
     yield
 

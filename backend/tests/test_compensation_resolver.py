@@ -13,6 +13,7 @@ import pytest
 
 from app import compensation_resolver as resolver
 from app import posting_compensation
+from app.economics_freshness import record_rebuild
 from app.db import create_document, db_cursor, upsert_role_instance
 
 
@@ -83,6 +84,17 @@ def _observation(cur, *, role_id=None, archetype_id=None, market_id, basis, amou
     return str(cur.fetchone()["id"])
 
 
+def _mark_economics_fresh(cur):
+    """Stand in for an explicit `POST /api/economics/rebuild`.
+
+    These tests insert `d_archetype_comp` rows directly, which a real rebuild
+    would also have recorded its source state for. Without that record the
+    resolver correctly treats the derived tables as never-rebuilt and
+    withholds every benchmark — so a test that wants to exercise the market
+    tier has to say that a rebuild happened, exactly as production does."""
+    record_rebuild(cur, "test-engine")
+
+
 def _archetype_comp(cur, archetype_id, market_id, *, reference=132000, currency="GBP",
                     p25=120000, p75=145000, n_observations=12, n_posting_stated=12,
                     reference_source="posting", n_survey_sources=0, basis_detail=None):
@@ -146,6 +158,7 @@ def test_archetype_benchmark_is_the_fallback_when_nothing_is_stated():
         archetype_id = _archetype(cur)
         role_id = _role(cur, archetype_concept_id=archetype_id)
         _archetype_comp(cur, archetype_id, market_id, reference=132000, p25=120000, p75=145000)
+        _mark_economics_fresh(cur)
         resolved = resolver.resolve_role_compensation(cur, role_id)
 
     assert resolved["basis"] == resolver.BASIS_MARKET_ESTIMATE
@@ -230,6 +243,7 @@ def test_market_estimate_evidence_quality_reflects_the_underlying_source():
                         n_survey_sources=1, basis_detail={"quality_tier": "explicit_sample_n_ge_5"})
         thin_role = _role(cur, archetype_concept_id=thin, title="Thin")
         good_role = _role(cur, archetype_concept_id=good, title="Good")
+        _mark_economics_fresh(cur)
         resolved = resolver.resolve_role_compensation_bulk(cur, [thin_role, good_role])
 
     assert resolved[thin_role]["evidence_quality"] == "thin"
@@ -245,6 +259,7 @@ def test_bulk_resolution_is_a_fixed_number_of_queries_regardless_of_role_count()
         market_id = _market(cur)
         archetype_id = _archetype(cur)
         _archetype_comp(cur, archetype_id, market_id)
+        _mark_economics_fresh(cur)
         two = [_role(cur, archetype_concept_id=archetype_id, title=f"Role {i}") for i in range(2)]
         twelve = two + [_role(cur, archetype_concept_id=archetype_id, title=f"Role {i}") for i in range(2, 12)]
 
@@ -263,6 +278,7 @@ def test_archetype_compensation_resolution_starts_at_the_market_tier():
         market_id = _market(cur)
         archetype_id = _archetype(cur)
         _archetype_comp(cur, archetype_id, market_id, reference=132000)
+        _mark_economics_fresh(cur)
         resolved = resolver.resolve_archetype_compensation(cur, archetype_id)
 
     assert resolved["basis"] == resolver.BASIS_MARKET_ESTIMATE
@@ -372,10 +388,10 @@ def test_weak_provenance_is_never_upgraded_into_a_stated_fact():
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({"currency": "pounds"}, "three-letter ISO code"),
+        ({"currency": "pounds"}, "is not a three-letter currency code"),
         ({"component": "equity"}, "component must be one of"),
         ({"pay_period": "monthly"}, "pay_period must be one of"),
-        ({"amount_min": None, "amount_max": None}, "at least one of"),
+        ({"amount_min": None, "amount_max": None}, "no amount was stated"),
         ({"amount_min": 200000, "amount_max": 100000}, "cannot be greater than"),
         ({"amount_min": -5}, "cannot be negative"),
         ({"evidence_span": "   "}, "exact evidence span"),

@@ -13,8 +13,16 @@ monolithic JSON posting analysis:
   and may have edited — the proposed figures, so the row it creates is born
   `review_status='accepted'` with `basis='posting_stated'`, which is what
   makes it authoritative for the compensation resolver's tier 1.
-- Rejecting is simply not accepting. Because the proposal is never persisted,
-  there is nothing to clean up and no half-reviewed state to interpret later.
+- Rejecting a *proposal* is simply not accepting it. Because a proposal is
+  never persisted, declining one leaves nothing behind.
+- Rejecting or correcting an *accepted* observation goes through the review
+  lifecycle that already exists for compensation observations
+  (`POST /api/market-data/compensation-observations/{id}/review` and its
+  sibling PATCH), rather than a second parallel mechanism. Accepting a
+  corrected figure additionally retires the figure it corrects — see
+  `_supersede_prior_accepted`, which exists because leaving two accepted
+  `posting_stated` rows for one (component, pay_period) both fed the
+  archetype benchmark and made the headline depend on row ordering.
 
 Server-side validation on accept is not a formality; it is the only thing
 standing between an AI proposal and a stated economic fact:
@@ -27,8 +35,11 @@ standing between an AI proposal and a stated economic fact:
    reconstructed or unknown-provenance document can never back a stated
    fact, however plausible the quote looks. Weak provenance is never
    silently upgraded;
-4. the currency is a three-letter code and the amounts form a sane, ordered,
-   non-negative range;
+4. the value shape matches the component: an amount range in a stated
+   currency for base / day_rate / total_package, and a percentage in
+   `bonus_pct` with no cash amount for a bonus (the schema's `currency`
+   column is NOT NULL, so a bonus borrows the currency of the pay it applies
+   to, read from the role's own evidence and never guessed);
 5. component / pay_period / employment_basis are in the controlled sets the
    `compensation_observation` CHECK constraints already enforce — rejected
    here with a clear message rather than as a raw integrity error.
@@ -81,6 +92,10 @@ class PostingCompensationProposalItem(BaseModel):
 
     amount_min: Optional[float] = None
     amount_max: Optional[float] = None
+    # A bonus expressed as a proportion of pay belongs here, in the column
+    # the schema already has for it — never squeezed into an amount field
+    # with an invented currency.
+    bonus_pct: Optional[float] = None
     currency: Optional[str] = None
     component: Optional[str] = None
     pay_period: Optional[str] = None
@@ -129,7 +144,79 @@ def _load_role_and_document(cur, role_instance_id: str) -> tuple[dict, dict]:
     return dict(role), dict(document)
 
 
-def _annotate_proposal_item(item: dict, document_text: str) -> dict:
+def _role_currency(cur, role_instance_id: str, role: dict) -> str | None:
+    """The currency of this role's pay, for a bonus percentage that has none
+    of its own. Taken from what the role already records — an accepted
+    compensation observation first, then the legacy `role_instance.currency`
+    column — never guessed from the country. Returns None when the role has
+    no currency anywhere, which makes a bonus-only item unacceptable rather
+    than inventing one."""
+    cur.execute(
+        "SELECT currency FROM jobber.compensation_observation "
+        "WHERE role_instance_id = %s AND review_status = 'accepted' AND component != 'bonus_pct' "
+        "ORDER BY (evidence_span IS NULL), reviewed_at DESC NULLS LAST, id LIMIT 1",
+        (role_instance_id,),
+    )
+    row = cur.fetchone()
+    if row and row["currency"]:
+        return row["currency"].strip().upper()
+    return (role.get("currency") or "").strip().upper() or None
+
+
+def _value_problems(item: dict, *, fallback_currency: str | None) -> list[str]:
+    """The component-specific shape rules, shared by the proposal annotator
+    and by acceptance so the two can never disagree.
+
+    `bonus_pct` is a percentage of pay, not a sum of money: it carries a
+    percentage and no amount, and needs a currency only because the schema's
+    `currency` column is NOT NULL — that currency is the currency of the pay
+    the bonus applies to, taken from the role's own evidence rather than
+    invented here."""
+    problems: list[str] = []
+    component = item.get("component")
+    if component not in VALID_COMPONENTS:
+        return [f"component must be one of {list(VALID_COMPONENTS)}"]
+    if item.get("pay_period") not in VALID_PAY_PERIODS:
+        problems.append(f"pay_period must be one of {list(VALID_PAY_PERIODS)}")
+
+    if component == "bonus_pct":
+        percent = item.get("bonus_pct")
+        if percent is None:
+            problems.append("a bonus must state its percentage in bonus_pct")
+        elif not (0 < percent <= 100):
+            problems.append("bonus_pct must be a percentage between 0 and 100")
+        if item.get("amount_min") is not None or item.get("amount_max") is not None:
+            problems.append("a bonus percentage must not also carry a cash amount")
+        currency = (item.get("currency") or fallback_currency or "").strip().upper()
+        if not currency:
+            problems.append(
+                "a bonus percentage can only be recorded alongside the currency of the pay it applies to, "
+                "and this role has none"
+            )
+        elif not _CURRENCY_RE.match(currency):
+            problems.append(f"{currency!r} is not a three-letter currency code")
+        return problems
+
+    currency = (item.get("currency") or "").strip().upper()
+    if not currency:
+        problems.append("no currency was stated")
+    elif not _CURRENCY_RE.match(currency):
+        problems.append(f"{item['currency']!r} is not a three-letter currency code")
+    if item.get("bonus_pct") is not None:
+        problems.append("bonus_pct only applies to a bonus_pct component")
+
+    amount_min, amount_max = item.get("amount_min"), item.get("amount_max")
+    if amount_min is None and amount_max is None:
+        problems.append("no amount was stated")
+    for label, value in (("amount_min", amount_min), ("amount_max", amount_max)):
+        if value is not None and value < 0:
+            problems.append(f"{label} cannot be negative")
+    if amount_min is not None and amount_max is not None and amount_min > amount_max:
+        problems.append("amount_min cannot be greater than amount_max")
+    return problems
+
+
+def _annotate_proposal_item(item: dict, document_text: str, *, fallback_currency: str | None) -> dict:
     """Every proposal item is returned with the server's own verdict on it
     already attached, so the review UI can show "this quote was not found in
     the source" before the user clicks Accept rather than only after."""
@@ -139,16 +226,7 @@ def _annotate_proposal_item(item: dict, document_text: str) -> dict:
         problems.append("no evidence span was quoted")
     elif not validate_span(document_text, span):
         problems.append("the quoted evidence span does not appear verbatim in the source document")
-    if item.get("currency") and not _CURRENCY_RE.match(item["currency"].strip().upper()):
-        problems.append(f"{item['currency']!r} is not a three-letter currency code")
-    if not item.get("currency"):
-        problems.append("no currency was stated")
-    if item.get("component") not in VALID_COMPONENTS:
-        problems.append(f"component must be one of {list(VALID_COMPONENTS)}")
-    if item.get("pay_period") not in VALID_PAY_PERIODS:
-        problems.append(f"pay_period must be one of {list(VALID_PAY_PERIODS)}")
-    if item.get("amount_min") is None and item.get("amount_max") is None:
-        problems.append("no amount was stated")
+    problems += _value_problems(item, fallback_currency=fallback_currency)
     return {**item, "acceptable": not problems, "problems": problems}
 
 
@@ -182,7 +260,11 @@ def propose_posting_compensation(cur, role_instance_id: str) -> dict:
         }
 
     payload = result.output.model_dump()
-    payload["items"] = [_annotate_proposal_item(i, content_text) for i in payload["items"]]
+    fallback_currency = _role_currency(cur, role_instance_id, role)
+    payload["items"] = [
+        _annotate_proposal_item(i, content_text, fallback_currency=fallback_currency)
+        for i in payload["items"]
+    ]
     run_id = _record_run(
         cur, role_instance_id=role_instance_id, document_id=document_id, model=result.run.model,
         pversion=result.run.prompt_version, started_at=started_at, status="ok",
@@ -217,10 +299,11 @@ def _record_run(
     return str(cur.fetchone()["id"])
 
 
-def _validate_accept(item: dict, document: dict) -> dict:
+def _validate_accept(item: dict, document: dict, *, fallback_currency: str | None) -> dict:
     """Every rule from this module's docstring, applied server-side to the
     (possibly user-edited) payload. Raises with the first failing rule
-    named."""
+    named. Shares `_value_problems` with the proposal annotator, so the
+    review screen's verdict and acceptance can never disagree."""
     if document["provenance_quality"] != "original":
         raise PostingCompensationValidationError(
             "this role's source document does not have original provenance, so it cannot back a stated "
@@ -237,39 +320,30 @@ def _validate_accept(item: dict, document: dict) -> dict:
             "evidence_span is not an exact match in the source document"
         )
 
-    currency = (item.get("currency") or "").strip().upper()
-    if not _CURRENCY_RE.match(currency):
-        raise PostingCompensationValidationError("currency must be a three-letter ISO code, e.g. GBP")
-
-    component = item.get("component")
-    if component not in VALID_COMPONENTS:
-        raise PostingCompensationValidationError(f"component must be one of {list(VALID_COMPONENTS)}")
-    pay_period = item.get("pay_period")
-    if pay_period not in VALID_PAY_PERIODS:
-        raise PostingCompensationValidationError(f"pay_period must be one of {list(VALID_PAY_PERIODS)}")
     employment_basis = item.get("employment_basis")
     if employment_basis is not None and employment_basis not in VALID_EMPLOYMENT_BASES:
         raise PostingCompensationValidationError(
             f"employment_basis must be one of {list(VALID_EMPLOYMENT_BASES)} or omitted"
         )
 
-    amount_min, amount_max = item.get("amount_min"), item.get("amount_max")
-    if amount_min is None and amount_max is None:
-        raise PostingCompensationValidationError("at least one of amount_min / amount_max is required")
-    for label, value in (("amount_min", amount_min), ("amount_max", amount_max)):
-        if value is not None and value < 0:
-            raise PostingCompensationValidationError(f"{label} cannot be negative")
-    if amount_min is not None and amount_max is not None and amount_min > amount_max:
-        raise PostingCompensationValidationError("amount_min cannot be greater than amount_max")
+    problems = _value_problems(item, fallback_currency=fallback_currency)
+    if problems:
+        raise PostingCompensationValidationError(problems[0])
 
+    component = item["component"]
+    is_bonus = component == "bonus_pct"
+    currency = (item.get("currency") or (fallback_currency if is_bonus else "") or "").strip().upper()
     return {
         "evidence_span": span,
         "currency": currency,
         "component": component,
-        "pay_period": pay_period,
+        "pay_period": item["pay_period"],
         "employment_basis": employment_basis,
-        "amount_min": amount_min,
-        "amount_max": amount_max,
+        # A bonus carries its percentage and no amount; everything else
+        # carries amounts and no percentage. Never both.
+        "amount_min": None if is_bonus else item.get("amount_min"),
+        "amount_max": None if is_bonus else item.get("amount_max"),
+        "bonus_pct": item.get("bonus_pct") if is_bonus else None,
         "source_note": item.get("note"),
     }
 
@@ -284,7 +358,7 @@ def _source_key(role_instance_id: str, validated: dict) -> str:
     digest = hashlib.sha256(
         "|".join(
             str(validated[k])
-            for k in ("component", "pay_period", "currency", "amount_min", "amount_max", "evidence_span")
+            for k in ("component", "pay_period", "currency", "amount_min", "amount_max", "bonus_pct", "evidence_span")
         ).encode("utf-8")
     ).hexdigest()[:16]
     return f"posting_stated_reviewed:{role_instance_id}:{digest}"
@@ -302,7 +376,8 @@ def accept_posting_compensation(cur, role_instance_id: str, item: dict) -> dict:
     documented alias map, and left NULL when the country cannot be safely
     resolved — never guessed, exactly as the backfill does."""
     role, document = _load_role_and_document(cur, role_instance_id)
-    validated = _validate_accept(item, document)
+    fallback_currency = _role_currency(cur, role_instance_id, role)
+    validated = _validate_accept(item, document, fallback_currency=fallback_currency)
     market_id = get_or_create_market_by_country(cur, role["country"])
     source_key = _source_key(role_instance_id, validated)
 
@@ -310,9 +385,9 @@ def accept_posting_compensation(cur, role_instance_id: str, item: dict) -> dict:
         """
         INSERT INTO jobber.compensation_observation
             (source_key, role_instance_id, document_id, market_id, component, pay_period, employment_basis,
-             currency, amount_min, amount_max, basis, review_status, observed_at, evidence_span,
+             currency, amount_min, amount_max, bonus_pct, basis, review_status, observed_at, evidence_span,
              source_note, reviewed_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'posting_stated', 'accepted', %s, %s, %s, now())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'posting_stated', 'accepted', %s, %s, %s, now())
         ON CONFLICT (source_key) DO UPDATE SET
             review_status = 'accepted', reviewed_at = now()
         RETURNING id, (xmax = 0) AS inserted
@@ -320,13 +395,15 @@ def accept_posting_compensation(cur, role_instance_id: str, item: dict) -> dict:
         (
             source_key, role_instance_id, str(document["id"]), market_id, validated["component"],
             validated["pay_period"], validated["employment_basis"], validated["currency"],
-            validated["amount_min"], validated["amount_max"], document["source_date"],
+            validated["amount_min"], validated["amount_max"], validated["bonus_pct"], document["source_date"],
             validated["evidence_span"], validated["source_note"],
         ),
     )
     row = cur.fetchone()
+    observation_id = str(row["id"])
+    superseded = _supersede_prior_accepted(cur, role_instance_id, observation_id, validated)
     return {
-        "id": str(row["id"]),
+        "id": observation_id,
         "created": bool(row["inserted"]),
         "status": "accepted",
         "market_id": market_id,
@@ -336,7 +413,40 @@ def accept_posting_compensation(cur, role_instance_id: str, item: dict) -> dict:
         ),
         "basis": "posting_stated",
         "review_status": "accepted",
+        "superseded_observation_ids": superseded,
     }
+
+
+def _supersede_prior_accepted(cur, role_instance_id: str, observation_id: str, validated: dict) -> list[str]:
+    """Accepting a corrected figure retires the one it corrects.
+
+    Without this, correcting a mistake left *two* accepted `posting_stated`
+    observations for the same (component, pay_period) on one role — both
+    feeding the archetype benchmark aggregation, so the wrong figure kept
+    influencing the market even after the user had fixed it, and which one
+    surfaced as the headline depended on ordering.
+
+    The retired row is marked `rejected` (the existing review vocabulary —
+    no new state, and the same statuses the Market Data review lifecycle
+    already uses) and annotated with what replaced it. It is never deleted:
+    the audit trail keeps showing that the figure was accepted before a human
+    corrected it, exactly as a superseded requirement claim does."""
+    cur.execute(
+        """
+        UPDATE jobber.compensation_observation
+        SET review_status = 'rejected', reviewed_at = now(),
+            source_note = COALESCE(source_note || ' | ', '') || %s
+        WHERE role_instance_id = %s AND id != %s
+          AND basis = 'posting_stated' AND review_status = 'accepted'
+          AND component = %s AND pay_period = %s
+        RETURNING id
+        """,
+        (
+            f"superseded by reviewed observation {observation_id}",
+            role_instance_id, observation_id, validated["component"], validated["pay_period"],
+        ),
+    )
+    return [str(r["id"]) for r in cur.fetchall()]
 
 
 def list_role_compensation_observations(cur, role_instance_id: str) -> list[dict]:
@@ -346,8 +456,9 @@ def list_role_compensation_observations(cur, role_instance_id: str) -> list[dict
     cur.execute(
         """
         SELECT co.id, co.basis, co.review_status, co.component, co.pay_period, co.employment_basis,
-               co.currency, co.amount_min, co.amount_mid, co.amount_max, co.evidence_span, co.observed_at,
-               co.source_note, co.market_id, m.label AS market_label, co.created_at, co.reviewed_at
+               co.currency, co.amount_min, co.amount_mid, co.amount_max, co.bonus_pct, co.evidence_span,
+               co.observed_at, co.source_note, co.market_id, m.label AS market_label,
+               co.created_at, co.reviewed_at
         FROM jobber.compensation_observation co
         LEFT JOIN jobber.market m ON m.id = co.market_id
         WHERE co.role_instance_id = %s

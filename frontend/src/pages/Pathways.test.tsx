@@ -21,6 +21,9 @@ vi.mock('../lib/api', () => ({
     getPathways: vi.fn(),
     getArchetypeContext: vi.fn(),
     generateArchetypeContext: vi.fn(),
+    getPlanningAssumptions: vi.fn(),
+    savePlanningAssumptions: vi.fn(),
+    rebuildEconomics: vi.fn(),
   },
 }))
 
@@ -32,6 +35,8 @@ afterEach(() => {
 const marketEstimate: ResolvedCompensation = {
   basis: 'market_estimate',
   basis_label: 'Market estimate',
+  component_label: 'base salary',
+  supplementary: [],
   currency: 'GBP',
   amount_min: 120000,
   amount_reference: 132000,
@@ -169,6 +174,11 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
           pay_date: null,
           evidence_period: 'from 2025-07-01',
           evidence_status: 'current',
+          episode_title: null,
+          episode_organisation: null,
+          episode_end_date: null,
+          episode_status: null,
+          evidence_status_reason: null,
           notes: null,
           uncertainty: null,
           planning_equivalent: null,
@@ -198,7 +208,10 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
         blocking_required_gaps: ['Capital management'],
         unverified_required_gaps: [],
         review_complete: true,
+        review_blockers: [],
         unreviewed_requirement_claims: 0,
+        unresolved_vocabulary_proposals: 0,
+        concepts_needing_reextraction: 0,
         mapping_complete: true,
         unmapped_requirements: 0,
       },
@@ -233,6 +246,8 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
             missing_required: [],
             unverified_required: [],
             pending_requirements: 0,
+            review_complete: true,
+            review_blockers: [],
             similarity_to_target: 0.7,
             similarity_to_profile: 0.6,
           },
@@ -251,6 +266,8 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
             missing_required: [],
             unverified_required: [],
             pending_requirements: 0,
+            review_complete: true,
+            review_blockers: [],
             similarity_to_target: 0.65,
             similarity_to_profile: 0.55,
           },
@@ -261,6 +278,7 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
           unverified_required_gaps: [],
           unreviewed_requirement_claims: 0,
           review_complete: true,
+          review_blockers: [],
         },
         target_gaps_addressed: ['Capital management'],
         compensation: { ...marketEstimate, amount_reference: 110000, amount_min: 100000, amount_max: 120000 },
@@ -313,7 +331,17 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
       target_compensation_available: true,
       personal_earnings_available: true,
       candidate_review_complete: true,
+      derived_economics_fresh: true,
     },
+    economics_freshness: {
+      state: 'fresh',
+      fresh: true,
+      stale_inputs: [],
+      reason: null,
+      last_rebuilt_at: '2026-09-16T08:00:00Z',
+      engine_version: 'economics-engine-v1',
+    },
+    review_blockers: { target: [], supporting_candidates: [] },
     incomplete: [],
     candidates_assessed: 12,
     distinct_concepts: 8,
@@ -339,6 +367,15 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
 }
 
 function renderPathways() {
+  // The planning-assumption editor loads on mount; without a resolved value
+  // its promise chain throws and takes the whole page down.
+  if (vi.mocked(api.getPlanningAssumptions).mock.results.length === 0) {
+    vi.mocked(api.getPlanningAssumptions).mockResolvedValue({
+      contract_billable_days_per_year: null,
+      note: null,
+      updated_at: null,
+    })
+  }
   return render(
     <MemoryRouter initialEntries={['/pathways/t1']}>
       <Routes>
@@ -546,5 +583,152 @@ describe('Pathways', () => {
     await waitFor(() =>
       expect(api.getPathways).toHaveBeenLastCalledWith('t1', { market_id: 'm1', currency: 'GBP' }),
     )
+  })
+})
+
+describe('Pathways — review findings', () => {
+  it('names every part of the review gate, not just unreviewed claims', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const gated = result({ incomplete: ['target_requirements_reviewed'] })
+    gated.gates.target_requirements_reviewed = false
+    gated.direct_route.state = 'review_incomplete'
+    gated.direct_route.state_reason =
+      'Requirement review on this target is not complete (1 vocabulary proposals still unresolved).'
+    gated.direct_route.fit.review_complete = false
+    gated.direct_route.fit.unreviewed_requirement_claims = 0
+    gated.direct_route.fit.unresolved_vocabulary_proposals = 1
+    gated.direct_route.fit.review_blockers = [
+      { kind: 'unresolved_proposals', label: 'vocabulary proposals still unresolved', count: 1 },
+    ]
+    vi.mocked(api.getPathways).mockResolvedValue(gated)
+    renderPathways()
+
+    await screen.findByText(/Direct: Head of Capital/)
+    expect(screen.getByText('Requirement review incomplete')).toBeTruthy()
+    // Zero unreviewed claims, yet review is not complete — the whole point.
+    expect(screen.getByText(/1 vocabulary proposals still unresolved/)).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('tab', { name: 'Fit' })[0])
+    expect(screen.getByText(/Requirement review: 1 vocabulary proposals still unresolved/)).toBeTruthy()
+  })
+
+  it('warns that derived economics are out of date rather than showing them as current', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const stale = result({ incomplete: ['derived_economics_fresh'] })
+    stale.gates.derived_economics_fresh = false
+    stale.economics_freshness = {
+      state: 'stale',
+      fresh: false,
+      stale_inputs: ['economics'],
+      reason:
+        'Derived economics were last rebuilt on 2026-09-10, and since then compensation evidence or market ' +
+        'definitions have changed. Figures derived from them are withheld rather than shown as current.',
+      last_rebuilt_at: '2026-09-10T00:00:00Z',
+      engine_version: 'economics-engine-v1',
+    }
+    vi.mocked(api.getPathways).mockResolvedValue(stale)
+    renderPathways()
+
+    expect(await screen.findByText('Market benchmarks are out of date')).toBeTruthy()
+    expect(screen.getByText(/withheld rather than shown as current/)).toBeTruthy()
+    expect(screen.getByText('Rebuild economics')).toBeTruthy()
+  })
+
+  it('rebuilds economics and reloads on request', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const stale = result()
+    stale.gates.derived_economics_fresh = false
+    stale.economics_freshness = {
+      state: 'never_rebuilt',
+      fresh: false,
+      stale_inputs: [],
+      reason: 'The derived economics tables have never been rebuilt.',
+      last_rebuilt_at: null,
+      engine_version: null,
+    }
+    vi.mocked(api.getPathways).mockResolvedValue(stale)
+    vi.mocked(api.rebuildEconomics).mockResolvedValue({
+      engine_version: 'economics-engine-v1',
+    } as never)
+    renderPathways()
+
+    expect(await screen.findByText('Market benchmarks have never been built')).toBeTruthy()
+    fireEvent.click(screen.getByText('Rebuild economics'))
+    await waitFor(() => expect(api.rebuildEconomics).toHaveBeenCalled())
+  })
+
+  it('lets the contract billable-days assumption be set from Pathways', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const contracting = result()
+    contracting.personal_earnings.baselines[0] = {
+      ...contracting.personal_earnings.baselines[0],
+      component: 'day_rate',
+      unit: 'daily',
+      amount: 650,
+      employment_basis: 'contract',
+    }
+    vi.mocked(api.getPathways).mockResolvedValue(contracting)
+    vi.mocked(api.getPlanningAssumptions).mockResolvedValue({
+      contract_billable_days_per_year: null,
+      note: null,
+      updated_at: null,
+    })
+    vi.mocked(api.savePlanningAssumptions).mockResolvedValue({
+      contract_billable_days_per_year: 215,
+      note: null,
+      updated_at: '2026-09-16T09:00:00Z',
+    })
+    renderPathways()
+
+    expect(await screen.findByText('Not set — day rates are not annualised')).toBeTruthy()
+    fireEvent.click(screen.getByText('Set assumption'))
+    fireEvent.change(screen.getByLabelText('Billable days per year'), { target: { value: '215' } })
+
+    // The arithmetic is shown before saving, labelled as a planning figure.
+    expect(screen.getByText(/£650 × 215 days = £139,750/)).toBeTruthy()
+    expect(screen.getByText('This is a planning equivalent, not salary.')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() =>
+      expect(api.savePlanningAssumptions).toHaveBeenCalledWith({
+        contract_billable_days_per_year: 215,
+        note: null,
+      }),
+    )
+  })
+
+  it('explains why a historic salary is not reported as current earnings', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const historic = result()
+    historic.personal_earnings.status = 'historical'
+    historic.personal_earnings.baselines[0] = {
+      ...historic.personal_earnings.baselines[0],
+      evidence_status: 'historical',
+      label: 'Latest known earnings',
+      episode_title: 'Actuarial Manager',
+      episode_end_date: '2022-06-30',
+      evidence_status_reason: 'Actuarial Manager ended on 2022-06-30, so this pay is no longer in force.',
+    }
+    vi.mocked(api.getPathways).mockResolvedValue(historic)
+    renderPathways()
+
+    expect(await screen.findByText('Latest known earnings')).toBeTruthy()
+    expect(screen.getByText(/ended on 2022-06-30, so this pay is no longer in force/)).toBeTruthy()
+  })
+
+  it('withholds a stale gap-value market option rather than reporting it', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    const stale = result()
+    stale.gap_value[0].market_option_value = {
+      available: false,
+      reason: 'Derived economics were last rebuilt on 2026-09-10 and are out of date.',
+      withheld_as_stale: true,
+    }
+    vi.mocked(api.getPathways).mockResolvedValue(stale)
+    renderPathways()
+
+    expect(await screen.findByText('Market option value')).toBeTruthy()
+    expect(screen.getByText(/out of date/)).toBeTruthy()
+    expect(screen.queryByText(/Highest qualifying reference compensation/)).toBeNull()
   })
 })

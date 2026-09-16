@@ -1,4 +1,10 @@
-import type { CompensationBasis, EvidenceQuality, PersonalComparison, ResolvedCompensation } from '../../lib/api'
+import type {
+  CompensationBasis,
+  EconomicsFreshness,
+  EvidenceQuality,
+  PersonalComparison,
+  ResolvedCompensation,
+} from '../../lib/api'
 import { formatMoney } from '../../lib/money'
 
 // The four compensation bases must never blur together in the UI, so their
@@ -35,8 +41,18 @@ const QUALITY_LABEL: Record<EvidenceQuality, string> = {
   good: 'Good',
 }
 
-export function BasisBadge({ basis }: { basis: CompensationBasis }) {
+// An advert-stated figure says *what kind* of figure it is, so a total
+// package is never read as a base salary and a day rate is never read as an
+// annual one. The four bases stay four; only the advert label specialises.
+function advertLabel(componentLabel: string | null | undefined): string {
+  if (componentLabel === 'total package') return 'Advert total package'
+  if (componentLabel === 'day rate') return 'Advert day rate'
+  return 'Advert salary'
+}
+
+export function BasisBadge({ basis, componentLabel }: { basis: CompensationBasis; componentLabel?: string | null }) {
   const style = BASIS_STYLE[basis] ?? BASIS_STYLE.insufficient_evidence
+  const label = basis === 'advert_stated' ? advertLabel(componentLabel) : style.label
   return (
     <span
       title={style.blurb}
@@ -52,7 +68,7 @@ export function BasisBadge({ basis }: { basis: CompensationBasis }) {
         whiteSpace: 'nowrap',
       }}
     >
-      {style.label}
+      {label}
     </span>
   )
 }
@@ -72,10 +88,11 @@ export function CompensationFigure({ compensation }: { compensation: ResolvedCom
   if (compensation.basis === 'insufficient_evidence' || amount_reference === null || !currency) {
     return (
       <div>
-        <BasisBadge basis={compensation.basis} />
+        <BasisBadge basis={compensation.basis} componentLabel={compensation.component_label} />
         <p className="secondary" style={{ margin: '6px 0 0', fontSize: 13 }}>
           {compensation.reason}
         </p>
+        <SupplementaryFigures compensation={compensation} />
       </div>
     )
   }
@@ -83,7 +100,7 @@ export function CompensationFigure({ compensation }: { compensation: ResolvedCom
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <BasisBadge basis={compensation.basis} />
+        <BasisBadge basis={compensation.basis} componentLabel={compensation.component_label} />
         <span style={{ fontSize: 20, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
           {hasRange
             ? `${formatMoney(amount_min, currency)} – ${formatMoney(amount_max, currency)}`
@@ -109,6 +126,71 @@ export function CompensationFigure({ compensation }: { compensation: ResolvedCom
       <p className="secondary" style={{ margin: '6px 0 0', fontSize: 12 }}>
         {compensation.reason}
       </p>
+      <SupplementaryFigures compensation={compensation} />
+    </div>
+  )
+}
+
+/** Stated figures that are not the headline — a bonus percentage, a total
+ * package alongside a base salary. Reported, never merged into the headline
+ * and never promoted to it. */
+function SupplementaryFigures({ compensation }: { compensation: ResolvedCompensation }) {
+  const figures = compensation.supplementary ?? []
+  if (figures.length === 0) return null
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="muted" style={{ fontSize: 12 }}>
+        Also stated on this posting
+      </div>
+      <ul className="secondary" style={{ fontSize: 13, margin: '2px 0 0', paddingLeft: 18 }}>
+        {figures.map((figure) => (
+          <li key={figure.observation_id}>
+            {figure.label}:{' '}
+            {figure.bonus_pct !== null
+              ? `${figure.bonus_pct}%`
+              : `${formatMoney(figure.amount_min, figure.currency ?? '')}${
+                  figure.amount_max !== null && figure.amount_max !== figure.amount_min
+                    ? ` – ${formatMoney(figure.amount_max, figure.currency ?? '')}`
+                    : ''
+                }`}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** Derived economics that no longer reflect current evidence are withheld,
+ * not shown as current. This says so where a figure would otherwise be. */
+export function StaleEconomicsNotice({
+  freshness,
+  onRebuild,
+  busy = false,
+}: {
+  freshness: EconomicsFreshness
+  onRebuild?: () => void
+  busy?: boolean
+}) {
+  if (freshness.fresh) return null
+  return (
+    <div
+      className="card"
+      style={{ padding: 12, borderLeft: '3px solid var(--warning)', marginBottom: 12 }}
+      role="status"
+    >
+      <div style={{ fontWeight: 600, fontSize: 13 }}>
+        {freshness.state === 'never_rebuilt'
+          ? 'Market benchmarks have never been built'
+          : 'Market benchmarks are out of date'}
+      </div>
+      <p className="secondary" style={{ fontSize: 13, margin: '4px 0 0' }}>
+        {freshness.reason}
+      </p>
+      {onRebuild && (
+        <button type="button" onClick={onRebuild} disabled={busy} style={{ marginTop: 8 }}>
+          {busy ? 'Rebuilding…' : 'Rebuild economics'}
+        </button>
+      )}
     </div>
   )
 }

@@ -1398,7 +1398,18 @@ export interface GapValueRow {
   computed_at: string
 }
 
+export interface EconomicsRebuildState {
+  evidence_revision: number | null
+  path_revision: number | null
+  economics_revision: number | null
+  engine_version: string | null
+  rebuilt_at: string | null
+}
+
 export interface Phase4RebuildSummary {
+  // Which source state this rebuild saw. A later read compares it against the
+  // live counters and withholds derived figures that no longer reflect them.
+  rebuild_state?: EconomicsRebuildState
   engine_version: string
   archetype_demand: { computed: number; removed_stale: number; engine_version: string }
   archetype_comp: { computed: number; removed_stale: number; engine_version: string }
@@ -1742,9 +1753,26 @@ export type CompensationBasis =
 
 export type EvidenceQuality = 'insufficient' | 'thin' | 'moderate' | 'good'
 
+export type CompensationSupplementaryFigure = {
+  observation_id: string
+  component: string
+  pay_period: string
+  label: string
+  amount_min: number | null
+  amount_max: number | null
+  bonus_pct: number | null
+  currency: string | null
+  evidence_span: string | null
+}
+
 export type ResolvedCompensation = {
   basis: CompensationBasis
   basis_label: string
+  // What kind of figure the headline actually is — "base salary", "day rate",
+  // "total package". A package is never presented as a base salary, and a
+  // bonus is never the headline at all (it appears in `supplementary`).
+  component_label: string | null
+  supplementary: CompensationSupplementaryFigure[]
   currency: string | null
   amount_min: number | null
   amount_reference: number | null
@@ -1781,6 +1809,14 @@ export type PlanningEquivalent = {
 export type EarningsBaseline = {
   observation_id: string
   episode_id: string | null
+  // Employment-episode context. An open-ended salary attached to an episode
+  // that has ended is historical, however open-ended the row looks — so the
+  // UI can explain why a figure reads as past rather than current.
+  episode_title: string | null
+  episode_organisation: string | null
+  episode_end_date: string | null
+  episode_status: string | null
+  evidence_status_reason: string | null
   source_kind: string
   employment_basis: string | null
   employment_basis_equivalent: string | null
@@ -1869,6 +1905,7 @@ export type RoleCompensationObservation = {
   amount_min: number | null
   amount_mid: number | null
   amount_max: number | null
+  bonus_pct: number | null
   evidence_span: string | null
   observed_at: string | null
   source_note: string | null
@@ -1889,6 +1926,8 @@ export type RoleCompensationResponse = {
 export type CompensationProposalItem = {
   amount_min: number | null
   amount_max: number | null
+  // A bonus is a percentage of pay, never a cash amount with a currency.
+  bonus_pct: number | null
   currency: string | null
   component: string | null
   pay_period: string | null
@@ -1919,12 +1958,34 @@ export type CompensationProposalResult = {
 export type CompensationAcceptInput = {
   amount_min: number | null
   amount_max: number | null
-  currency: string
+  bonus_pct?: number | null
+  // Optional for a bonus percentage, which borrows the currency of the pay it
+  // applies to from the role's own evidence.
+  currency?: string | null
   component: string
   pay_period: string
   employment_basis?: string | null
   evidence_span: string
   note?: string | null
+}
+
+export type CompensationAcceptResult = {
+  id: string
+  created: boolean
+  status: string
+  market_unassigned_reason: string | null
+  // Accepting a corrected figure retires the one it corrects, so a role never
+  // carries two accepted stated figures for the same component.
+  superseded_observation_ids: string[]
+}
+
+export type EconomicsFreshness = {
+  state: 'fresh' | 'stale' | 'never_rebuilt'
+  fresh: boolean
+  stale_inputs: string[]
+  reason: string | null
+  last_rebuilt_at: string | null
+  engine_version: string | null
 }
 
 export type RoleArchetypeSummary = {
@@ -2051,7 +2112,13 @@ export type DirectRoute = {
     blocking_required_gaps: string[]
     unverified_required_gaps: string[]
     review_complete: boolean
+    // The canonical review gate is complete only when unreviewed claims,
+    // unresolved vocabulary proposals and concepts needing re-extraction are
+    // all zero. `review_blockers` names whichever are outstanding.
+    review_blockers: ReviewBlocker[]
     unreviewed_requirement_claims: number
+    unresolved_vocabulary_proposals: number
+    concepts_needing_reextraction: number
     mapping_complete: boolean
     unmapped_requirements: number
   }
@@ -2059,6 +2126,8 @@ export type DirectRoute = {
   personal_comparison: PersonalComparison
   transition: PathwayTransition
 }
+
+export type ReviewBlocker = { kind: string; label: string; count: number }
 
 export type SupportingPosting = {
   id: string
@@ -2075,6 +2144,8 @@ export type SupportingPosting = {
   missing_required: string[]
   unverified_required: string[]
   pending_requirements: number
+  review_complete: boolean
+  review_blockers: ReviewBlocker[]
   similarity_to_target: number | null
   similarity_to_profile: number | null
 }
@@ -2096,6 +2167,7 @@ export type IntermediateArchetypeRoute = {
     unverified_required_gaps: string[]
     unreviewed_requirement_claims: number
     review_complete: boolean
+    review_blockers: ReviewBlocker[]
   }
   target_gaps_addressed: string[]
   compensation: ResolvedCompensation
@@ -2118,7 +2190,7 @@ export type GapValueItem = {
     intermediate_archetypes_involving_it: { archetype_concept_id: string; archetype_name: string }[]
   }
   market_option_value:
-    | { available: false; reason: string }
+    | { available: false; reason: string; withheld_as_stale?: boolean }
     | {
         available: true
         archetypes_unlocked: number
@@ -2145,7 +2217,10 @@ export type PathwaysGates = {
   compensation_context_available: boolean
   target_compensation_available: boolean
   personal_earnings_available: boolean
+  // Scoped to the candidates that actually support a route shown here, not
+  // every posting in the corpus.
   candidate_review_complete: boolean
+  derived_economics_fresh: boolean
 }
 
 export type PathwaysResult = {
@@ -2174,8 +2249,10 @@ export type PathwaysResult = {
     target_gaps_addressed: string[]
   }[]
   gap_value: GapValueItem[]
+  economics_freshness: EconomicsFreshness
   gates: PathwaysGates
   incomplete: string[]
+  review_blockers: { target: ReviewBlocker[]; supporting_candidates: ReviewBlocker[] }
   candidates_assessed: number
   distinct_concepts: number
   method: {
@@ -2261,10 +2338,15 @@ export const api = {
   proposeRoleCompensation: (id: string) =>
     req<CompensationProposalResult>(`/role-instances/${id}/compensation/propose`, { method: 'POST' }),
   acceptRoleCompensation: (id: string, payload: CompensationAcceptInput) =>
-    req<{ id: string; created: boolean; status: string; market_unassigned_reason: string | null }>(
-      `/role-instances/${id}/compensation/accept`,
-      { method: 'POST', body: JSON.stringify(payload) },
-    ),
+    req<CompensationAcceptResult>(`/role-instances/${id}/compensation/accept`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  // Correcting or retiring an *accepted* observation reuses the compensation
+  // review lifecycle that already exists further down this object
+  // (`reviewCompensationObservation` / `correctCompensationObservation`,
+  // both of which act on any observation, not only survey rows) rather than
+  // introducing a second parallel mechanism. Same for `rebuildEconomics`.
   getRoleArchetype: (id: string) => req<RoleArchetypeSummary>(`/role-instances/${id}/archetype`),
   getArchetypeCatalogue: () => req<ArchetypeCatalogueEntry[]>('/role-instances/archetype-catalogue'),
   proposeRoleArchetype: (id: string) =>

@@ -17,6 +17,12 @@ Return a single JSON object of this shape:
       "employment_basis": "permanent",
       "evidence_span": "£105,000 - £125,000 per annum",
       "note": "stated in the 'Package' section"
+    },
+    {
+      "bonus_pct": 15,
+      "component": "bonus_pct",
+      "pay_period": "annual",
+      "evidence_span": "plus an annual bonus of up to 15%"
     }
   ],
   "no_compensation_stated": false,
@@ -34,20 +40,30 @@ Return a single JSON object of this shape:
    the immutable source document, so an approximate quote is worse than no
    item at all.
 
-2. **Never invent a missing field.** If the posting gives a single figure,
+2. **A bonus percentage is a percentage, not an amount.** When the posting
+   states a bonus as a proportion of pay ("10% bonus", "bonus up to 20% of
+   base"), set `"component": "bonus_pct"` and put the number in `bonus_pct`
+   (`10`, `20` — the number of percent, never `0.1`). Leave `amount_min`,
+   `amount_max` and `currency` null: a percentage has no currency of its own.
+   A bonus stated only as a cash figure ("£10,000 annual bonus") has no
+   component in this schema — omit it as an item and mention it in `notes`
+   instead. Never convert a cash bonus into a percentage, and never put a
+   percentage into an amount field.
+
+3. **Never invent a missing field.** If the posting gives a single figure,
    set `amount_min` to that figure and leave `amount_max` null (or vice
    versa where only a ceiling is stated). If it gives no currency, leave
    `currency` null — do not infer one from the country, the employer, or the
    language of the advert. If it does not say whether the figure is annual,
    leave `pay_period` null.
 
-3. **Never estimate.** If the posting says "competitive salary", "salary
+4. **Never estimate.** If the posting says "competitive salary", "salary
    depending on experience", "market rate", or gives only a benefits list,
    that is *no stated compensation*: return `"items": []` and
    `"no_compensation_stated": true`. Producing a guessed number here is the
    single worst thing you can do in this task.
 
-4. **`component`** is one of:
+5. **`component`** is one of:
    - `base` — base salary or basic pay
    - `day_rate` — a contractor day rate
    - `total_package` — an explicitly stated total/OTE package
@@ -55,17 +71,17 @@ Return a single JSON object of this shape:
    Use exactly one per item. A posting stating both a base salary and a
    separate bonus produces **two** items, never one combined figure.
 
-5. **`pay_period`** is `annual` or `daily`. A monthly or hourly figure that
+6. **`pay_period`** is `annual` or `daily`. A monthly or hourly figure that
    the posting does not itself annualise must not be converted — omit the
    item and mention it in `notes` instead.
 
-6. **`employment_basis`** is `permanent`, `contract`, or `unknown`. Use
+7. **`employment_basis`** is `permanent`, `contract`, or `unknown`. Use
    `unknown` unless the posting is explicit.
 
-7. **One item per distinct stated figure.** Do not repeat the same figure
+8. **One item per distinct stated figure.** Do not repeat the same figure
    because it appears twice in the advert.
 
-8. `notes` is for anything a human reviewer should know that does not fit an
+9. `notes` is for anything a human reviewer should know that does not fit an
    item — for example "an hourly rate is stated but was not extracted", or
    "the salary appears in a table that may not have captured cleanly". Leave
    it null when there is nothing to say.

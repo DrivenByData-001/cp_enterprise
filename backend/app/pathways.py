@@ -66,9 +66,10 @@ from fastapi.encoders import jsonable_encoder
 
 from . import compensation_resolver as resolver
 from .db import to_json_param
+from .economics_freshness import economics_freshness
 from .embeddings import ensure_profile_embedding, get_embedding
 from .personal_earnings import personal_compensation_fingerprint, safe_personal_earnings_state
-from .stepping_stones import assess_all_candidates
+from .stepping_stones import assess_all_candidates, review_blockers, review_is_complete
 from .target_cache import pathways_revision, revisions
 
 logger = logging.getLogger(__name__)
@@ -254,7 +255,7 @@ def _transition(assessment: dict, actions: dict | None) -> dict:
 
 # --- Direct route -----------------------------------------------------------
 
-def _direct_route(cur, target, target_requirements, statuses, target_pending, mapping, compensation,
+def _direct_route(cur, target, target_requirements, statuses, target_review, mapping, compensation,
                   earnings_state, actions) -> dict:
     """You -> target, assessed with exactly the same evidence statuses every
     other node uses (so the direct route and an intermediate route can never
@@ -274,13 +275,21 @@ def _direct_route(cur, target, target_requirements, statuses, target_pending, ma
     evidenced = sum(statuses.get(r["concept_id"]) == "evidenced" for r in requirements)
     coverage = evidenced / len(requirements) if requirements else None
 
+    # The canonical review gate is `complete`, which folds together unreviewed
+    # claims, unresolved vocabulary proposals and concepts needing
+    # re-extraction. Checking the unreviewed count alone let a target with a
+    # dangling vocabulary proposal read as fully reviewed.
+    blockers = review_blockers(target_review)
+    target_pending = (target_review or {}).get("unreviewed", 0)
+
     if not requirements:
         state, reason = "insufficient_evidence", (
             "This target has no reviewed requirements, so structural fit cannot be assessed."
         )
-    elif target_pending:
+    elif blockers:
+        outstanding = "; ".join(f"{b['count']} {b['label']}" for b in blockers)
         state, reason = "review_incomplete", (
-            f"{target_pending} requirement claim(s) on this target are still unreviewed. "
+            f"Requirement review on this target is not complete ({outstanding}). "
             "Complete the review before reading this as your fit."
         )
     elif not mapping["complete"]:
@@ -328,8 +337,11 @@ def _direct_route(cur, target, target_requirements, statuses, target_pending, ma
             "evidence_coverage": coverage,
             "blocking_required_gaps": missing,
             "unverified_required_gaps": unverified,
-            "review_complete": target_pending == 0,
+            "review_complete": not blockers,
+            "review_blockers": blockers,
             "unreviewed_requirement_claims": target_pending,
+            "unresolved_vocabulary_proposals": (target_review or {}).get("unresolved_proposals", 0),
+            "concepts_needing_reextraction": (target_review or {}).get("needs_reextraction", 0),
             "mapping_complete": mapping["complete"],
             "unmapped_requirements": mapping["unresolved"],
         },
@@ -341,7 +353,8 @@ def _direct_route(cur, target, target_requirements, statuses, target_pending, ma
 
 # --- Intermediate archetypes ------------------------------------------------
 
-def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: dict, actions: dict) -> list[dict]:
+def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: dict, actions: dict,
+                        freshness: dict) -> list[dict]:
     """Group the postings the structural engine judged genuine stepping
     stones by their *reviewed* archetype, preserving the supporting postings
     under each one.
@@ -398,24 +411,37 @@ def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: 
         best_coverage = max(coverages) if coverages else None
 
         benchmark = benchmarks.get(archetype_id)
-        compensation = (
-            resolver.from_archetype_benchmark(benchmark)
-            if benchmark is not None and benchmark["reference_comp"] is not None
-            else resolver.insufficient_compensation(
+        usable_benchmark = benchmark is not None and benchmark["reference_comp"] is not None
+        if usable_benchmark and freshness["fresh"]:
+            compensation = resolver.from_archetype_benchmark(benchmark)
+        elif usable_benchmark:
+            # The benchmark exists but the derived tables behind it predate
+            # the current evidence. Showing it as current would be exactly
+            # the silent staleness this build refuses.
+            compensation = resolver.insufficient_compensation(
+                f"This archetype has a market benchmark, but it is withheld: {freshness['reason']}",
+                {"tier": 2, "withheld": "stale_derived_economics", "freshness": freshness["state"],
+                 "archetype_concept_id": archetype_id},
+            )
+        else:
+            compensation = resolver.insufficient_compensation(
                 "No accepted compensation evidence qualifies as a benchmark for this archetype in the "
                 "selected market yet.",
                 {"tier": 4, "archetype_concept_id": archetype_id, "has_archetype_comp_row": benchmark is not None},
             )
-        )
 
         if not target_gaps_addressed:
             state, reason = "no_target_progress", (
                 "The postings in this archetype do not involve any of the target's outstanding requirements."
             )
         elif compensation["basis"] == resolver.BASIS_INSUFFICIENT:
+            detail = (
+                "but its compensation benchmark is out of date and withheld until economics are rebuilt"
+                if usable_benchmark else "but has no compensation benchmark in this market yet"
+            )
             state, reason = "route_without_compensation", (
                 f"This archetype involves {len(target_gaps_addressed)} of the target's outstanding "
-                "requirement(s), but has no compensation benchmark in this market yet."
+                f"requirement(s), {detail}."
             )
         else:
             state, reason = "useful_intermediate", (
@@ -453,6 +479,8 @@ def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: 
                         "missing_required": p["missing_required"],
                         "unverified_required": p["unverified_required"],
                         "pending_requirements": p["pending_requirements"],
+                        "review_complete": p.get("review_complete", True),
+                        "review_blockers": p.get("review_blockers") or [],
                         "similarity_to_target": p["similarity_to_target"],
                         "similarity_to_profile": p["similarity_to_profile"],
                     }
@@ -463,7 +491,11 @@ def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: 
                     "blocking_required_gaps": blocking,
                     "unverified_required_gaps": unverified,
                     "unreviewed_requirement_claims": sum(p["pending_requirements"] for p in postings),
-                    "review_complete": all(p["pending_requirements"] == 0 for p in postings),
+                    # The full gate, not just unreviewed claims — a supporting
+                    # posting with a dangling vocabulary proposal is not
+                    # reviewed either.
+                    "review_complete": all(p.get("review_complete", True) for p in postings),
+                    "review_blockers": [b for p in postings for b in (p.get("review_blockers") or [])],
                 },
                 "target_gaps_addressed": target_gaps_addressed,
                 "compensation": compensation,
@@ -510,7 +542,8 @@ def _merge_actions(buckets: list[dict | None]) -> dict:
 
 # --- Gap value overlay (build §8) -------------------------------------------
 
-def _gap_value_overlay(cur, target_requirements, statuses, context, earnings_state, intermediate_nodes) -> list[dict]:
+def _gap_value_overlay(cur, target_requirements, statuses, context, earnings_state, intermediate_nodes,
+                       freshness) -> list[dict]:
     """For each of the target's outstanding required capabilities, the two
     distinct kinds of value the build asks to be kept apart:
 
@@ -534,7 +567,11 @@ def _gap_value_overlay(cur, target_requirements, statuses, context, earnings_sta
 
     concept_ids = sorted({r["concept_id"] for r in outstanding})
     gap_rows: dict[str, dict] = {}
-    if context["market_id"] and context["currency"]:
+    # `d_gap_value` is a counterfactual over the *current* structural model,
+    # so a capability, mapping or archetype change since the last rebuild
+    # makes it stale just as surely as a compensation change does. When it is
+    # stale, no market option value is reported at all.
+    if freshness["fresh"] and context["market_id"] and context["currency"]:
         cur.execute(
             "SELECT gv.capability_concept_id, gv.archetypes_unlocked, gv.archetypes_improved, "
             "       gv.roles_unlocked, gv.roles_improved, gv.reference_comp_unlocked, "
@@ -563,9 +600,11 @@ def _gap_value_overlay(cur, target_requirements, statuses, context, earnings_sta
             market_option_value = {
                 "available": False,
                 "reason": (
+                    freshness["reason"] if not freshness["fresh"] else
                     "No market-level gap value has been computed for this capability in the selected market. "
                     "Rebuild economics, or accept compensation evidence for the archetypes that demand it."
                 ),
+                "withheld_as_stale": not freshness["fresh"],
             }
             personal_context = {"comparable": False, "reason": "There is no unlocked reference figure to compare against."}
             evidence_quality = "insufficient"
@@ -695,19 +734,24 @@ def pathways_for_target(cur, target_id: str, *, market_id: str | None = None, cu
     evidence_revision, _path_revision = revisions(cur, target_vec, profile_vec)
     assessed = assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revision)
     earnings_state = safe_personal_earnings_state(cur)
+    # Computed once for the whole composition rather than per resolution: a
+    # cache miss recomposes Pathways from the derived economics tables but
+    # never rebuilds them, so every figure drawn from them has to be checked
+    # against when those tables were last built.
+    freshness = economics_freshness(cur)
 
     posting_ids = [c["id"] for c in assessed["ranked"]]
     actions = _development_actions(cur, [target_id, *posting_ids])
     target_compensation = resolver.resolve_role_compensation(
-        cur, target_id, market_id=context["market_id"], currency=context["currency"]
+        cur, target_id, market_id=context["market_id"], currency=context["currency"], freshness=freshness,
     )
 
     direct = _direct_route(
         cur, target, assessed["target_requirements"], assessed["statuses"],
-        assessed["target_pending_requirements"], assessed["target_mapping"],
+        assessed["target_review"], assessed["target_mapping"],
         target_compensation, earnings_state, actions,
     )
-    intermediates = _group_by_archetype(cur, assessed["ranked"], context, earnings_state, actions)
+    intermediates = _group_by_archetype(cur, assessed["ranked"], context, earnings_state, actions, freshness)
     unclassified = [
         {"id": c["id"], "title": c["title"], "organisation": c["organisation"],
          "target_gaps_addressed": c["target_gaps_addressed"]}
@@ -715,18 +759,30 @@ def pathways_for_target(cur, target_id: str, *, market_id: str | None = None, cu
         if c["assessment"] == "potential_step" and not c["archetype_concept_id"]
     ]
     gap_value = _gap_value_overlay(
-        cur, assessed["target_requirements"], assessed["statuses"], context, earnings_state, intermediates
+        cur, assessed["target_requirements"], assessed["statuses"], context, earnings_state, intermediates, freshness
     )
 
+    # `candidate_review_complete` concerns the candidates that actually
+    # support a route shown here — the postings under an intermediate
+    # archetype, plus the useful-but-unclassified ones reported alongside
+    # them. Checking every posting in the corpus made this gate false
+    # because of unrelated roles the user is not being shown and has no
+    # reason to review, which is noise rather than a signal.
+    supporting_ids = {p["id"] for node in intermediates for p in node["supporting_postings"]}
+    supporting_ids |= {p["id"] for p in unclassified}
+    supporting_candidates = [c for c in assessed["ranked"] if c["id"] in supporting_ids]
+    supporting_blockers = [b for c in supporting_candidates for b in (c.get("review_blockers") or [])]
+
     gates = {
-        "target_requirements_reviewed": assessed["target_pending_requirements"] == 0,
+        "target_requirements_reviewed": review_is_complete(assessed["target_review"]),
         "target_mapping_complete": assessed["target_mapping"]["complete"],
         "target_has_requirements": bool(assessed["target_requirements"]),
         "target_archetype_assigned": target["archetype_concept_id"] is not None,
         "compensation_context_available": context["market_id"] is not None,
         "target_compensation_available": target_compensation["basis"] != resolver.BASIS_INSUFFICIENT,
         "personal_earnings_available": earnings_state["status"] in ("current", "historical"),
-        "candidate_review_complete": all(c["pending_requirements"] == 0 for c in assessed["ranked"]),
+        "candidate_review_complete": all(c.get("review_complete", True) for c in supporting_candidates),
+        "derived_economics_fresh": freshness["fresh"],
     }
     incomplete = [name for name, ok in gates.items() if not ok]
 
@@ -753,8 +809,13 @@ def pathways_for_target(cur, target_id: str, *, market_id: str | None = None, cu
             "intermediate_archetypes": intermediates,
             "unclassified_supporting_postings": unclassified,
             "gap_value": gap_value,
+            "economics_freshness": freshness,
             "gates": gates,
             "incomplete": incomplete,
+            "review_blockers": {
+                "target": review_blockers(assessed["target_review"]),
+                "supporting_candidates": supporting_blockers,
+            },
             "candidates_assessed": len(assessed["ranked"]),
             "distinct_concepts": assessed["distinct_concepts"],
             "method": METHOD,
