@@ -53,7 +53,10 @@ Return a single JSON object of this shape:
    the quote for its basis, its kind and its currency, and refuses a label
    the quote contradicts:
    - a span saying "per day" / "day rate" must be `day_rate` + `daily`; a
-     span saying "per annum" / "annually" must be `annual`;
+     span saying "per annum" / "annually" must be `annual`; a span stating a
+     monthly, weekly or hourly figure is **refused outright** — that is rule 6
+     below, enforced server-side, so omit such an item rather than converting
+     it;
    - `total_package` needs wording that says the figure is a total — package,
      OTE, on-target earnings, total compensation — and a span that explicitly
      totals ("total package", "OTE") cannot back a `base` or `day_rate` item;
@@ -92,11 +95,15 @@ Return a single JSON object of this shape:
    separate bonus produces **two** items, never one combined figure.
 
 6. **`pay_period`** is `annual` or `daily`, and it follows the component:
-   `day_rate` is `daily`, `base` and `total_package` are `annual`. A monthly
-   or hourly figure that the posting does not itself annualise must not be
-   converted — omit the item and mention it in `notes` instead. Leave
-   `pay_period` null only when you cannot tell what the figure is at all; do
-   not pair a component with a period it cannot have.
+   `day_rate` is `daily`, `base` and `total_package` are `annual`. There is no
+   third option — the database column itself allows only these two — so a
+   monthly, weekly or hourly figure the posting does not itself annualise
+   **cannot be recorded at all**: omit the item and mention it in `notes`.
+   Never convert one. Where the posting gives both ("£8,000 per month
+   (£96,000 per annum)"), extract the annual figure the posting itself
+   states, quoting the passage that states it. Leave `pay_period` null only
+   when you cannot tell what the figure is at all; do not pair a component
+   with a period it cannot have.
 
 7. **`employment_basis`** is `permanent`, `contract`, or `unknown`. Use
    `unknown` unless the posting is explicit.

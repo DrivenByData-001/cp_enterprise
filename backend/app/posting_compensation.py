@@ -305,21 +305,37 @@ def _is_percentage(text: str, at: int) -> bool:
     return _PERCENT_RE.match(text, at) is not None
 
 
-def _amounts_in_span(span: str) -> set[Decimal]:
+def _amount_occurrences(span: str) -> list[tuple[Decimal, int]]:
+    """Every amount the span writes, each with the offset it ends at — so a
+    figure can be read together with the period written beside it."""
     inherited = {
         match.start("lead"): _scaled(match.group("lead"), match.group("suffix"))
         for match in _SHARED_SCALE_RE.finditer(span)
     }
-    amounts: set[Decimal] = set()
+    occurrences = []
     for match in _NUMBER_RE.finditer(span):
         if _is_percentage(span, match.end()):
             continue
         start = match.start("number")
-        amounts.add(
+        value = (
             inherited[start] if start in inherited
             else _scaled(match.group("number"), match.group("suffix"))
         )
-    return amounts
+        occurrences.append((value, match.end()))
+    return occurrences
+
+
+def _amounts_in_span(span: str) -> set[Decimal]:
+    return {value for value, _ in _amount_occurrences(span)}
+
+
+def _unsupported_tail(span: str, at: int) -> str | None:
+    """The unsupported period written immediately after the number ending at
+    `at`, if any."""
+    for label, pattern in _UNSUPPORTED_TAIL_RES:
+        if pattern.match(span, at):
+            return label
+    return None
 
 
 def _percentages_in_span(span: str) -> set[Decimal]:
@@ -369,6 +385,30 @@ _ANNUAL_WORDING_RE = re.compile(
     r"\bper annum\b|\bper year\b|\ba year\b|\bannual(?:ly)?\b|\bp\.a\.", re.IGNORECASE
 )
 
+# Periods this schema cannot hold at all: `compensation_observation.pay_period`
+# is `CHECK (pay_period IN ('annual', 'daily'))` (migration 0013), so a monthly
+# or hourly figure has no representation here under *any* basis — not even
+# curator_asserted. Recognising only daily and annual wording made "no period
+# stated" and "a period we cannot store" the same silent case, and "Salary
+# £8,000 per month" accepted as base/annual stored an £8,000 salary. The
+# refusal below says omit it or quote a passage where the advert itself gives
+# an annual or daily figure; it never offers to convert, because converting is
+# exactly the fabrication the prompt already forbids the model.
+_UNSUPPORTED_PERIODS = (
+    ("a monthly", r"per (?:calendar )?month\b|a month\b|monthly\b|pcm\b|/\s*month\b"),
+    ("a weekly", r"per week\b|a week\b|weekly\b|/\s*week\b"),
+    ("an hourly", r"per hour\b|an hour\b|hourly\b|/\s*hour\b"),
+)
+# Anywhere in the span...
+_UNSUPPORTED_PERIOD_RES = tuple(
+    (label, re.compile(body, re.IGNORECASE)) for label, body in _UNSUPPORTED_PERIODS
+)
+# ...and attached to one particular number, which is the same tail read
+# `_is_percentage` does.
+_UNSUPPORTED_TAIL_RES = tuple(
+    (label, re.compile(rf"\s*(?:{body})", re.IGNORECASE)) for label, body in _UNSUPPORTED_PERIODS
+)
+
 # Two package vocabularies, and the asymmetry is the point. The bare word
 # "package" is enough to *support* a total-package claim, but not to
 # *contradict* a base-salary one: "base salary £120,000 plus a benefits
@@ -414,6 +454,20 @@ def _basis_problems(item: dict, span: str) -> list[str]:
     """The period the quote states, against the period the item claims."""
     component, period = item.get("component"), item.get("pay_period")
     daily, annual = bool(_DAILY_WORDING_RE.search(span)), bool(_ANNUAL_WORDING_RE.search(span))
+
+    if not daily and not annual:
+        # No period this schema supports. If the span states one it cannot
+        # hold, that is a refusal rather than silence — the figure is real,
+        # but there is nowhere to put it that does not misstate it.
+        for name, pattern in _UNSUPPORTED_PERIOD_RES:
+            if pattern.search(span):
+                return [
+                    f"the quoted evidence span states {name} figure, and a compensation observation can "
+                    "only be annual or daily — so there is no way to record this without either misstating "
+                    "the period or annualising a figure the advert never annualised. Leave it out, or quote "
+                    "a passage where the advert itself states an annual or daily amount"
+                ]
+
     if daily == annual:
         # Neither stated, or a passage that states both ("£650 per day, c.
         # £150,000 per annum"). The quote does not settle it, so it does not
@@ -431,6 +485,33 @@ def _basis_problems(item: dict, span: str) -> list[str]:
             f"{period} — quote the passage that states the {period} amount instead"
         ]
     return []
+
+
+def _amount_period_problems(item: dict, span: str) -> list[str]:
+    """A figure written with a period this schema cannot hold, taken out of a
+    span that also states one it can.
+
+    `_basis_problems` reads the span as a whole, so "£8,000 per month
+    (£96,000 per annum)" satisfies it — the passage does state an annual
+    figure. It just is not £8,000. This reads the period written beside the
+    submitted number itself, and refuses only when *every* place that number
+    appears is written with an unsupported period: a figure the advert gives
+    both monthly and annually is the advert's own annualisation, and is
+    exactly what the reviewer should be taking."""
+    problems = []
+    occurrences = _amount_occurrences(span)
+    for label in ("amount_min", "amount_max"):
+        value = _as_decimal(item.get(label))
+        if value is None:
+            continue
+        tails = [_unsupported_tail(span, end) for occurrence, end in occurrences if occurrence == value]
+        if tails and all(tails):
+            problems.append(
+                f"{label} {_figure(item[label])} is written in the quoted evidence span as {tails[0]} "
+                "figure, and a compensation observation can only be annual or daily — quote the passage "
+                "that gives the annual or daily amount instead, and never annualise one the advert did not"
+            )
+    return problems
 
 
 def _kind_problems(item: dict, span: str) -> list[str]:
@@ -493,7 +574,13 @@ def _corroboration_problems(item: dict, span: str) -> list[str]:
         value = _as_decimal(raw)
         if value is None or value not in stated:
             problems.append(_unsupported(label, raw, stated))
-    return problems + _basis_problems(item, span) + _kind_problems(item, span) + _currency_problems(item, span)
+    return (
+        problems
+        + _basis_problems(item, span)
+        + _amount_period_problems(item, span)
+        + _kind_problems(item, span)
+        + _currency_problems(item, span)
+    )
 
 
 def _annotate_proposal_item(item: dict, document_text: str, *, fallback_currency: str | None) -> dict:

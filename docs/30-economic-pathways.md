@@ -284,9 +284,42 @@ So the quote is read for three more things:
 | --- | --- |
 | "per day", "day rate", "per diem", "/day" | `day_rate` + `daily` |
 | "per annum", "a year", "annually", "p.a." | `annual` |
+| "per month", "pcm", "a week", "per hour"… | **refused** — see below |
 | "total package", "OTE", "on-target earnings" | `total_package` — and it may not back `base` or `day_rate` |
 | a `total_package` claim | needs package / OTE / total-compensation wording to support it |
 | `£`, `€`, or an ISO code | the same currency, never converted |
+
+#### A period the schema cannot hold is refused, not annualised
+
+`compensation_observation.pay_period` is `CHECK (pay_period IN ('annual',
+'daily'))` (migration 0013), so a monthly, weekly or hourly figure has no
+representation here under *any* basis — not even `curator_asserted`.
+Recognising only daily and annual wording made "no period stated" and "a
+period we cannot store" the same silent case, so `"Salary £8,000 per month"`
+accepted as base/annual stored an £8,000 salary: internally valid, 8,000 in
+the quote, GBP agreeing with £, and no basis wording either rule recognised.
+
+Such a span is now refused outright. The message says to omit the figure or
+quote a passage where the advert itself gives an annual or daily amount; it
+never offers the curator-asserted route, because the CHECK constraint forbids
+a monthly period there too, and never offers to convert — converting is the
+fabrication the prompt already forbids the model.
+
+The refusal is about the period the advert states, not the component the
+reviewer picked: an hourly quote cannot back a day rate either.
+
+Two cases the rule deliberately does not catch, because neither is the
+system converting anything:
+
+- **The advert annualises its own figure.** `"£8,000 per month (£96,000 per
+  annum)"` states an annual amount, and £96,000 is exactly what the reviewer
+  should take. Taking **£8,000** out of that same span is still refused,
+  though — the whole-span rule passes the passage, so the period written
+  beside the submitted number settles it, and a figure refuses only when
+  *every* place it appears is written with an unsupported period.
+- **An annual salary paid in instalments.** `"£120,000 per annum, paid
+  monthly"` is an annual salary; refusing it would be the rule misfiring on
+  how the money arrives.
 
 Each rule is deliberately one-sided: it fires only on wording that settles
 the question and stays silent when the passage does not, because silence

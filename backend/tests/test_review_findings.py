@@ -1565,3 +1565,125 @@ def test_the_proposal_screen_flags_a_mislabelled_day_rate(monkeypatch):
 
     assert items[0]["acceptable"] is False
     assert any("states a rate per day" in p for p in items[0]["problems"])
+
+
+# --- A period the schema cannot hold is refused, never annualised -----------
+#
+# `compensation_observation.pay_period` is CHECK (pay_period IN ('annual',
+# 'daily')) (migration 0013), so a monthly or hourly figure has no
+# representation under any basis — not even curator_asserted. Recognising only
+# daily and annual wording made "no period stated" and "a period we cannot
+# store" the same silent case.
+
+@pytest.mark.parametrize(
+    "span,amount,named",
+    [
+        ("Salary: £8,000 per month.", 8000, "a monthly"),
+        ("Salary: £8,000 pcm.", 8000, "a monthly"),
+        ("Rate: £85 per hour.", 85, "an hourly"),
+        ("Paying £1,600 a week.", 1600, "a weekly"),
+    ],
+)
+def test_a_period_the_schema_cannot_hold_is_refused(span, amount, named):
+    """£8,000 per month recorded as annual base pay is an £8,000 salary. The
+    prompt already tells the model not to convert; the server has to enforce
+    it, because an edited item takes the same path as a proposed one."""
+    posting = f"Head of Capital, London.\n{span}\n"
+    with db_cursor() as cur:
+        document_id = _document(cur, posting)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_min=amount, currency="GBP", evidence_span=span)
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation WHERE role_instance_id = %s", (role_id,)
+        )
+        assert cur.fetchone()["n"] == 0
+
+    message = str(excinfo.value)
+    assert f"states {named} figure" in message
+    assert "only be annual or daily" in message
+    # It must not offer the curator-asserted route: the CHECK constraint
+    # forbids a monthly period there too, so that would be wrong advice.
+    assert "curator-asserted" not in message
+
+
+def test_an_hourly_rate_cannot_be_recorded_as_a_day_rate_either():
+    """The refusal is about the period the advert states, not about which
+    component the reviewer picked."""
+    span = "Rate: £85 per hour."
+    with db_cursor() as cur:
+        document_id = _document(cur, f"Interim Actuary.\n{span}\n")
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="day_rate", pay_period="daily", amount_min=85, currency="GBP",
+                    employment_basis="contract", evidence_span=span)
+    assert "only be annual or daily" in str(excinfo.value)
+
+
+def test_an_advert_that_annualises_its_own_monthly_figure_is_still_usable():
+    """The rule refuses *our* converting, not the advert's. Where the posting
+    states the annual equivalent itself, that figure is exactly what the
+    reviewer should take."""
+    span = "£8,000 per month (£96,000 per annum)"
+    with db_cursor() as cur:
+        document_id = _document(cur, f"Head of Capital.\nSalary {span}.\n")
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        result = _accept(cur, role_id, component="base", amount_min=96000, currency="GBP",
+                         evidence_span=span)
+        resolved = resolver.resolve_role_compensation(cur, role_id)
+
+    assert result["review_status"] == "accepted"
+    assert resolved["amount_min"] == 96000
+
+
+def test_the_monthly_figure_in_that_same_span_is_still_refused(client):
+    """The span states an annual figure, so the whole-span rule passes it —
+    but £8,000 is not that figure. The period written beside the submitted
+    number settles it."""
+    span = "£8,000 per month (£96,000 per annum)"
+    with db_cursor() as cur:
+        document_id = _document(cur, f"Head of Capital.\nSalary {span}.\n")
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_min=8000, currency="GBP", evidence_span=span)
+    assert "amount_min 8000 is written in the quoted evidence span as a monthly figure" in str(excinfo.value)
+
+
+def test_an_annual_figure_paid_in_monthly_instalments_is_not_refused():
+    """"£120,000 per annum, paid monthly" states an annual salary. Refusing it
+    would be the rule misfiring on how the money arrives."""
+    assert posting_compensation._corroboration_problems(
+        {"component": "base", "pay_period": "annual", "currency": "GBP", "amount_min": 120000},
+        "£120,000 per annum, paid monthly",
+    ) == []
+
+
+def test_the_proposal_screen_flags_an_unsupported_period(monkeypatch):
+    from app import ai
+    from app.posting_compensation import PostingCompensationProposal
+
+    def fake_run(**kwargs):
+        output = PostingCompensationProposal.model_validate(
+            {
+                "items": [
+                    {"amount_min": 8000, "currency": "GBP", "component": "base", "pay_period": "annual",
+                     "evidence_span": "Salary: £8,000 per month."},
+                ],
+                "no_compensation_stated": False,
+            }
+        )
+        run = ai.AITaskRun("posting_compensation_extract", "test-model",
+                           "extract_posting_compensation.md", "v1",
+                           "2026-09-16", "2026-09-16", "ok", 100, 50)
+        return ai.AITaskResult(output, run)
+
+    monkeypatch.setattr(posting_compensation, "run_json_task", fake_run)
+
+    with db_cursor() as cur:
+        document_id = _document(cur, "Head of Capital.\nSalary: £8,000 per month.\n")
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        items = posting_compensation.propose_posting_compensation(cur, role_id)["proposal"]["items"]
+
+    assert items[0]["acceptable"] is False
+    assert any("only be annual or daily" in p for p in items[0]["problems"])
