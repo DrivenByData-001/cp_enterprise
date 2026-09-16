@@ -132,16 +132,43 @@ def load_role_requirements(cur, role_instance_id: str) -> list[dict]:
 
 def vetoed_concept_ids(cur, role_instance_id: str) -> set[str]:
     """Concepts a curator has actively rejected or corrected away for this
-    role (point 2's veto condition) — real curator authority that must
+    role *and never re-accepted since* — real curator authority that must
     prevent a legacy `role_skill_observation` for the same concept from
     reappearing wherever it might otherwise resurface, not only in this
     module's own fallback branch. `db.role_skills_with_fallback` uses this
     too: its observation-preferred branch would otherwise keep showing a
     concept as a "skill" even after a curator explicitly rejected it as a
-    requirement."""
+    requirement.
+
+    The "never re-accepted since" half matters and is not redundant: unlike
+    this module's own SQL-embedded veto (which only ever runs once a role
+    has *zero* current accepted claims at all, so a concept with a live
+    accepted claim can never reach it), `role_skills_with_fallback` calls
+    this standalone helper regardless of what else the role has accepted.
+    A claim corrected from "Python, required" to "Python, preferred" (same
+    concept, still current and accepted — routes/role_instances.py's edit
+    endpoint marks the *old* row 'corrected' even when the concept itself
+    didn't change) must not veto Python: there is a live accepted claim for
+    it right now, so excluding it would silently drop a legitimate,
+    currently-accepted requirement from display, not correct a stale one.
+    A claim actually rejected, or corrected *away to a different concept*
+    with nothing current left behind for the original one, still vetoes —
+    excluded here by requiring a matching *current* accepted row for the
+    same concept_id, which only the "graded, not remapped" case has."""
     cur.execute(
-        "SELECT DISTINCT concept_id FROM jobber.requirement_claim "
-        "WHERE role_instance_id = %s AND review_status IN ('rejected', 'corrected')",
+        """
+        SELECT DISTINCT veto.concept_id
+        FROM jobber.requirement_claim veto
+        WHERE veto.role_instance_id = %s
+          AND veto.review_status IN ('rejected', 'corrected')
+          AND NOT EXISTS (
+              SELECT 1 FROM jobber.requirement_claim current
+              WHERE current.role_instance_id = veto.role_instance_id
+                AND current.concept_id = veto.concept_id
+                AND current.superseded_by IS NULL
+                AND current.review_status = 'accepted'
+          )
+        """,
         (role_instance_id,),
     )
     return {str(r["concept_id"]) for r in cur.fetchall()}
@@ -161,11 +188,18 @@ def vetoed_concept_ids(cur, role_instance_id: str) -> set[str]:
 # "Complete" must also account for extraction's *other* output: a surface
 # form extraction could not resolve to any concept becomes a
 # jobber.concept_proposal (never a requirement_claim at all — see
-# extraction.py), keyed by the source document rather than the role. A role
-# can have every one of its requirement_claim rows accepted while still
-# carrying pending concept_proposal rows for the same document — those
-# requirements are just as excluded from analysis (they never became a claim
-# to begin with), so `complete` must not be true while any exist.
+# extraction.py), deduplicated globally by surface form for vocabulary
+# curation (one decision per term). concept_proposal's own document_id only
+# ever remembers the *first* role/document that produced a given unresolved
+# term — a later role hitting the same still-pending term bumps its
+# occurrence_count but is otherwise invisible through that column.
+# jobber.concept_proposal_occurrence (migration 0021) is the per-(proposal,
+# role) link that makes every contributing role attributable, independent of
+# concept_proposal's own dedup. A role can have every one of its
+# requirement_claim rows accepted while still carrying an unresolved
+# proposal it contributed to — that requirement is just as excluded from
+# analysis as an unreviewed claim would be (it never became a claim to begin
+# with), so `complete` must not be true while any remain.
 
 _REVIEW_STATUSES = ("accepted", "unreviewed", "rejected")
 
@@ -205,11 +239,11 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
 
     cur.execute(
         """
-        SELECT ri.id AS role_instance_id, COUNT(cp.id) AS n
-        FROM jobber.role_instance ri
-        JOIN jobber.concept_proposal cp ON cp.document_id = ri.document_id AND cp.status = 'pending'
-        WHERE ri.id = ANY(%s::uuid[])
-        GROUP BY ri.id
+        SELECT o.role_instance_id, COUNT(DISTINCT o.concept_proposal_id) AS n
+        FROM jobber.concept_proposal_occurrence o
+        JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id AND cp.status = 'pending'
+        WHERE o.role_instance_id = ANY(%s::uuid[])
+        GROUP BY o.role_instance_id
         """,
         (role_ids,),
     )

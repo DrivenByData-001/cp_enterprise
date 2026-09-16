@@ -117,8 +117,9 @@ export default function Comparison() {
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Structural comparison: {data.role.title}</h1>
       {!data.review_summary.complete && (
         <p role="alert" style={{ color: 'var(--warning)' }}>
-          This role's requirement review is incomplete — {data.review_summary.unreviewed} pending AI suggestion
-          {data.review_summary.unreviewed === 1 ? '' : 's'} excluded below.{' '}
+          This role's requirement review is incomplete — {data.review_summary.unreviewed + data.review_summary.unresolved_proposals} pending item
+          {data.review_summary.unreviewed + data.review_summary.unresolved_proposals === 1 ? '' : 's'}
+          {data.review_summary.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''} excluded below.{' '}
           <Link to={`/role-instances/${data.role.id}/requirements`}>Review requirements</Link>
         </p>
       )}

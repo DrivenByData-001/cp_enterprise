@@ -325,6 +325,15 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
 
         # Unresolved vocabulary -> concept_proposal (never silently invented —
         # brief §6/§18), same convention as concept_linking.run_pass_b.
+        # concept_proposal itself is deduplicated globally by surface_form
+        # (one curation decision per term, doc 18 §3) — its own document_id/
+        # extraction_run_id only ever remember the *first* role that hit a
+        # given unresolved term (COALESCE below never overwrites them for a
+        # later role's occurrence). concept_proposal_occurrence is the
+        # separate, per-role link this proposal's own columns can't provide:
+        # role_requirements.py's unresolved_proposals count needs to know
+        # about every role that has ever produced a still-pending proposal,
+        # not only the one whose extraction happened to run first.
         normalized = normalize_name(surface_form)
         cur.execute(
             "SELECT id FROM jobber.concept_proposal WHERE surface_form = %s AND status = 'pending'",
@@ -332,6 +341,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         )
         existing = cur.fetchone()
         if existing:
+            proposal_id = existing["id"]
             cur.execute(
                 """
                 UPDATE jobber.concept_proposal SET
@@ -341,7 +351,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                     extraction_run_id = COALESCE(extraction_run_id, %s)
                 WHERE id = %s
                 """,
-                (document["id"], span, main_run_id, existing["id"]),
+                (document["id"], span, main_run_id, proposal_id),
             )
             proposals_updated += 1
         else:
@@ -352,11 +362,22 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                     (surface_form, occurrence_count, nearest_concept_id, nearest_similarity,
                      document_id, evidence_span, extraction_run_id, status)
                 VALUES (%s, 1, %s, %s, %s, %s, %s, 'pending')
+                RETURNING id
                 """,
                 (normalized, nearest[0] if nearest else None, nearest[1] if nearest else None,
                  document["id"], span, main_run_id),
             )
+            proposal_id = cur.fetchone()["id"]
             proposals_created += 1
+
+        cur.execute(
+            """
+            INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id, extraction_run_id)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (concept_proposal_id, role_instance_id) DO NOTHING
+            """,
+            (proposal_id, role_instance_id, document["id"], main_run_id),
+        )
 
     return {
         "status": "ok",

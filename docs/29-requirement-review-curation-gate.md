@@ -44,14 +44,22 @@ of its branches, though the rule takes a different shape in each:
 - Its `role_skill_observation`-preferred branch (the common case for older,
   legacy-imported roles) does *not* switch to requiring accepted claims —
   observations remain the display source whenever any exist, unchanged.
-  But it now also applies `role_requirements.vetoed_concept_ids` (the same
-  `review_status IN ('rejected', 'corrected')` condition §5 describes): a
-  concept a curator has explicitly reviewed and rejected as a requirement
-  for this role is excluded from the observation list too, so display can
-  no longer contradict analysis (an old role whose "Python" requirement a
-  human rejected would otherwise keep showing a "Python" skill chip
-  forever, since that branch never consulted requirement_claim at all
-  before this fix).
+  But it now also applies `role_requirements.vetoed_concept_ids` (§5): a
+  concept a curator has explicitly rejected, or corrected away with nothing
+  current left behind for it, as a requirement for this role is excluded
+  from the observation list too, so display can no longer contradict
+  analysis (an old role whose "Python" requirement a human rejected would
+  otherwise keep showing a "Python" skill chip forever, since that branch
+  never consulted requirement_claim at all before this fix). Unlike this
+  function's own claim-vs-observation switch above, that veto is evaluated
+  per concept, independently of whether the role has any accepted claims
+  elsewhere — a second code-review pass found that this branch's first
+  version over-corrected as a result: *grading* an accepted claim (e.g.
+  required → preferred, same concept — the edit endpoint marks the old row
+  `corrected` even when the concept itself didn't change) also tripped the
+  veto and silently dropped the concept's chip entirely, taking a
+  currently-legitimate requirement down with the stale row it replaced.
+  §5 covers the fix.
 
 ## 2. Visibility without authority: the review-summary helper
 
@@ -59,7 +67,7 @@ Excluding unreviewed claims from the authoritative set must not make
 pending review invisible. `role_requirements.load_requirement_review_summary(_bulk)`
 returns, per role, current-claim counts by status (`accepted`,
 `unreviewed`, `rejected`); `unresolved_proposals` (pending
-`jobber.concept_proposal` rows tied to the role's own source document — a
+`jobber.concept_proposal` rows this role has actually contributed to — a
 surface form extraction couldn't resolve to any concept becomes one of
 these, *never* a `requirement_claim` at all, so it would otherwise be
 invisible to this summary entirely); `extraction_attempted` (whether a
@@ -72,8 +80,27 @@ accepted while still carrying pending, unresolved proposals for the same
 document — those requirements are just as excluded from analysis as an
 unreviewed claim would be, so `complete` must not be true while any remain;
 an earlier version of this build defined `complete` from the claim counts
-alone and missed this. Every UI surface that could otherwise imply "this is
-the final requirement set" reads it:
+alone and missed this.
+
+`jobber.concept_proposal` is deduplicated globally by surface form (one
+curation decision per term, however many postings mention it), and its own
+`document_id`/`extraction_run_id` columns are set once, on first insert,
+and never revisited (`document_id = COALESCE(document_id, %s)` in
+`extraction.py`) — a second role whose extraction later produces the exact
+same still-pending term bumps `occurrence_count` but stays invisible
+through those columns, which still point at whichever role happened to hit
+it first. A second code-review pass caught the consequence: role B could
+extract the same unresolved term role A already produced, get every other
+claim of its own accepted, and be reported `complete` — the term was
+"resolved" only from role A's point of view. Migration 0021 adds
+`jobber.concept_proposal_occurrence`, a per-(proposal, role) link populated
+on every extraction (`extraction.py`) independently of `concept_proposal`'s
+own dedup; `unresolved_proposals` now counts through that table, so every
+role that has ever contributed a still-pending term sees it, not only the
+first.
+
+Every UI surface that could otherwise imply "this is the final requirement
+set" reads this summary:
 
 - `GET /api/role-instances/{id}/requirements` returns it alongside the
   claim list, driving the Review requirements page's status summary.
@@ -88,6 +115,17 @@ the final requirement set" reads it:
   a pending unreviewed claim — a completeness-sensitive conclusion
   (reachability, an intermediate step) must never be drawn from a
   partially-reviewed requirement set, accepted claims notwithstanding.
+
+Role Detail's indicator and the Comparison banner originally interpolated
+only `unreviewed` into their copy, so a role blocked solely by unresolved
+vocabulary terms (`unreviewed == 0`, `unresolved_proposals > 0`) read as "0
+items not yet reviewed" — technically gated correctly (`complete` was still
+`false`), but naming a count of zero as the reason. Both now add
+`unresolved_proposals` into the displayed count and, whenever any are
+present, append "(including terms not yet matched to the vocabulary)" —
+matching the Review requirements page, which already surfaced this
+correctly since it reads the server-computed count directly rather than
+deriving `complete` from claims alone.
 
 Economics/archetype demand is a corpus-wide aggregate (how many roles in an
 archetype demand a capability), not a per-role judgement, so it is kept
@@ -211,21 +249,44 @@ edit and manual add — never trusting the frontend alone:
 
 ## 5. Legacy observation fallback: the veto
 
-Within the fallback branch (reached only when a role has zero usable
-claims at all), a legacy `role_skill_observation` for a concept is excluded
-if that concept's `requirement_claim` history on this role includes a
-`rejected` or `corrected` row — real curator authority overrides a legacy
-signal. The veto is keyed on `review_status IN ('rejected', 'corrected')`,
-**not** merely `superseded_by IS NOT NULL`: §6's rerun supersession can
-chain one unreviewed proposal's `superseded_by` to a fresher unreviewed
-proposal with no human ever having looked at either. That is proposal
-churn, not a decision, and per §1's core rule it must not gain veto power
-it would otherwise never have had — "unreviewed claims must not suppress
-the legacy observation fallback" has to hold even across a chain of
-still-unreviewed proposals, not just for a single lone one. A claim that *is*
-`corrected` always has `superseded_by` set too (the edit endpoint sets both
-together in the same transaction), so no case that used to veto stops
-vetoing.
+Within `load_role_requirements`'s own fallback branch (reached only when a
+role has zero usable claims *at all*), a legacy `role_skill_observation`
+for a concept is excluded if that concept's `requirement_claim` history on
+this role includes a `rejected` or `corrected` row — real curator authority
+overrides a legacy signal. The veto is keyed on
+`review_status IN ('rejected', 'corrected')`, **not** merely
+`superseded_by IS NOT NULL`: §6's rerun supersession can chain one
+unreviewed proposal's `superseded_by` to a fresher unreviewed proposal with
+no human ever having looked at either. That is proposal churn, not a
+decision, and per §1's core rule it must not gain veto power it would
+otherwise never have had — "unreviewed claims must not suppress the legacy
+observation fallback" has to hold even across a chain of still-unreviewed
+proposals, not just for a single lone one. A claim that *is* `corrected`
+always has `superseded_by` set too (the edit endpoint sets both together in
+the same transaction), so no case that used to veto stops vetoing.
+
+`role_requirements.vetoed_concept_ids` is the same veto extracted into its
+own function for `db.role_skills_with_fallback`'s observation-preferred
+branch (§1) to reuse — but it adds one refinement that function needs and
+`load_role_requirements` structurally never did: it only vetoes a concept
+when **no current, accepted** claim for that same concept exists. A second
+code-review pass found that without this, *grading* an accepted claim
+(required → preferred, same concept, nothing else changed) tripped the
+veto by itself — the old row's `review_status` flips to `corrected` exactly
+as a real correction's does, even though a live accepted claim for the
+concept exists right now — and silently dropped the whole concept from
+`role_skills_with_fallback`'s output, rather than just leaving a stale
+requirement_type behind. `load_role_requirements` never had this failure
+mode: reaching its fallback branch already requires the *entire role* to
+have zero accepted claims anywhere (§1), so a concept-level "but is there a
+current successor" question can never arise there — either the role has an
+accepted claim somewhere, and the whole role reads from `requirement_claim`
+instead of observations at all, or it doesn't, and no concept on it can
+have a "current accepted successor" to check for. `role_skills_with_fallback`
+has no such all-or-nothing switch inside its observation-preferred branch
+(accepted claims are consulted only to veto, never to supply the branch's
+rows), so the same raw condition needed the extra check once applied there
+per concept.
 
 ## 6. Re-extraction: conservative duplicate/supersession handling
 
@@ -301,6 +362,50 @@ current claims from coexisting for the same (role, concept) (§3a).
 Migration 0020 adds the partial unique index that closes it, plus makes
 the `superseded_by` foreign key deferrable to keep non-destructive
 correction working under that new constraint.
+
+That unique index is only safe to add if no such duplicate already exists
+wherever the migration runs. The *old* application code (before this
+build's conservative rerun-dedup, §6) could produce exactly this kind of
+duplicate — two current unreviewed claims for the same (role, concept) —
+over repeated extraction, so a second code-review pass added an explicit
+preflight: migration 0020 opens with a `DO` block that counts
+`(role_instance_id, concept_id)` pairs having more than one current row and
+`RAISE EXCEPTION`s with a diagnostic query and remediation guidance
+(supersede all but one per pair, never silently delete) if it finds any,
+*before* attempting `CREATE UNIQUE INDEX`. Without it, an ordinary
+index-creation error would be the first anyone learned of a production
+duplicate, mid-deploy, with no guidance on what to do about it.
+`test_migration_compatibility.py::test_migration_0020_preflight_rejects_existing_duplicate_current_claims`
+proves the preflight fires, by replaying every migration up to (but
+excluding) 0020 against a fresh database, seeding that exact duplicate, and
+confirming 0020's SQL raises rather than reaching the index.
+
+Migration 0021 adds `jobber.concept_proposal_occurrence` (§2's
+per-(proposal, role) attribution fix for `unresolved_proposals`), populated
+going forward by `extraction.py` on every extraction and, for proposals
+that already existed before this migration, backfilled best-effort by
+matching each `concept_proposal`'s recorded `document_id` to a
+`role_instance` — recovering the same "first role" attribution the old
+`document_id` column already gave it, made explicit, though not recovering
+attribution for any *other* role that hit the same term before this
+migration ran (that history was never recorded anywhere to recover from).
+
+Its own `extraction_run_id` column is nullable and references
+`jobber.extraction_run` with no `ON DELETE` clause (`NO ACTION`) — the same
+shape `jobber.concept_proposal.extraction_run_id` already had, which
+`db.delete_role_instance` already had to null out explicitly before it can
+delete a role's own extraction_run rows (that function's own docstring has
+the full chain). Adding this table introduced a second such reference that
+the same delete path now has to clear too, or deleting any role that ever
+produced an unresolved proposal fails with a `ForeignKeyViolation` instead
+of the 200 every other role delete gets —
+`test_delete_role_with_extraction_run_history_succeeds` (already exercising
+exactly this shape for `concept_proposal`) caught it immediately. Unlike
+`concept_proposal`, the occurrence row itself does not survive: its
+`role_instance_id` is `NOT NULL` and `ON DELETE CASCADE`, so once nulling
+its `extraction_run_id` clears the way, the role_instance `DELETE` a few
+lines later cascades the occurrence row away with it — nulling only exists
+to let that cascade reach it at all.
 
 ## 11. Production-data impact
 

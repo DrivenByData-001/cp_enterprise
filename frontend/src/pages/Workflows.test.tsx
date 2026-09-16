@@ -5,8 +5,10 @@ import Dashboard from './Dashboard'
 import Import from './Import'
 import AddTarget from './AddTarget'
 import RoleRequirements from './RoleRequirements'
+import RoleDetail from './RoleDetail'
+import Comparison from './Comparison'
 import ComparisonActions from '../components/ComparisonActions'
-import { api, type Role, type RoleListResponse, type TargetDraft, type ComparisonItem } from '../lib/api'
+import { api, type ComparisonResult, type Role, type RoleListResponse, type TargetDraft, type ComparisonItem } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: {
   listRoles: vi.fn(), getFacets: vi.fn(), checkDuplicate: vi.fn(), ingestText: vi.fn(),
@@ -17,6 +19,7 @@ vi.mock('../lib/api', () => ({ api: {
   acceptRequirement: vi.fn(), rejectRequirement: vi.fn(), reopenRequirement: vi.fn(),
   editRequirement: vi.fn(), addRequirement: vi.fn(), listConcepts: vi.fn(),
   proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  compareRole: vi.fn(), listDevelopmentActions: vi.fn(), getRoleContext: vi.fn(),
 } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 function Location() { return <output aria-label="Location">{useLocation().pathname + useLocation().search}</output> }
@@ -156,5 +159,48 @@ describe('Comparison next steps', () => {
     fireEvent.click(screen.getByText('Save development action'))
     await waitFor(() => expect(api.createDevelopmentAction).toHaveBeenCalledWith('role', expect.objectContaining({ title: 'Build project' })))
     expect(api.assertCapability).not.toHaveBeenCalled()
+  })
+})
+
+describe('incomplete-review wording covers unresolved vocabulary terms too', () => {
+  // review_summary can be incomplete purely from unresolved_proposals (a
+  // term extraction couldn't map to any concept, so it never became a
+  // requirement_claim at all) with zero unreviewed claims — the wording
+  // must not say "0 AI suggestions" in that case.
+  const baseRole = {
+    id: 'role', node_type: 'posting', title: 'Actuary', organisation: null, location: null, country: null,
+    remote_type: null, employment_type: null, posting_date: null, captured_at: null, career_track: null,
+    seniority_level: null, salary_min: null, salary_max: null, currency: null, summary: null, description: null,
+    requirements: null, responsibilities: null, key_skills_summary: null, top_adjacent_roles: null,
+    extraction_status: null, extraction_notes: null, similarity: null, url: null,
+  } as Role
+
+  it('Role Detail mentions unresolved vocabulary terms, not just "0 AI suggestions"', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      ...baseRole,
+      requirement_review: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 2, extraction_attempted: true, complete: false },
+    })
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
+    render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByText(/Requirements review pending/)
+    expect(notice.textContent).toContain('2 item')
+    expect(notice.textContent).not.toContain('0 item')
+    expect(notice.textContent).toMatch(/not yet matched to the vocabulary/)
+  })
+
+  it('Comparison mentions unresolved vocabulary terms, not just "0 pending AI suggestions"', async () => {
+    const comparison: ComparisonResult = {
+      role: { id: 'role', title: 'Actuary', kind: 'posting' }, items: [],
+      counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 0 },
+      blocking_gaps: [], unverified_required: [], fit_score: null, embedding_similarity: null, engine_version: 'v1',
+      review_summary: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 2, extraction_attempted: true, complete: false },
+    }
+    vi.mocked(api.compareRole).mockResolvedValue(comparison)
+    vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
+    render(<MemoryRouter initialEntries={['/comparison/role']}><Routes><Route path="/comparison/:id" element={<Comparison />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByRole('alert')
+    expect(notice.textContent).toContain('2 pending item')
+    expect(notice.textContent).not.toContain('0 pending item')
+    expect(notice.textContent).toMatch(/not yet matched to the vocabulary/)
   })
 })

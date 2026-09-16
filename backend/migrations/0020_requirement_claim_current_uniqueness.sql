@@ -11,6 +11,45 @@
 -- rows with superseded_by set are exempt, since a corrected chain
 -- legitimately reuses the same concept across time) makes that invariant a
 -- database guarantee, not just an application-level convention.
+--
+-- Preflight (code-review follow-up #2): the *old* application code allowed
+-- repeated extraction to create exactly this kind of duplicate — two
+-- current unreviewed claims for the same (role, concept) — before this
+-- build's conservative rerun-dedup handling existed. If any such duplicate
+-- already exists wherever this migration runs, CREATE UNIQUE INDEX below
+-- fails outright, and an ordinary index-creation error would be the first
+-- anyone learns of it — mid-deploy, with no guidance on what to do next.
+-- Check explicitly first and fail with a diagnostic that says what the
+-- problem is and how to find it, rather than mutating anything: resolving
+-- real duplicates (superseding all but one per pair, preserving history via
+-- review_status='corrected'/superseded_by — never silently deleting a row)
+-- needs a human to look at the actual data, which this migration cannot do
+-- safely on its own.
+DO $$
+DECLARE
+    dup_count int;
+BEGIN
+    SELECT COUNT(*) INTO dup_count FROM (
+        SELECT role_instance_id, concept_id
+        FROM jobber.requirement_claim
+        WHERE superseded_by IS NULL
+        GROUP BY role_instance_id, concept_id
+        HAVING COUNT(*) > 1
+    ) dupes;
+    IF dup_count > 0 THEN
+        RAISE EXCEPTION 'migration 0020 preflight failed: % (role_instance_id, concept_id) pair(s) '
+            'have more than one current (superseded_by IS NULL) jobber.requirement_claim row. '
+            'This must be resolved by a human before the unique index below can be created: for '
+            'each pair, decide which row should remain current and supersede the rest (superseded_by '
+            'pointing at the row that stays, review_status left as-is or set to ''corrected'' if a human '
+            'is making that call now) — never silently delete a row. Find them with: '
+            'SELECT role_instance_id, concept_id, COUNT(*), array_agg(id ORDER BY created_at) '
+            'FROM jobber.requirement_claim WHERE superseded_by IS NULL '
+            'GROUP BY role_instance_id, concept_id HAVING COUNT(*) > 1;',
+            dup_count;
+    END IF;
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_requirement_claim_one_current_per_concept
     ON jobber.requirement_claim (role_instance_id, concept_id)
     WHERE superseded_by IS NULL;

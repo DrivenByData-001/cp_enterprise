@@ -176,6 +176,14 @@ def test_delete_role_with_extraction_run_history_succeeds(client, monkeypatch):
         row = cur.fetchone()
         assert row["count"] == 1
         assert row["with_run"] == 0
+        # concept_proposal_occurrence is the opposite shape: it's about *this
+        # role's* occurrence of the proposal specifically, so — unlike
+        # concept_proposal itself — it cascade-deletes with the role rather
+        # than surviving nulled; reaching that cascade at all required nulling
+        # its own dangling extraction_run_id first (same NO ACTION problem as
+        # concept_proposal's, one table further removed).
+        cur.execute("SELECT count(*) AS n FROM jobber.concept_proposal_occurrence WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 0
 
 
 def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, monkeypatch):

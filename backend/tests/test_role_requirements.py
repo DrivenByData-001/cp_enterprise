@@ -14,6 +14,7 @@ from app.role_requirements import (
     load_requirement_review_summary,
     load_requirement_review_summary_bulk,
     load_role_requirements,
+    vetoed_concept_ids,
 )
 
 
@@ -71,6 +72,26 @@ def _supersede(cur, old_claim_id, *, new_review_status="accepted", old_review_st
         )
     _claim_requirement(cur, review_status=new_review_status, claim_id=new_claim_id, **new_claim_kwargs)
     return new_claim_id
+
+
+def _proposal(cur, role_id, document_id, *, surface_form, status="pending", evidence_span=None):
+    """Mirrors extraction.py's unresolved-surface-form path: a concept_proposal
+    row plus the concept_proposal_occurrence row that attributes it to this
+    particular role (migration 0021 — see role_requirements.py's
+    unresolved_proposals query, which joins through the occurrence table
+    rather than concept_proposal's own once-only document_id column)."""
+    cur.execute(
+        "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+        "VALUES (%s, 1, %s, %s, %s) RETURNING id",
+        (surface_form, document_id, evidence_span, status),
+    )
+    proposal_id = str(cur.fetchone()["id"])
+    cur.execute(
+        "INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id) "
+        "VALUES (%s, %s, %s)",
+        (proposal_id, role_id, document_id),
+    )
+    return proposal_id
 
 
 def _observation(cur, role_id, *, surface_form, canonical_concept_id=None, requirement_type=None, importance=None):
@@ -421,11 +442,7 @@ def test_review_summary_is_not_complete_while_unresolved_vocabulary_proposals_re
             cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
         )
         _claim_requirement(cur, role_id, _concept(cur, "Python"), review_status="accepted")
-        cur.execute(
-            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
-            "VALUES ('solvency ii', 1, %s, 'Solvency II', 'pending')",
-            (document_id,),
-        )
+        _proposal(cur, role_id, document_id, surface_form="solvency ii", evidence_span="Solvency II")
         summary = load_requirement_review_summary(cur, role_id)
     assert summary["accepted"] == 1
     assert summary["unreviewed"] == 0
@@ -434,25 +451,62 @@ def test_review_summary_is_not_complete_while_unresolved_vocabulary_proposals_re
 
 
 def test_resolved_or_unrelated_proposals_do_not_count_as_unresolved(client):
+    """A proposal is excluded from this role's count if it is no longer
+    pending (already resolved into the vocabulary), or if its occurrence
+    belongs to some other role entirely."""
     with db.db_cursor() as cur:
         document_id, _ = db.create_document(cur, kind="job_posting", content_text="Requires Python.", provenance_quality="original")
         other_document_id, _ = db.create_document(cur, kind="job_posting", content_text="A different posting.", provenance_quality="original")
         role_id = db.upsert_role_instance(
             cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
         )
-        cur.execute(
-            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
-            "VALUES ('resolved thing', 1, %s, 'x', 'resolved')",
-            (document_id,),
+        other_role_id = db.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "Other", "document_id": other_document_id}, skills=[]
         )
-        cur.execute(
-            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
-            "VALUES ('unrelated thing', 1, %s, 'y', 'pending')",
-            (other_document_id,),
-        )
+        _proposal(cur, role_id, document_id, surface_form="resolved thing", status="resolved", evidence_span="x")
+        _proposal(cur, other_role_id, other_document_id, surface_form="unrelated thing", status="pending", evidence_span="y")
         summary = load_requirement_review_summary(cur, role_id)
     assert summary["unresolved_proposals"] == 0
     assert summary["complete"] is True
+
+
+def test_unresolved_proposal_counts_for_every_role_that_hit_it_not_just_the_first(client):
+    """Code-review follow-up: concept_proposal is globally deduplicated by
+    surface_form, and its own document_id column only ever remembers the
+    *first* role/document that produced a given unresolved term (extraction.py
+    sets it via `document_id = COALESCE(document_id, %s)`). Role B hitting the
+    exact same still-pending term as role A must still see it as unresolved —
+    it must not inherit completeness just because role A got there first."""
+    with db.db_cursor() as cur:
+        document_a, _ = db.create_document(cur, kind="job_posting", content_text="Requires Foo Modelling.", provenance_quality="original")
+        document_b, _ = db.create_document(cur, kind="job_posting", content_text="Also requires Foo Modelling.", provenance_quality="original")
+        role_a = db.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "A", "document_id": document_a}, skills=[]
+        )
+        role_b = db.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "B", "document_id": document_b}, skills=[]
+        )
+        # Single global concept_proposal row (surface_form dedup), document_id
+        # forever pinned to role A's document — exactly as COALESCE leaves it.
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+            "VALUES ('foo modelling', 2, %s, 'Foo Modelling', 'pending') RETURNING id",
+            (document_a,),
+        )
+        proposal_id = str(cur.fetchone()["id"])
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id) VALUES (%s, %s, %s)",
+            (proposal_id, role_a, document_a),
+        )
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id) VALUES (%s, %s, %s)",
+            (proposal_id, role_b, document_b),
+        )
+        summary = load_requirement_review_summary_bulk(cur, [role_a, role_b])
+    assert summary[role_a]["unresolved_proposals"] == 1
+    assert summary[role_a]["complete"] is False
+    assert summary[role_b]["unresolved_proposals"] == 1
+    assert summary[role_b]["complete"] is False
 
 
 def test_extraction_attempted_reflects_whether_a_requirement_extract_run_exists(client):
@@ -572,3 +626,41 @@ def test_role_skills_with_fallback_still_applies_curator_veto_when_observations_
     assert rejected_concept_id not in resolved_ids
     assert kept_concept_id in resolved_ids
     assert len(skills) == 1
+
+
+def test_vetoed_concept_ids_excludes_a_concept_with_a_current_accepted_successor(client):
+    """Code-review follow-up: grading a claim (required -> preferred) for the
+    SAME concept marks the old row 'corrected' while a new row for that
+    concept stays current and accepted. That must NOT earn a veto — a
+    corrected/rejected claim only vetoes when nothing current and accepted is
+    left behind for the same concept_id."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        graded_concept_id = _concept(cur, "Python")
+        old_claim_id = _claim_requirement(cur, role_id, graded_concept_id, requirement_type="required", review_status="accepted")
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=graded_concept_id,
+                   requirement_type="preferred", old_review_status="corrected")
+
+        rejected_concept_id = _concept(cur, "Rust")
+        _claim_requirement(cur, role_id, rejected_concept_id, review_status="rejected")
+
+        vetoed = vetoed_concept_ids(cur, role_id)
+    assert graded_concept_id not in vetoed
+    assert rejected_concept_id in vetoed
+
+
+def test_role_skills_with_fallback_does_not_drop_a_concept_graded_not_removed(client):
+    """Same scenario as above, exercised through Role Detail's own consumer:
+    the concept's legacy observation must stay visible rather than vanishing
+    entirely, since there is a live accepted claim for it right now."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        concept_id = _concept(cur, "Python")
+        _observation(cur, role_id, surface_form="Python", canonical_concept_id=concept_id, requirement_type="required")
+        old_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="required", review_status="accepted")
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id,
+                   requirement_type="preferred", old_review_status="corrected")
+
+        skills = db.role_skills_with_fallback(cur, role_id)
+    resolved_ids = {s["resolved_concept_id"] for s in skills}
+    assert concept_id in resolved_ids

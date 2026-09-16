@@ -572,8 +572,10 @@ export default function RoleDetail() {
 
       {role.requirement_review && !role.requirement_review.complete && (
         <p style={{ marginTop: 16, fontSize: 13, color: 'var(--warning)' }}>
-          Requirements review pending — {role.requirement_review.unreviewed} AI suggestion
-          {role.requirement_review.unreviewed === 1 ? '' : 's'} not yet reviewed and excluded from comparison/analysis.{' '}
+          Requirements review pending — {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals} item
+          {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals === 1 ? '' : 's'} not yet reviewed
+          {role.requirement_review.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''} and
+          excluded from comparison/analysis.{' '}
           <Link to={`/role-instances/${role.id}/requirements`}>Review now</Link>
         </p>
       )}

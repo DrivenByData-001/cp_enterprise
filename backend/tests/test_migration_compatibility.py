@@ -340,3 +340,77 @@ def test_migrations_reject_database_without_baseline(client, monkeypatch):
         db_module.reset_pool()
         with psycopg.connect(admin_url, autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+
+
+def test_migration_0020_preflight_rejects_existing_duplicate_current_claims(client, monkeypatch):
+    """Code-review follow-up: the *old* application code (before this build's
+    conservative rerun-dedup handling) allowed repeated extraction to leave
+    two current (superseded_by IS NULL) requirement_claim rows for the same
+    (role_instance_id, concept_id) pair. Migration 0020's partial unique index
+    would fail outright against a database already in that state, with an
+    ordinary index-creation error as the first anyone learns of it — the
+    migration file adds an explicit DO-block preflight specifically to fail
+    loudly with a diagnostic instead. Prove that preflight actually fires, by
+    replaying every migration up to (but not including) 0020 against a fresh
+    database, seeding exactly that duplicate, and then applying 0020's SQL
+    text directly."""
+    admin_url = get_test_database_url()
+    db_name = f"cp_test_dupclaims_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{db_name}"')
+    parts = urlsplit(admin_url)
+    scoped_url = urlunsplit((parts.scheme, parts.netloc, f"/{db_name}", parts.query, parts.fragment))
+    target_name = "0020_requirement_claim_current_uniqueness.sql"
+    target_path = db_module.MIGRATIONS_DIR / target_name
+    baseline_sql = (db_module.MIGRATIONS_DIR.parent / "scripts" / "local_baseline.sql").read_text(encoding="utf-8")
+    try:
+        with psycopg.connect(scoped_url, autocommit=True) as conn:
+            conn.execute(baseline_sql)
+            # Pre-record 0020 as already "applied" so run_migrations() skips
+            # it — leaving its unique index/deferred-FK change out entirely
+            # while still applying every other file (0021 has no dependency
+            # on 0020's schema change) in the normal, real migration-runner
+            # code path rather than a hand-rolled re-implementation of it.
+            conn.execute(
+                "CREATE SCHEMA IF NOT EXISTS jobber; "
+                "CREATE TABLE IF NOT EXISTS jobber.migration_history "
+                "(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+            conn.execute(
+                "INSERT INTO jobber.migration_history (filename) VALUES (%s) ON CONFLICT DO NOTHING",
+                (target_name,),
+            )
+
+        db_module.reset_pool()
+        monkeypatch.setenv("DATABASE_URL", scoped_url)
+        applied = db_module.run_migrations()
+        assert target_name not in applied
+
+        with db_module.db_cursor() as cur:
+            role_id = db_module.upsert_role_instance(
+                cur, None, {"instance_type": "observed_posting", "title": "T"}, skills=[]
+            )
+            cur.execute(
+                "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+                "VALUES ('tool', 'Python', 'active', 'curator', now()) RETURNING id"
+            )
+            concept_id = cur.fetchone()["id"]
+            # The exact pre-0020 state the migration must now refuse to run
+            # against: two current (superseded_by IS NULL) claims for one
+            # (role, concept) pair.
+            for _ in range(2):
+                cur.execute(
+                    "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+                    "VALUES (%s, %s, 'required', 'user_asserted', 'unreviewed')",
+                    (role_id, concept_id),
+                )
+
+        with pytest.raises(psycopg.errors.RaiseException) as exc_info:
+            with db_module.db_cursor() as cur:
+                cur.execute(target_path.read_text(encoding="utf-8"))
+        assert "migration 0020 preflight failed" in str(exc_info.value)
+        assert "more than one current" in str(exc_info.value)
+    finally:
+        db_module.reset_pool()
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')

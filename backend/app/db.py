@@ -655,11 +655,29 @@ def delete_role_instance(cur, role_id: str) -> bool:
        not this role, and stays a legitimate curation candidate regardless
        of what happens to the role that first surfaced it, so its rows are
        kept, only the now-dangling run reference is nulled.
+    3. `jobber.concept_proposal_occurrence.extraction_run_id` (also NO
+       ACTION) can point at one too, same as concept_proposal above — but
+       unlike concept_proposal, its own `role_instance_id` is NOT NULL and
+       `ON DELETE CASCADE`, so (unlike step 2) there is no row left to keep:
+       it is *about* this role's occurrence of the proposal, and the
+       role_instance DELETE a few lines down already cascades it away. Only
+       the run reference needs nulling here, and only so that cascade can
+       still happen — the same dangling-NO-ACTION-reference problem as
+       requirement_claim's above, just one step further removed.
 
     Returns False (nothing deleted) if role_id doesn't exist."""
     cur.execute(
         """
         UPDATE jobber.concept_proposal SET extraction_run_id = NULL
+        WHERE extraction_run_id IN (
+            SELECT id FROM jobber.extraction_run WHERE subject_type = 'role_instance' AND role_instance_id = %s
+        )
+        """,
+        (role_id,),
+    )
+    cur.execute(
+        """
+        UPDATE jobber.concept_proposal_occurrence SET extraction_run_id = NULL
         WHERE extraction_run_id IN (
             SELECT id FROM jobber.extraction_run WHERE subject_type = 'role_instance' AND role_instance_id = %s
         )
