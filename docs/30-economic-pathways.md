@@ -138,8 +138,26 @@ extraction is a separate, explicit action on a captured role:
 3. `POST /api/role-instances/{id}/compensation/accept` is the only writer. It
    takes the item as the reviewer confirmed it — unchanged (Accept) or
    corrected (Edit & accept). Both take **exactly the same** validation path.
-4. Rejecting needs no endpoint: the proposal was never persisted, so
+4. Rejecting a *proposal* needs no endpoint: it was never persisted, so
    declining it leaves nothing behind.
+5. Correcting, retiring or restoring an *accepted* figure uses this flow's
+   own role-aware endpoints — `PATCH /api/role-instances/{id}/compensation/
+   {observation_id}` and its `/reject` and `/reaccept` siblings — **not** the
+   generic market-data review/PATCH pair. Those set a status or a column
+   without re-reading the source, which would let a re-accept recreate two
+   accepted base salaries and let a correction detach a stated fact from the
+   quote justifying it. Everything that can make a posting-stated observation
+   accepted runs the same validation and the same supersession, so neither
+   invariant can be reached around.
+
+The accept payload is deliberately permissive at the HTTP boundary and strict
+in the service layer: `bonus_pct` is accepted and `currency` is nullable,
+because a bonus percentage genuinely has neither a cash amount nor a currency
+of its own and the extraction prompt returns exactly that shape. A required
+`currency` on the route model would have rejected the model's own bonus
+proposal with a 422 before any of the rules below ran. The per-component
+rules decide what is actually valid, in one place, for the proposal screen
+and acceptance alike.
 
 Server-side validation on accept, in order:
 
@@ -539,6 +557,14 @@ Performance is a design constraint here, not an afterthought.
   counterfactual over. `app/economics_freshness.py` compares them at read
   time and returns `fresh` / `stale` / `never_rebuilt`.
 
+  The planning assumption is **not** one of those inputs. Migration 0023 had
+  put it on the economics trigger, which was right for cache invalidation and
+  wrong once 0024 gave the same counter a second job: billable days cannot
+  change a single derived figure, so marking every benchmark stale for them
+  would have withheld the lot until the user rebuilt. Migration 0025 drops
+  that trigger; the assumption still reaches Pathways through the personal
+  fingerprint below.
+
   When not fresh, the market-estimate tier is **skipped entirely**: role and
   archetype resolution fall through to `insufficient_evidence` naming the
   rebuild, and gap value reports no market option value at all. Nothing is
@@ -560,11 +586,22 @@ Performance is a design constraint here, not an afterthought.
   - a new `economics` counter (migration 0023), advanced by statement
     triggers on `compensation_observation`, `market`, `planning_assumption`,
     `d_archetype_comp`, `d_gap_value` and `d_archetype_demand`;
-  - **a fingerprint of the user's profile360 compensation rows.** profile360
-    is externally owned, so no trigger can cover it — hashing the rows is how
-    an edit made in profile360's own tool invalidates a cached Pathways
-    result. Every review status is included, because accepting or rejecting
-    an observation changes the answer even though no amount moved.
+  - **a fingerprint of the user's profile360 compensation rows and the
+    employment episodes they link to.** profile360 is externally owned, so no
+    trigger can cover it — hashing is how an edit made in profile360's own
+    tool invalidates a cached result. Every review status is included,
+    because accepting or rejecting an observation changes the answer even
+    though no amount moved; and the linked episodes are included because,
+    since `_is_current` began consulting them, an episode moving from ongoing
+    to ended changes a salary from current to historical without touching the
+    salary row at all. Only episodes a compensation observation actually
+    points at are hashed — an unrelated episode edit changes no earnings
+    answer. (`target_cache.revisions` also hashes all of
+    `profile360.episodes` for capability-coverage reasons, so the Pathways
+    cache was incidentally protected; this fingerprint now covers its own
+    contract rather than depending on that.)
+  - the planning assumption, which is why removing it from the economics
+    trigger loses nothing.
 
   The `economics` counter is separate from `path` on purpose: accepting a
   compensation observation changes every Pathways answer but changes no

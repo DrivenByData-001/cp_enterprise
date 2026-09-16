@@ -15,14 +15,18 @@ monolithic JSON posting analysis:
   makes it authoritative for the compensation resolver's tier 1.
 - Rejecting a *proposal* is simply not accepting it. Because a proposal is
   never persisted, declining one leaves nothing behind.
-- Rejecting or correcting an *accepted* observation goes through the review
-  lifecycle that already exists for compensation observations
-  (`POST /api/market-data/compensation-observations/{id}/review` and its
-  sibling PATCH), rather than a second parallel mechanism. Accepting a
-  corrected figure additionally retires the figure it corrects — see
-  `_supersede_prior_accepted`, which exists because leaving two accepted
-  `posting_stated` rows for one (component, pay_period) both fed the
-  archetype benchmark and made the headline depend on row ordering.
+- Rejecting, correcting or re-accepting an *accepted* posting-stated
+  observation goes through this module's own role-aware functions
+  (`reject_role_observation`, `correct_role_observation`,
+  `reaccept_role_observation`), not the generic market-data review/PATCH
+  endpoints. That distinction matters: the generic endpoints simply flip
+  `review_status` or mutate columns in place, which would let a re-accept
+  recreate two accepted base salaries, and let a PATCH alter a source-backed
+  fact without re-checking the span or the document's provenance. Everything
+  that can make a posting-stated observation accepted enforces the same two
+  invariants — full validation against the immutable source, and
+  supersession of any other accepted figure for the same
+  (component, pay_period) — so those invariants cannot be reached around.
 
 Server-side validation on accept is not a formality; it is the only thing
 standing between an AI proposal and a stated economic fact:
@@ -473,3 +477,148 @@ def list_role_compensation_observations(cur, role_instance_id: str) -> list[dict
         row["market_id"] = str(row["market_id"]) if row["market_id"] else None
         rows.append(row)
     return rows
+
+
+# --- Correcting an already-accepted observation ----------------------------
+#
+# Everything below shares `_validate_accept` and `_supersede_prior_accepted`
+# with initial acceptance, deliberately. An accepted `posting_stated` row is a
+# stated economic fact backed by a verbatim quote; any path that can change
+# its figures, or make it accepted again, has to re-establish the same
+# guarantees. The generic market-data review/PATCH endpoints cannot: they flip
+# a status or set columns without re-reading the source document, so using
+# them here would let a re-accept produce two accepted base salaries and let a
+# correction quietly detach a figure from the quote that justified it.
+
+
+class PostingCompensationObservationError(ValueError):
+    """The observation does not exist on this role, or is not a
+    posting-stated row this module owns — a 404/400 at the route layer."""
+
+
+def _load_role_observation(cur, role_instance_id: str, observation_id: str) -> dict:
+    cur.execute(
+        "SELECT id, role_instance_id, basis, review_status, component, pay_period, employment_basis, "
+        "       currency, amount_min, amount_max, bonus_pct, evidence_span, source_note "
+        "FROM jobber.compensation_observation WHERE id = %s AND role_instance_id = %s",
+        (observation_id, role_instance_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise PostingCompensationObservationError("compensation observation not found on this role")
+    if row["basis"] != "posting_stated":
+        raise PostingCompensationObservationError(
+            "only a posting-stated observation is corrected here — a survey or curator-asserted row is "
+            "reviewed on the Economics page"
+        )
+    return dict(row)
+
+
+def _observation_as_item(row: dict, overrides: dict | None = None) -> dict:
+    """The stored row in the same shape `_validate_accept` takes, so a
+    correction and an initial acceptance are validated by identical code."""
+    item = {
+        "amount_min": float(row["amount_min"]) if row["amount_min"] is not None else None,
+        "amount_max": float(row["amount_max"]) if row["amount_max"] is not None else None,
+        "bonus_pct": float(row["bonus_pct"]) if row["bonus_pct"] is not None else None,
+        "currency": row["currency"],
+        "component": row["component"],
+        "pay_period": row["pay_period"],
+        "employment_basis": row["employment_basis"],
+        "evidence_span": row["evidence_span"],
+        "note": row["source_note"],
+    }
+    for key, value in (overrides or {}).items():
+        item[key] = value
+    return item
+
+
+def _apply_validated(cur, role_instance_id: str, observation_id: str, validated: dict) -> dict:
+    """Write the validated values onto an existing row and retire anything
+    else this role has accepted for the same (component, pay_period).
+
+    `source_key` is recomputed because it is content-addressed: leaving the
+    old one behind would mean a later acceptance of these exact figures
+    silently collided with a row whose content no longer matched its key. A
+    genuine collision (the same figures already recorded separately) is a
+    409, not a silent merge."""
+    import psycopg
+
+    source_key = _source_key(role_instance_id, validated)
+    try:
+        cur.execute(
+            """
+            UPDATE jobber.compensation_observation
+            SET source_key = %s, component = %s, pay_period = %s, employment_basis = %s, currency = %s,
+                amount_min = %s, amount_max = %s, bonus_pct = %s, evidence_span = %s, source_note = %s,
+                review_status = 'accepted', reviewed_at = now()
+            WHERE id = %s AND role_instance_id = %s
+            RETURNING id
+            """,
+            (
+                source_key, validated["component"], validated["pay_period"], validated["employment_basis"],
+                validated["currency"], validated["amount_min"], validated["amount_max"], validated["bonus_pct"],
+                validated["evidence_span"], validated["source_note"], observation_id, role_instance_id,
+            ),
+        )
+    except psycopg.errors.UniqueViolation as e:
+        raise PostingCompensationObservationError(
+            "this role already has a reviewed observation with exactly these figures and quote"
+        ) from e
+    if cur.fetchone() is None:
+        raise PostingCompensationObservationError("compensation observation not found on this role")
+
+    superseded = _supersede_prior_accepted(cur, role_instance_id, observation_id, validated)
+    return {
+        "id": observation_id,
+        "status": "accepted",
+        "review_status": "accepted",
+        "superseded_observation_ids": superseded,
+    }
+
+
+def correct_role_observation(cur, role_instance_id: str, observation_id: str, patch: dict) -> dict:
+    """Correct an accepted (or previously rejected) posting-stated figure.
+
+    `patch` carries only the fields the reviewer changed; everything else is
+    read back off the stored row. The result is re-validated in full — the
+    span must still occur verbatim in the role's immutable source document,
+    the document's provenance must still be original, and the value shape
+    must still match the component — so a correction can never detach a
+    stated fact from the quote that justifies it, or turn a bonus percentage
+    into a cash amount."""
+    role, document = _load_role_and_document(cur, role_instance_id)
+    stored = _load_role_observation(cur, role_instance_id, observation_id)
+    fallback_currency = _role_currency(cur, role_instance_id, role)
+    item = _observation_as_item(stored, patch)
+    validated = _validate_accept(item, document, fallback_currency=fallback_currency)
+    return _apply_validated(cur, role_instance_id, observation_id, validated)
+
+
+def reaccept_role_observation(cur, role_instance_id: str, observation_id: str) -> dict:
+    """Bring a rejected posting-stated observation back.
+
+    Re-validated and superseding, exactly like an acceptance: a row that was
+    rejected while a replacement was accepted must retire that replacement on
+    the way back in, or the role ends up with two accepted base salaries both
+    feeding the archetype benchmark — the very state `_supersede_prior_accepted`
+    exists to prevent."""
+    role, document = _load_role_and_document(cur, role_instance_id)
+    stored = _load_role_observation(cur, role_instance_id, observation_id)
+    fallback_currency = _role_currency(cur, role_instance_id, role)
+    validated = _validate_accept(_observation_as_item(stored), document, fallback_currency=fallback_currency)
+    return _apply_validated(cur, role_instance_id, observation_id, validated)
+
+
+def reject_role_observation(cur, role_instance_id: str, observation_id: str) -> dict:
+    """Retire an observation. No validation needed — rejecting can only ever
+    remove a fact from consideration, never assert one — and the row is kept,
+    not deleted, so the audit trail still shows it was once accepted."""
+    _load_role_observation(cur, role_instance_id, observation_id)
+    cur.execute(
+        "UPDATE jobber.compensation_observation SET review_status = 'rejected', reviewed_at = now() "
+        "WHERE id = %s AND role_instance_id = %s",
+        (observation_id, role_instance_id),
+    )
+    return {"id": observation_id, "status": "rejected", "review_status": "rejected",
+            "superseded_observation_ids": []}

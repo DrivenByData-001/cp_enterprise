@@ -675,3 +675,316 @@ def test_pathways_withholds_stale_market_estimates_and_says_so():
     assert gap["market_option_value"]["available"] is False
     assert gap["market_option_value"]["withheld_as_stale"] is True
     assert "derived_economics_fresh" in result["incomplete"]
+
+
+# --- Second review round ----------------------------------------------------
+
+def test_the_earnings_fingerprint_notices_an_episode_ending():
+    """`_is_current` consults the employment episode, so the fingerprint that
+    claims to cover the earnings state has to as well. (The Pathways cache is
+    also protected by target_cache's own episodes hash — but this fingerprint
+    is what the earnings state publishes as its own cache key, and it has to
+    be right on its own terms.)"""
+    with db_cursor() as cur:
+        episode_id = _episode(cur, start_date=date(2019, 1, 1), end_date=None, status="active")
+        _personal(cur, amount=105000, period_start=date(2019, 1, 1), episode_id=episode_id)
+        before = earnings.personal_compensation_fingerprint(cur)
+        assert earnings.personal_earnings_state(cur, today=TODAY)["status"] == "current"
+
+        # The salary row is untouched; only the episode ends.
+        cur.execute(
+            "UPDATE profile360.episodes SET end_date = %s WHERE id = %s", (date(2022, 6, 30), episode_id)
+        )
+        after = earnings.personal_compensation_fingerprint(cur)
+        assert earnings.personal_earnings_state(cur, today=TODAY)["status"] == "historical"
+
+    assert before != after
+
+
+def test_the_earnings_fingerprint_notices_an_episode_status_change():
+    with db_cursor() as cur:
+        episode_id = _episode(cur, start_date=date(2019, 1, 1), end_date=None, status="active")
+        _personal(cur, amount=105000, period_start=date(2019, 1, 1), episode_id=episode_id)
+        before = earnings.personal_compensation_fingerprint(cur)
+        cur.execute("UPDATE profile360.episodes SET status = 'ended' WHERE id = %s", (episode_id,))
+        after = earnings.personal_compensation_fingerprint(cur)
+    assert before != after
+
+
+def test_an_unlinked_episode_does_not_churn_the_earnings_fingerprint():
+    """Only episodes a compensation observation points at can change an
+    earnings answer; hashing the rest would invalidate caches for nothing."""
+    with db_cursor() as cur:
+        episode_id = _episode(cur, start_date=date(2025, 1, 1), end_date=None)
+        _personal(cur, amount=105000, period_start=date(2025, 1, 1), episode_id=episode_id)
+        before = earnings.personal_compensation_fingerprint(cur)
+        _episode(cur, start_date=date(2010, 1, 1), end_date=date(2012, 1, 1), title="Unrelated")
+        after = earnings.personal_compensation_fingerprint(cur)
+    assert before == after
+
+
+def test_changing_the_planning_assumption_does_not_make_market_benchmarks_stale():
+    """Billable days affect only the personal comparison. Marking every
+    derived economics figure stale for a change that cannot alter one would
+    withhold benchmarks for no reason."""
+    with db_cursor() as cur:
+        market_id = _market(cur)
+        archetype_id = _archetype(cur)
+        role_id = _role(cur, archetype_concept_id=archetype_id)
+        _archetype_comp(cur, archetype_id, market_id)
+        record_rebuild(cur, "test-engine")
+        assert economics_freshness(cur)["state"] == "fresh"
+
+        earnings.save_planning_assumption(cur, contract_billable_days_per_year=215, note=None)
+
+        assert economics_freshness(cur)["state"] == "fresh"
+        assert resolver.resolve_role_compensation(cur, role_id)["basis"] == resolver.BASIS_MARKET_ESTIMATE
+
+
+def test_changing_the_planning_assumption_still_invalidates_the_pathways_cache():
+    """It has to reach Pathways some way — through the personal fingerprint,
+    not by falsely claiming the derived tables need rebuilding."""
+    with db_cursor() as cur:
+        before = earnings.personal_compensation_fingerprint(cur)
+        earnings.save_planning_assumption(cur, contract_billable_days_per_year=215, note=None)
+        after = earnings.personal_compensation_fingerprint(cur)
+    assert before != after
+
+
+# --- The HTTP accept contract -----------------------------------------------
+
+_BONUS_POSTING = (
+    "Head of Capital, London.\n\n"
+    "Base salary: £120,000 - £145,000 per annum.\n"
+    "Plus an annual bonus of up to 15%.\n"
+)
+
+
+def test_the_accept_endpoint_takes_the_bonus_shape_the_prompt_returns(client):
+    """The extraction prompt returns a bonus with `bonus_pct` set and
+    `currency: null`. A required `currency: str` on the route model rejected
+    exactly that with a 422 before the service layer ever saw it."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+
+    response = client.post(
+        f"/api/role-instances/{role_id}/compensation/accept",
+        json={
+            "amount_min": None, "amount_max": None, "bonus_pct": 15, "currency": None,
+            "component": "bonus_pct", "pay_period": "annual",
+            "evidence_span": "Plus an annual bonus of up to 15%.",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["review_status"] == "accepted"
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT bonus_pct, amount_min, currency FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s",
+            (role_id,),
+        )
+        row = cur.fetchone()
+    assert row["bonus_pct"] == 15
+    assert row["amount_min"] is None
+    assert row["currency"] == "GBP"  # borrowed from the pay it applies to
+
+
+def test_the_accept_endpoint_still_refuses_a_bonus_with_no_percentage(client):
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+
+    response = client.post(
+        f"/api/role-instances/{role_id}/compensation/accept",
+        json={"amount_min": None, "amount_max": None, "bonus_pct": None, "currency": None,
+              "component": "bonus_pct", "pay_period": "annual",
+              "evidence_span": "Plus an annual bonus of up to 15%."},
+    )
+    assert response.status_code == 400
+    assert "percentage" in response.json()["detail"]
+
+
+def test_the_accept_endpoint_still_requires_a_currency_for_a_salary(client):
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency=None)
+
+    response = client.post(
+        f"/api/role-instances/{role_id}/compensation/accept",
+        json={"amount_min": 120000, "amount_max": 145000, "currency": None,
+              "component": "base", "pay_period": "annual",
+              "evidence_span": "Base salary: £120,000 - £145,000 per annum."},
+    )
+    assert response.status_code == 400
+    assert "currency" in response.json()["detail"]
+
+
+# --- Role-aware correction / reject / re-accept -----------------------------
+
+def _accepted_base(cur, role_id):
+    return _accept(cur, role_id, component="base", amount_min=120000, amount_max=145000, currency="GBP",
+                   evidence_span="Base salary: £120,000 - £145,000 per annum.")
+
+
+def test_re_accepting_a_retired_figure_retires_its_replacement(client):
+    """The generic review endpoint just flips review_status, which would put
+    the role back to two accepted base salaries — both feeding the archetype
+    benchmark. Re-accept has to supersede, exactly like an acceptance."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        first = _accepted_base(cur, role_id)
+        second = _accept(cur, role_id, component="base", amount_min=125000, amount_max=150000, currency="GBP",
+                         evidence_span="Base salary: £120,000 - £145,000 per annum.")
+        assert second["superseded_observation_ids"] == [first["id"]]
+
+    response = client.post(f"/api/role-instances/{role_id}/compensation/{first['id']}/reaccept")
+    assert response.status_code == 200, response.text
+    assert response.json()["superseded_observation_ids"] == [second["id"]]
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s AND review_status = 'accepted' AND component = 'base'",
+            (role_id,),
+        )
+        assert cur.fetchone()["n"] == 1
+        assert resolver.resolve_role_compensation(cur, role_id)["amount_min"] == 120000
+
+
+def test_correcting_an_accepted_figure_revalidates_against_the_source(client):
+    """The generic PATCH sets columns without re-reading the document, so it
+    could detach a stated fact from the quote that justifies it."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    bad_span = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"evidence_span": "a quote that is not in the advert"},
+    )
+    assert bad_span.status_code == 400
+    assert "not an exact match" in bad_span.json()["detail"]
+
+    bad_shape = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"bonus_pct": 15},
+    )
+    assert bad_shape.status_code == 400
+    assert "only applies to a bonus_pct component" in bad_shape.json()["detail"]
+
+
+def test_correcting_an_accepted_figure_updates_it_and_keeps_one_accepted(client):
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    response = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"amount_min": 125000, "amount_max": 150000},
+    )
+    assert response.status_code == 200, response.text
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s AND review_status = 'accepted'",
+            (role_id,),
+        )
+        assert cur.fetchone()["n"] == 1
+        resolved = resolver.resolve_role_compensation(cur, role_id)
+    assert resolved["amount_min"] == 125000
+    assert resolved["amount_max"] == 150000
+
+
+def test_a_correction_keeps_the_content_addressed_source_key_true(client):
+    """The key is a hash of the figures and quote, so a correction has to
+    recompute it — otherwise a later acceptance of the corrected figures
+    would collide with a row whose key no longer described it."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+        cur.execute("SELECT source_key FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],))
+        before = cur.fetchone()["source_key"]
+
+    client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"amount_min": 125000, "amount_max": 150000},
+    )
+
+    with db_cursor() as cur:
+        cur.execute("SELECT source_key FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],))
+        after = cur.fetchone()["source_key"]
+    assert before != after
+
+
+def test_a_bonus_can_be_corrected_as_a_percentage(client):
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        bonus = _accept(cur, role_id, component="bonus_pct", bonus_pct=15,
+                        evidence_span="Plus an annual bonus of up to 15%.")
+
+    response = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{bonus['id']}", json={"bonus_pct": 20}
+    )
+    assert response.status_code == 200, response.text
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT bonus_pct, amount_min FROM jobber.compensation_observation WHERE id = %s", (bonus["id"],)
+        )
+        row = cur.fetchone()
+    assert row["bonus_pct"] == 20
+    assert row["amount_min"] is None
+
+
+def test_rejecting_through_the_role_endpoint_retires_without_deleting(client):
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    response = client.post(f"/api/role-instances/{role_id}/compensation/{accepted['id']}/reject")
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "rejected"
+
+    with db_cursor() as cur:
+        cur.execute("SELECT review_status FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],))
+        assert cur.fetchone()["review_status"] == "rejected"
+        assert resolver.resolve_role_compensation(cur, role_id)["basis"] == resolver.BASIS_INSUFFICIENT
+
+
+def test_the_role_correction_endpoints_refuse_a_foreign_or_non_posting_observation(client):
+    with db_cursor() as cur:
+        market_id = _market(cur)
+        archetype_id = _archetype(cur)
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        other_role = _role(cur, title="Another role", document_id=_document(cur, "Another advert."))
+        accepted = _accepted_base(cur, role_id)
+        cur.execute(
+            """
+            INSERT INTO jobber.compensation_observation
+                (source_key, role_instance_id, archetype_concept_id, market_id, component, pay_period,
+                 currency, amount_min, amount_max, basis, review_status)
+            VALUES (%s, %s, %s, %s, 'base', 'annual', 'GBP', 100000, 120000, 'survey', 'accepted')
+            RETURNING id
+            """,
+            (f"test:{uuid.uuid4()}", role_id, archetype_id, market_id),
+        )
+        survey_id = str(cur.fetchone()["id"])
+
+    # Belongs to a different role.
+    assert client.post(
+        f"/api/role-instances/{other_role}/compensation/{accepted['id']}/reject"
+    ).status_code == 404
+    # Not a posting-stated row this flow owns.
+    refused = client.post(f"/api/role-instances/{role_id}/compensation/{survey_id}/reject")
+    assert refused.status_code == 404
+    assert "posting-stated" in refused.json()["detail"]

@@ -27,11 +27,15 @@ from ..compensation_resolver import compare_to_personal_earnings, resolve_role_c
 from ..db import db_cursor
 from ..personal_earnings import safe_personal_earnings_state
 from ..posting_compensation import (
+    PostingCompensationObservationError,
     PostingCompensationSubjectError,
     PostingCompensationValidationError,
     accept_posting_compensation,
+    correct_role_observation,
     list_role_compensation_observations,
     propose_posting_compensation,
+    reaccept_role_observation,
+    reject_role_observation,
 )
 
 router = APIRouter(prefix="/api/role-instances", tags=["role-economics"])
@@ -49,15 +53,41 @@ class CompensationAcceptInput(BaseModel):
     """What the reviewer confirmed — the AI proposal unchanged (Accept), or
     with corrected figures/quote (Edit & accept). Both take exactly the same
     server-side validation path in app/posting_compensation.py; an edited
-    item gets no easier ride than a proposed one."""
+    item gets no easier ride than a proposed one.
+
+    Deliberately permissive here, strict there. `bonus_pct` and a nullable
+    `currency` exist because a bonus percentage genuinely has neither a cash
+    amount nor a currency of its own — the extraction prompt returns exactly
+    that shape, and a required `currency: str` would reject the model's own
+    bonus proposal with a 422 before the service layer ever saw it. The
+    per-component rules (`_value_problems`) decide what is actually valid,
+    in one place, for the proposal screen and acceptance alike."""
 
     amount_min: float | None = None
     amount_max: float | None = None
-    currency: str = Field(min_length=3, max_length=3)
+    bonus_pct: float | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     component: str
     pay_period: str
     employment_basis: str | None = None
     evidence_span: str = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class CompensationCorrectInput(BaseModel):
+    """A correction to an already-reviewed posting-stated observation. Every
+    field optional: only what the reviewer changed is sent, and the rest is
+    read back off the stored row before the whole thing is re-validated
+    against the source document."""
+
+    amount_min: float | None = None
+    amount_max: float | None = None
+    bonus_pct: float | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    component: str | None = None
+    pay_period: str | None = None
+    employment_basis: str | None = None
+    evidence_span: str | None = Field(default=None, min_length=1)
     note: str | None = Field(default=None, max_length=1000)
 
 
@@ -119,6 +149,57 @@ def accept_compensation(role_id: str, payload: CompensationAcceptInput):
             return accept_posting_compensation(cur, role_id, payload.model_dump())
         except PostingCompensationSubjectError as e:
             raise HTTPException(404, str(e)) from e
+        except PostingCompensationValidationError as e:
+            raise HTTPException(400, str(e)) from e
+
+
+@router.patch("/{role_id}/compensation/{observation_id}")
+def correct_compensation(role_id: str, observation_id: str, payload: CompensationCorrectInput):
+    """Correct a reviewed posting-stated figure, re-validating it in full.
+
+    Deliberately not the generic `PATCH /api/market-data/compensation-
+    observations/{id}`: that one sets columns without re-reading the source,
+    so it could detach a stated fact from the quote that justifies it. This
+    path re-checks the span, the document's provenance and the value shape,
+    and retires any other accepted figure for the same component."""
+    patch = payload.model_dump(exclude_unset=True)
+    if not patch:
+        raise HTTPException(400, "nothing to correct — supply at least one field")
+    with db_cursor() as cur:
+        try:
+            return correct_role_observation(cur, role_id, observation_id, patch)
+        except PostingCompensationSubjectError as e:
+            raise HTTPException(404, str(e)) from e
+        except PostingCompensationObservationError as e:
+            raise HTTPException(404 if "not found" in str(e) else 409, str(e)) from e
+        except PostingCompensationValidationError as e:
+            raise HTTPException(400, str(e)) from e
+
+
+@router.post("/{role_id}/compensation/{observation_id}/reject")
+def reject_compensation(role_id: str, observation_id: str):
+    """Retire a reviewed figure. The row is kept, so the audit trail still
+    shows it was once accepted."""
+    with db_cursor() as cur:
+        try:
+            return reject_role_observation(cur, role_id, observation_id)
+        except PostingCompensationObservationError as e:
+            raise HTTPException(404, str(e)) from e
+
+
+@router.post("/{role_id}/compensation/{observation_id}/reaccept")
+def reaccept_compensation(role_id: str, observation_id: str):
+    """Bring a rejected figure back — re-validated and superseding, exactly
+    like an acceptance. The generic review endpoint would simply flip the
+    status, which could leave this role with two accepted base salaries both
+    feeding the archetype benchmark."""
+    with db_cursor() as cur:
+        try:
+            return reaccept_role_observation(cur, role_id, observation_id)
+        except PostingCompensationSubjectError as e:
+            raise HTTPException(404, str(e)) from e
+        except PostingCompensationObservationError as e:
+            raise HTTPException(404 if "not found" in str(e) else 409, str(e)) from e
         except PostingCompensationValidationError as e:
             raise HTTPException(400, str(e)) from e
 

@@ -352,17 +352,26 @@ function ArchetypeReview({
  * exists (`reviewCompensationObservation` / `correctCompensationObservation`),
  * rather than a second mechanism specific to Role Detail. */
 function ObservationRow({
+  roleId,
   observation,
   onChanged,
 }: {
+  roleId: string
   observation: RoleCompensationResponse['observations'][number]
   onChanged: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [min, setMin] = useState(observation.amount_min?.toString() ?? '')
   const [max, setMax] = useState(observation.amount_max?.toString() ?? '')
+  const [bonus, setBonus] = useState(observation.bonus_pct?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const isBonus = observation.component === 'bonus_pct'
+  // A posting-stated row is a source-backed fact, so its corrections go
+  // through the role-aware endpoints that re-validate against the document.
+  // Anything else on this role (a survey or curator-asserted row) is reviewed
+  // on the Economics page, not here.
+  const correctable = observation.basis === 'posting_stated' 
 
   const act = async (run: () => Promise<unknown>) => {
     setBusy(true)
@@ -402,14 +411,14 @@ function ObservationRow({
         </div>
       )}
 
-      {observation.review_status === 'accepted' && !editing && (
+      {correctable && observation.review_status === 'accepted' && !editing && (
         <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
           <button type="button" onClick={() => setEditing(true)} disabled={busy}>
             Correct
           </button>
           <button
             type="button"
-            onClick={() => act(() => api.reviewCompensationObservation(observation.id, 'reject'))}
+            onClick={() => act(() => api.rejectRoleCompensation(roleId, observation.id))}
             disabled={busy}
           >
             Reject
@@ -417,10 +426,10 @@ function ObservationRow({
         </div>
       )}
 
-      {observation.review_status === 'rejected' && (
+      {correctable && observation.review_status === 'rejected' && (
         <button
           type="button"
-          onClick={() => act(() => api.reviewCompensationObservation(observation.id, 'accept'))}
+          onClick={() => act(() => api.reacceptRoleCompensation(roleId, observation.id))}
           disabled={busy}
           style={{ marginTop: 4 }}
         >
@@ -430,38 +439,61 @@ function ObservationRow({
 
       {editing && (
         <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12 }}>
-            Minimum
-            <input
-              type="number"
-              aria-label={`Minimum amount for ${observation.component}`}
-              value={min}
-              onChange={(e) => setMin(e.target.value)}
-              style={{ display: 'block', width: 110 }}
-            />
-          </label>
-          <label style={{ fontSize: 12 }}>
-            Maximum
-            <input
-              type="number"
-              aria-label={`Maximum amount for ${observation.component}`}
-              value={max}
-              onChange={(e) => setMax(e.target.value)}
-              style={{ display: 'block', width: 110 }}
-            />
-          </label>
+          {/* A bonus is a percentage of pay, so it gets a percentage editor —
+              showing min/max amount boxes for one would invite exactly the
+              category error the schema and validation now prevent. */}
+          {isBonus ? (
+            <label style={{ fontSize: 12 }}>
+              Bonus %
+              <input
+                type="number"
+                aria-label={`Bonus percentage for ${observation.component}`}
+                value={bonus}
+                onChange={(e) => setBonus(e.target.value)}
+                style={{ display: 'block', width: 90 }}
+              />
+            </label>
+          ) : (
+            <>
+              <label style={{ fontSize: 12 }}>
+                Minimum
+                <input
+                  type="number"
+                  aria-label={`Minimum amount for ${observation.component}`}
+                  value={min}
+                  onChange={(e) => setMin(e.target.value)}
+                  style={{ display: 'block', width: 110 }}
+                />
+              </label>
+              <label style={{ fontSize: 12 }}>
+                Maximum
+                <input
+                  type="number"
+                  aria-label={`Maximum amount for ${observation.component}`}
+                  value={max}
+                  onChange={(e) => setMax(e.target.value)}
+                  style={{ display: 'block', width: 110 }}
+                />
+              </label>
+            </>
+          )}
           <button
             type="button"
-            // The shared correction endpoint only ever changes fields that
-            // are supplied, so a blank box means "leave as is", not "clear".
-            // With both blank there is nothing to correct.
-            disabled={busy || (min.trim() === '' && max.trim() === '')}
+            // Only supplied fields change, so a blank box means "leave as is",
+            // not "clear". With nothing filled there is nothing to correct.
+            disabled={busy || (isBonus ? bonus.trim() === '' : min.trim() === '' && max.trim() === '')}
             onClick={() =>
               act(() =>
-                api.correctCompensationObservation(observation.id, {
-                  ...(min.trim() === '' ? {} : { amount_min: Number(min) }),
-                  ...(max.trim() === '' ? {} : { amount_max: Number(max) }),
-                }),
+                api.correctRoleCompensation(
+                  roleId,
+                  observation.id,
+                  isBonus
+                    ? { bonus_pct: Number(bonus) }
+                    : {
+                        ...(min.trim() === '' ? {} : { amount_min: Number(min) }),
+                        ...(max.trim() === '' ? {} : { amount_max: Number(max) }),
+                      },
+                ),
               )
             }
           >
@@ -527,7 +559,12 @@ export function RoleEconomicsSection({
                 </summary>
                 <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13 }}>
                   {data.observations.map((observation) => (
-                    <ObservationRow key={observation.id} observation={observation} onChanged={load} />
+                    <ObservationRow
+                      key={observation.id}
+                      roleId={roleId}
+                      observation={observation}
+                      onChanged={load}
+                    />
                   ))}
                 </ul>
               </details>

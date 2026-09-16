@@ -149,8 +149,9 @@ kept for reproducibility.
   Invalidating a cache only forces recomputation *from* the derived economics
   tables; it never rebuilds them. Every rebuild records the source state it
   saw, and a benchmark built before the current evidence is withheld with a
-  "rebuild economics" reason rather than shown as current. See
-  `docs/30-economic-pathways.md` §15.
+  "rebuild economics" reason rather than shown as current — but only for
+  inputs that genuinely feed them, so stating a billable-days assumption
+  never withholds a market benchmark. See `docs/30-economic-pathways.md` §15.
 - **Pathways composes; it does not predict.** It reuses the capability
   engine, the stepping-stone analysis, reviewed archetypes, `d_archetype_comp`
   and `d_gap_value` without adding a new score, and makes no AI call at all.

@@ -163,16 +163,33 @@ def _accepted_observations(cur) -> list[dict]:
 
 
 def personal_compensation_fingerprint(cur) -> str:
-    """A digest of every person-side compensation row (any review status)
-    plus the current planning assumption.
+    """A digest of everything that determines the earnings state: every
+    person-side compensation row (any review status), the employment episodes
+    those rows are linked to, and the current planning assumption.
 
     `profile360` is externally owned and read-only from here, so this app
     cannot install an invalidation trigger on it the way migration 0019 does
     for its own tables — an edit made in profile360's own tool would
-    otherwise never invalidate a cached Pathways result. Hashing the rows is
-    how that external edit is detected. Every review status is included on
-    purpose: accepting or rejecting an observation changes the answer even
-    though the row's compensation fields did not.
+    otherwise never invalidate a cached result. Hashing the rows is how that
+    external edit is detected.
+
+    **The episode rows are part of this, not optional colour.** Since
+    `_is_current` began consulting the employment episode, an episode moving
+    from ongoing to ended changes a salary from current to historical without
+    touching the salary row at all. A fingerprint over the observations alone
+    would not notice. (The Pathways cache happens to be protected anyway,
+    because `target_cache.revisions` hashes `profile360.episodes` for
+    capability-coverage reasons — but relying on an unrelated hash to keep
+    this correct is exactly the kind of accident that breaks silently when
+    that hash is narrowed. This fingerprint now covers its own contract.)
+
+    Only the episodes actually linked from a compensation observation are
+    hashed: an unrelated episode edit changes no earnings answer, and
+    including it would invalidate caches for no reason.
+
+    Every review status is included on purpose: accepting or rejecting an
+    observation changes the answer even though the row's compensation fields
+    did not.
 
     Returns a fixed marker instead of raising when profile360 is unreachable,
     so a cache key can always be computed; the reader itself still raises."""
@@ -184,9 +201,26 @@ def personal_compensation_fingerprint(cur) -> str:
         rows_digest = cur.fetchone()["digest"] or ""
     except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
         rows_digest = "profile360-compensation-unavailable"
+
+    try:
+        cur.execute(
+            """
+            SELECT md5(COALESCE(string_agg(
+                md5(concat_ws('|', e.id::text, e.start_date::text, e.end_date::text, e.status)),
+                '' ORDER BY e.id), '')) AS digest
+            FROM profile360.episodes e
+            WHERE EXISTS (
+                SELECT 1 FROM profile360.compensation_observation co WHERE co.episode_id = e.id
+            )
+            """
+        )
+        episodes_digest = cur.fetchone()["digest"] or ""
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        episodes_digest = "profile360-episodes-unavailable"
+
     assumption = load_planning_assumption(cur)
     return hashlib.sha256(
-        f"{rows_digest}|{assumption['contract_billable_days_per_year']}".encode("utf-8")
+        f"{rows_digest}|{episodes_digest}|{assumption['contract_billable_days_per_year']}".encode("utf-8")
     ).hexdigest()
 
 

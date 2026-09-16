@@ -1971,9 +1971,10 @@ export type CompensationAcceptInput = {
 
 export type CompensationAcceptResult = {
   id: string
-  created: boolean
+  created?: boolean
   status: string
-  market_unassigned_reason: string | null
+  review_status?: string
+  market_unassigned_reason?: string | null
   // Accepting a corrected figure retires the one it corrects, so a role never
   // carries two accepted stated figures for the same component.
   superseded_observation_ids: string[]
@@ -2342,11 +2343,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  // Correcting or retiring an *accepted* observation reuses the compensation
-  // review lifecycle that already exists further down this object
-  // (`reviewCompensationObservation` / `correctCompensationObservation`,
-  // both of which act on any observation, not only survey rows) rather than
-  // introducing a second parallel mechanism. Same for `rebuildEconomics`.
+  // Correcting, retiring or restoring an *accepted* posting-stated
+  // observation goes through these role-aware endpoints, not the generic
+  // market-data review/PATCH pair. The generic ones flip a status or set
+  // columns without re-reading the source document, which would let a
+  // re-accept recreate two accepted base salaries and let a correction
+  // detach a stated fact from the quote justifying it. These enforce the
+  // same validation and supersession as initial acceptance.
+  correctRoleCompensation: (roleId: string, observationId: string, payload: Partial<CompensationAcceptInput>) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/${observationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  rejectRoleCompensation: (roleId: string, observationId: string) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/${observationId}/reject`, {
+      method: 'POST',
+    }),
+  reacceptRoleCompensation: (roleId: string, observationId: string) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/${observationId}/reaccept`, {
+      method: 'POST',
+    }),
   getRoleArchetype: (id: string) => req<RoleArchetypeSummary>(`/role-instances/${id}/archetype`),
   getArchetypeCatalogue: () => req<ArchetypeCatalogueEntry[]>('/role-instances/archetype-catalogue'),
   proposeRoleArchetype: (id: string) =>

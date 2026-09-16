@@ -19,8 +19,9 @@ vi.mock('../lib/api', () => ({
     getArchetypeCatalogue: vi.fn(),
     proposeRoleArchetype: vi.fn(),
     setRoleArchetype: vi.fn(),
-    reviewCompensationObservation: vi.fn(),
-    correctCompensationObservation: vi.fn(),
+    correctRoleCompensation: vi.fn(),
+    rejectRoleCompensation: vi.fn(),
+    reacceptRoleCompensation: vi.fn(),
     deleteRole: vi.fn(),
   },
 }))
@@ -575,10 +576,14 @@ describe('Role Detail — review findings', () => {
     )
   })
 
-  it('lets an accepted observation be corrected or rejected', async () => {
+  it('corrects an accepted observation through the role-aware endpoint', async () => {
     vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
-    vi.mocked(api.reviewCompensationObservation).mockResolvedValue({ id: 'obs1', review_status: 'rejected' })
-    vi.mocked(api.correctCompensationObservation).mockResolvedValue({ id: 'obs1', status: 'updated' })
+    vi.mocked(api.correctRoleCompensation).mockResolvedValue({
+      id: 'obs1',
+      status: 'accepted',
+      review_status: 'accepted',
+      superseded_observation_ids: [],
+    })
     renderRole()
 
     fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
@@ -586,20 +591,93 @@ describe('Role Detail — review findings', () => {
     fireEvent.change(screen.getByLabelText('Minimum amount for base'), { target: { value: '125000' } })
     fireEvent.click(screen.getByText('Save correction'))
 
+    // The role-aware endpoint re-validates against the source document; the
+    // generic market-data PATCH would not.
     await waitFor(() =>
-      expect(api.correctCompensationObservation).toHaveBeenCalledWith('obs1', { amount_min: 125000, amount_max: 145000 }),
+      expect(api.correctRoleCompensation).toHaveBeenCalledWith('role', 'obs1', {
+        amount_min: 125000,
+        amount_max: 145000,
+      }),
     )
   })
 
-  it('rejects an accepted observation through the shared review lifecycle', async () => {
+  it('edits a bonus as a percentage, not as min/max amounts', async () => {
+    const data = compensation()
+    data.observations = [
+      {
+        ...data.observations[0],
+        id: 'obs-bonus',
+        component: 'bonus_pct',
+        amount_min: null,
+        amount_max: null,
+        bonus_pct: 15,
+        evidence_span: 'plus an annual bonus of up to 15%',
+      },
+    ]
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    vi.mocked(api.correctRoleCompensation).mockResolvedValue({
+      id: 'obs-bonus',
+      status: 'accepted',
+      review_status: 'accepted',
+      superseded_observation_ids: [],
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Correct'))
+
+    expect(screen.queryByLabelText('Minimum amount for bonus_pct')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Bonus percentage for bonus_pct'), { target: { value: '20' } })
+    fireEvent.click(screen.getByText('Save correction'))
+
+    await waitFor(() =>
+      expect(api.correctRoleCompensation).toHaveBeenCalledWith('role', 'obs-bonus', { bonus_pct: 20 }),
+    )
+  })
+
+  it('rejects an accepted observation through the role-aware endpoint', async () => {
     vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
-    vi.mocked(api.reviewCompensationObservation).mockResolvedValue({ id: 'obs1', review_status: 'rejected' })
+    vi.mocked(api.rejectRoleCompensation).mockResolvedValue({
+      id: 'obs1',
+      status: 'rejected',
+      review_status: 'rejected',
+      superseded_observation_ids: [],
+    })
     renderRole()
 
     fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
     fireEvent.click(screen.getByText('Reject'))
 
-    await waitFor(() => expect(api.reviewCompensationObservation).toHaveBeenCalledWith('obs1', 'reject'))
+    await waitFor(() => expect(api.rejectRoleCompensation).toHaveBeenCalledWith('role', 'obs1'))
+  })
+
+  it('re-accepts through the superseding endpoint, not a bare status flip', async () => {
+    const data = compensation()
+    data.observations = [{ ...data.observations[0], review_status: 'rejected' }]
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    vi.mocked(api.reacceptRoleCompensation).mockResolvedValue({
+      id: 'obs1',
+      status: 'accepted',
+      review_status: 'accepted',
+      superseded_observation_ids: ['obs2'],
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Re-accept'))
+
+    await waitFor(() => expect(api.reacceptRoleCompensation).toHaveBeenCalledWith('role', 'obs1'))
+  })
+
+  it('offers no correction affordance for a survey row reviewed elsewhere', async () => {
+    const data = compensation()
+    data.observations = [{ ...data.observations[0], basis: 'survey' }]
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    expect(screen.queryByText('Correct')).toBeNull()
+    expect(screen.queryByText('Reject')).toBeNull()
   })
 
   it('shows a retired observation as superseded rather than hiding it', async () => {
