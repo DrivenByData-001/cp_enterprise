@@ -114,11 +114,32 @@ def test_2026_style_role_renders_with_its_real_evidence_via_detail_endpoint(clie
     """The actual regression: before the fix, `skills` was `[]` and no advert
     text was present at all, even though this role has real captured
     evidence — a requirement_claim per concept, and the document's own
-    verbatim text. Role Detail must surface both."""
+    verbatim text. Role Detail must surface both — but (requirement-review
+    curation gate) only once that evidence has actually been reviewed and
+    accepted; freshly extracted, unreviewed claims must not appear as if
+    they were established "skills" on the very page that also carries the
+    "Requirements review pending" indicator saying otherwise."""
     with db.db_cursor() as cur:
         _make_concepts(cur)
         role_id = _seed_source_aware_role(cur)
         _run_requirement_extraction(cur, role_id, monkeypatch)
+
+    # Before review: no role_skill_observation rows for this role and every
+    # requirement_claim is still unreviewed, so skills must be empty rather
+    # than silently presenting unreviewed AI proposals as established facts
+    # — and the review-pending indicator must say so.
+    before = client.get(f"/api/roles/{role_id}").json()
+    assert before["skills"] == []
+    assert before["requirement_review"] == {
+        "accepted": 0, "unreviewed": len(_REQUIREMENTS), "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": True, "needs_reextraction": 0, "complete": False,
+    }
+
+    claims = client.get(f"/api/role-instances/{role_id}/requirements").json()["items"]
+    assert len(claims) == len(_REQUIREMENTS)
+    for claim in claims:
+        accept_resp = client.post(f"/api/role-instances/{role_id}/requirements/{claim['id']}/accept")
+        assert accept_resp.status_code == 200
 
     resp = client.get(f"/api/roles/{role_id}")
     assert resp.status_code == 200
@@ -126,9 +147,14 @@ def test_2026_style_role_renders_with_its_real_evidence_via_detail_endpoint(clie
 
     assert role["title"] == "Senior Actuary"
     assert role["node_type"] == "posting"
+    assert role["requirement_review"] == {
+        "accepted": len(_REQUIREMENTS), "unreviewed": 0, "rejected": 0,
+        "unresolved_proposals": 0, "extraction_attempted": True, "needs_reextraction": 0, "complete": True,
+    }
 
     # Skills: none in role_skill_observation for this role — must fall back
-    # to requirement_claim evidence rather than silently rendering empty.
+    # to accepted requirement_claim evidence rather than silently rendering
+    # empty (or, before the curation gate, an unreviewed proposal).
     skill_names = {s["name"] for s in role["skills"]}
     assert skill_names == {name for name, _s, _t in _REQUIREMENTS}
     assert all(s["resolved_concept_id"] for s in role["skills"])
@@ -144,8 +170,13 @@ def test_2026_style_role_renders_with_its_real_evidence_via_detail_endpoint(clie
 
 def test_older_role_skill_observation_shaped_posting_still_renders(client):
     """The pre-existing shape (JobPostingImport-derived: role_skill_observation
-    + flat description/requirements columns) must keep working unchanged —
-    this is the "older historical role still works" guard (brief §5.4)."""
+    + flat description/requirements columns) must keep rendering, evidence
+    intact — this is the "older historical role still works" guard (brief
+    §5.4). Its skill now surfaces as `legacy_skills` rather than `skills`
+    (round-3 code-review follow-up, docs/29 §13): this role has no
+    requirement_claim review history at all, so labelling its evidence
+    "reviewed" would overstate it — but the evidence itself is exactly as
+    present as before."""
     with db.db_cursor() as cur:
         role_id = db.upsert_role_instance(
             cur, None,
@@ -163,7 +194,8 @@ def test_older_role_skill_observation_shaped_posting_still_renders(client):
     assert resp.status_code == 200
     role = resp.json()
     assert role["description"] == "A historical posting with its own description."
-    assert [s["name"] for s in role["skills"]] == ["Pricing"]
+    assert role["skills"] == []
+    assert [s["name"] for s in role["legacy_skills"]] == ["Pricing"]
     # The fallback must never kick in (and never overwrite/duplicate) when
     # the role already has real role_skill_observation evidence.
     assert role.get("source_document_text") is None

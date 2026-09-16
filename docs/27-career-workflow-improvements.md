@@ -3,7 +3,7 @@
 This change implements the eight recommendations from the repository review.
 
 ## Consistent role discovery
-Dashboard concept filters and facet counts now use the canonical requirement-evidence loader used by comparison and economics. Non-superseded, non-rejected requirement claims take precedence at role level. When no usable claims exist, mapped legacy observations participate, except where a rejected or superseded claim vetoes that concept. Facets count distinct observed postings, excluding target roles. Pending claims remain eligible for discovery under the existing comparison policy; this does not accept them as reviewed.
+Dashboard concept filters and facet counts now use the canonical requirement-evidence loader used by comparison and economics. Current, accepted requirement claims take precedence at role level — an unreviewed claim is a visible proposal only and is not treated as usable evidence merely because nobody has rejected it yet. When no usable claims exist, mapped legacy observations participate, except for a concept a curator has explicitly rejected or corrected away for that role; a claim that is merely superseded without ever having been reviewed (for instance by a newer unreviewed proposal from a re-extraction) does not veto. Facets count distinct observed postings, excluding target roles.
 
 Filters and pagination are represented in the URL. Changing the facet category clears its concept and resets pagination in the same navigation. Obsolete responses cannot overwrite current results. Failed requests offer retry; empty filtered results offer clear filters, while an empty all-years collection offers import.
 
@@ -34,7 +34,7 @@ Requirement review, assertion and deletion failures are visible and recoverable.
 Navigation groups Explore roles, My evidence and Manage vocabulary, with Add posting directly available. Forms use persistent labels and stack on narrow screens. Workflow steps expose the current step; keyboard focus, a skip link, error/status announcements and a not-found route improve navigation.
 
 ## Database and rollout
-Migration 0018 adds development_action and its role index, adds a role/concept requirement index, and permits audited target_decompose runs without a vocabulary version. It preserves the existing task allowlist. Normal backend startup applies pending migrations. No production migration or deployment was performed during implementation.
+Migrations 0018 + 0019. 0018 adds development_action and its role index, adds a role/concept requirement index, and permits audited target_decompose runs without a vocabulary version; it preserves the existing task allowlist. 0019 adds the target-analysis revision counters (target_analysis_revision) and the d_target_evidence/d_target_path cache tables behind the stepping-stone ranking above, with statement-level triggers on the underlying evidence/role/requirement tables that invalidate them automatically on any change. Normal backend startup applies pending migrations. No production migration or deployment was performed during implementation.
 
 ## Validation
 - Backend integration suite uses disposable Postgres with pgvector, never production.

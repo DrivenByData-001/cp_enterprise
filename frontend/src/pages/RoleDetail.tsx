@@ -1,8 +1,36 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
-import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type TeamSizeEstimate } from '../lib/api'
+import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type RoleSkill, type TeamSizeEstimate } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
+
+// Shared chip rendering for both the reviewed-requirements and legacy-skills
+// sections below — same look, so the *labelling of the section itself* is
+// what tells them apart, not a different visual treatment per item.
+function SkillChip({ skill }: { skill: RoleSkill }) {
+  return (
+    <span
+      className="secondary"
+      title={skill.resolved_concept_id ? 'Linked to the vocabulary' : 'Not yet resolved — see Vocabulary'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        border: '1px solid var(--border)',
+        borderRadius: 999,
+        padding: '4px 10px',
+        fontSize: 12,
+        opacity: skill.requirement_type === 'preferred' ? 0.7 : 1,
+      }}
+    >
+      {skill.resolved_concept_id && (
+        <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--series-1)', flexShrink: 0 }} />
+      )}
+      {skill.name}
+      {skill.requirement_type ? ` · ${skill.requirement_type}` : ''}
+    </span>
+  )
+}
 
 // --- Day-in-the-Life / Role Context enrichment (docs/21) --------------------
 //
@@ -494,34 +522,21 @@ export default function RoleDetail() {
 
       {role.skills && role.skills.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginTop: 0, fontSize: 14 }}>Skills</h3>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Reviewed requirements</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {role.skills.map((s, i) => (
-              <span
-                key={i}
-                className="secondary"
-                title={s.resolved_concept_id ? 'Linked to the vocabulary' : 'Not yet resolved — see Vocabulary'}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  border: '1px solid var(--border)',
-                  borderRadius: 999,
-                  padding: '4px 10px',
-                  fontSize: 12,
-                  opacity: s.requirement_type === 'preferred' ? 0.7 : 1,
-                }}
-              >
-                {s.resolved_concept_id && (
-                  <span
-                    aria-hidden
-                    style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--series-1)', flexShrink: 0 }}
-                  />
-                )}
-                {s.name}
-                {s.requirement_type ? ` · ${s.requirement_type}` : ''}
-              </span>
-            ))}
+            {role.skills.map((s, i) => <SkillChip key={i} skill={s} />)}
+          </div>
+        </div>
+      )}
+
+      {role.legacy_skills && role.legacy_skills.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Legacy skills</h3>
+          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            Extracted, not yet reviewed as requirements — never treated as equivalent to the reviewed list above.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {role.legacy_skills.map((s, i) => <SkillChip key={i} skill={s} />)}
           </div>
         </div>
       )}
@@ -569,6 +584,17 @@ export default function RoleDetail() {
       )}
 
       <RoleContextSection roleId={role.id} />
+
+      {role.requirement_review && !role.requirement_review.complete && (
+        <p style={{ marginTop: 16, fontSize: 13, color: 'var(--warning)' }}>
+          Requirements review pending — {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals + role.requirement_review.needs_reextraction} item
+          {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals + role.requirement_review.needs_reextraction === 1 ? '' : 's'} not yet reviewed
+          {role.requirement_review.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''}
+          {role.requirement_review.needs_reextraction > 0 ? ' (including terms newly added to the vocabulary awaiting re-extraction)' : ''} and
+          excluded from comparison/analysis.{' '}
+          <Link to={`/role-instances/${role.id}/requirements`}>Review now</Link>
+        </p>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
         {role.url ? (

@@ -340,3 +340,141 @@ def test_migrations_reject_database_without_baseline(client, monkeypatch):
         db_module.reset_pool()
         with psycopg.connect(admin_url, autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+
+
+def test_migration_0020_preflight_rejects_existing_duplicate_current_claims(client, monkeypatch):
+    """Code-review follow-up: the *old* application code (before this build's
+    conservative rerun-dedup handling) allowed repeated extraction to leave
+    two current (superseded_by IS NULL) requirement_claim rows for the same
+    (role_instance_id, concept_id) pair. Migration 0020's partial unique index
+    would fail outright against a database already in that state, with an
+    ordinary index-creation error as the first anyone learns of it — the
+    migration file adds an explicit DO-block preflight specifically to fail
+    loudly with a diagnostic instead. Prove that preflight actually fires, by
+    replaying every migration up to (but not including) 0020 against a fresh
+    database, seeding exactly that duplicate, and then applying 0020's SQL
+    text directly."""
+    admin_url = get_test_database_url()
+    db_name = f"cp_test_dupclaims_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{db_name}"')
+    parts = urlsplit(admin_url)
+    scoped_url = urlunsplit((parts.scheme, parts.netloc, f"/{db_name}", parts.query, parts.fragment))
+    target_name = "0020_requirement_claim_current_uniqueness.sql"
+    target_path = db_module.MIGRATIONS_DIR / target_name
+    baseline_sql = (db_module.MIGRATIONS_DIR.parent / "scripts" / "local_baseline.sql").read_text(encoding="utf-8")
+    try:
+        with psycopg.connect(scoped_url, autocommit=True) as conn:
+            conn.execute(baseline_sql)
+            # Pre-record 0020 as already "applied" so run_migrations() skips
+            # it — leaving its unique index/deferred-FK change out entirely
+            # while still applying every other file (0021 has no dependency
+            # on 0020's schema change) in the normal, real migration-runner
+            # code path rather than a hand-rolled re-implementation of it.
+            conn.execute(
+                "CREATE SCHEMA IF NOT EXISTS jobber; "
+                "CREATE TABLE IF NOT EXISTS jobber.migration_history "
+                "(filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+            conn.execute(
+                "INSERT INTO jobber.migration_history (filename) VALUES (%s) ON CONFLICT DO NOTHING",
+                (target_name,),
+            )
+
+        db_module.reset_pool()
+        monkeypatch.setenv("DATABASE_URL", scoped_url)
+        applied = db_module.run_migrations()
+        assert target_name not in applied
+
+        with db_module.db_cursor() as cur:
+            role_id = db_module.upsert_role_instance(
+                cur, None, {"instance_type": "observed_posting", "title": "T"}, skills=[]
+            )
+            cur.execute(
+                "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+                "VALUES ('tool', 'Python', 'active', 'curator', now()) RETURNING id"
+            )
+            concept_id = cur.fetchone()["id"]
+            # The exact pre-0020 state the migration must now refuse to run
+            # against: two current (superseded_by IS NULL) claims for one
+            # (role, concept) pair.
+            for _ in range(2):
+                cur.execute(
+                    "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+                    "VALUES (%s, %s, 'required', 'user_asserted', 'unreviewed')",
+                    (role_id, concept_id),
+                )
+
+        with pytest.raises(psycopg.errors.RaiseException) as exc_info:
+            with db_module.db_cursor() as cur:
+                cur.execute(target_path.read_text(encoding="utf-8"))
+        assert "migration 0020 preflight failed" in str(exc_info.value)
+        assert "more than one current" in str(exc_info.value)
+    finally:
+        db_module.reset_pool()
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+
+
+def test_migration_0022_backfill_creates_claims_for_already_resolved_proposals(client):
+    """Migration 0022's backfill only matters for a database where some
+    concept_proposal_occurrence row already carries requirement_type/basis/
+    evidence_span (impossible on a database seeing this migration for the
+    first time — those columns don't exist until it runs) AND its proposal
+    was already resolved before that. Since that combination can't be
+    constructed by replaying earlier migrations, this proves the backfill
+    SQL itself is correct by re-running migration 0022's file text directly
+    against this session's already-fully-migrated test database (`ADD
+    COLUMN IF NOT EXISTS` and the backfill's own `NOT EXISTS` guard make
+    this a safe, idempotent replay) after seeding exactly that scenario by
+    hand."""
+    migrations_dir = db_module.MIGRATIONS_DIR
+    target_path = next(p for p in migrations_dir.glob("*.sql") if p.name.startswith("0022_"))
+
+    with db_module.db_cursor() as cur:
+        document_id, _ = db_module.create_document(
+            cur, kind="job_posting", content_text="Requires Zap Modelling.", provenance_quality="original"
+        )
+        role_id = db_module.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
+        )
+        cur.execute(
+            "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+            "VALUES ('domain', 'Zap Modelling', 'active', 'curator', now()) RETURNING id"
+        )
+        concept_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, status, resolved_concept_id, resolved_at) "
+            "VALUES ('zap modelling', 1, %s, 'accepted_new', %s, now()) RETURNING id",
+            (document_id, concept_id),
+        )
+        proposal_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal_occurrence "
+            "(concept_proposal_id, role_instance_id, document_id, requirement_type, basis, evidence_span) "
+            "VALUES (%s, %s, %s, 'required', 'stated', 'Zap Modelling')",
+            (proposal_id, role_id, document_id),
+        )
+
+        cur.execute(target_path.read_text(encoding="utf-8"))
+
+        cur.execute(
+            "SELECT requirement_type, basis, evidence_span, review_status, document_id "
+            "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        claim = cur.fetchone()
+        assert claim is not None
+        assert claim["requirement_type"] == "required"
+        assert claim["basis"] == "stated"
+        assert claim["evidence_span"] == "Zap Modelling"
+        assert claim["review_status"] == "unreviewed"
+        assert str(claim["document_id"]) == document_id
+
+        # Idempotent replay: running it again must not create a second claim.
+        cur.execute(target_path.read_text(encoding="utf-8"))
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 1

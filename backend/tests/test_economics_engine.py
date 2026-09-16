@@ -44,9 +44,12 @@ def _role(cur, *, archetype_concept_id=None, title="Test role"):
 
 
 def _claim_requirement(cur, role_id, concept_id, *, requirement_type="required"):
+    # Archetype demand/gap value read only usable (accepted, current) claims
+    # — see role_requirements.py — so these engine tests need an accepted
+    # claim to exercise the derivation at all.
     cur.execute(
-        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis) "
-        "VALUES (%s, %s, %s, 'user_asserted')",
+        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+        "VALUES (%s, %s, %s, 'user_asserted', 'accepted')",
         (role_id, concept_id, requirement_type),
     )
 

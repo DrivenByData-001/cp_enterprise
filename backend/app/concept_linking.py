@@ -54,6 +54,51 @@ def exact_match_concept_id(cur, normalized_name: str) -> str | None:
     return str(row["id"]) if row else None
 
 
+def bulk_exact_match_concept_ids(cur, normalized_names: list[str]) -> dict[str, str]:
+    """§7.3 step 1, batched: the same case-folded canonical_name-then-alias
+    cascade as exact_match_concept_id, for many names in a bounded number of
+    queries instead of up to two *per* name. A caller resolving a whole
+    requirement/skill list live (target_mapping.resolve_requirements, called
+    on every keystroke-driven re-preview) would otherwise cost up to 2N
+    queries for N names.
+
+    Canonical-name matches always take precedence over an alias match for
+    the same name, exactly like the single-item cascade: the alias query
+    only ever runs for names that didn't already match a canonical_name, so
+    a name can never resolve through both and a canonical hit can never be
+    displaced by an alias hit found afterwards.
+
+    Returns only the names that matched something, keyed by the same
+    case-folded string that was passed in — a name with no match at all
+    (in either table) is simply absent from the result, same as
+    exact_match_concept_id returning None for it."""
+    wanted = sorted({name for name in normalized_names if name})
+    if not wanted:
+        return {}
+
+    cur.execute(
+        "SELECT id, LOWER(canonical_name) AS matched_name FROM jobber.concept "
+        "WHERE status = 'active' AND LOWER(canonical_name) = ANY(%s)",
+        (wanted,),
+    )
+    matches = {row["matched_name"]: str(row["id"]) for row in cur.fetchall()}
+
+    remaining = [name for name in wanted if name not in matches]
+    if remaining:
+        cur.execute(
+            """
+            SELECT c.id, LOWER(a.alias) AS matched_name FROM jobber.concept c
+            JOIN jobber.concept_alias a ON a.concept_id = c.id
+            WHERE c.status = 'active' AND LOWER(a.alias) = ANY(%s)
+            """,
+            (remaining,),
+        )
+        for row in cur.fetchall():
+            matches[row["matched_name"]] = str(row["id"])
+
+    return matches
+
+
 def ensure_concept_embeddings(cur) -> int:
     """Backfill d_embedding rows for active concepts missing a vector at the
     current embedding model. Idempotent (upsert on the PK). Returns the number

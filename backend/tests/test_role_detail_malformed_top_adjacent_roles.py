@@ -156,7 +156,7 @@ def test_role_detail_endpoint_nulls_out_unparseable_string_instead_of_crashing(c
     assert body["description"] == "Works on Solvency II reporting."
     assert body["requirements"] == "Actuarial exams."
     assert body["responsibilities"] == "Board reporting."
-    assert [s["name"] for s in body["skills"]] == ["Solvency II"]
+    assert [s["name"] for s in body["legacy_skills"]] == ["Solvency II"]
 
 
 def test_role_list_endpoint_also_survives_malformed_top_adjacent_roles(client):

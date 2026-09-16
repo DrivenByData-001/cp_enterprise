@@ -64,7 +64,10 @@ def test_legacy_json_import_and_role_listing(client):
     assert role["title"] == "Senior Actuarial Analyst"
     assert role["description"] == "Own the reserving process."
     assert role["requirements"] == "Experience with IFRS 17 and Python."
-    assert {s["name"] for s in role["skills"]} == {"Python", "IFRS 17"}
+    # A legacy import has no requirement_claim review history at all — its
+    # skills show up as legacy/unreviewed, not mixed into "reviewed".
+    assert role["skills"] == []
+    assert {s["name"] for s in role["legacy_skills"]} == {"Python", "IFRS 17"}
     assert role["raw_json"]["job"]["title"] == "Senior Actuarial Analyst"
 
 
@@ -176,6 +179,14 @@ def test_delete_role_with_extraction_run_history_succeeds(client, monkeypatch):
         row = cur.fetchone()
         assert row["count"] == 1
         assert row["with_run"] == 0
+        # concept_proposal_occurrence is the opposite shape: it's about *this
+        # role's* occurrence of the proposal specifically, so — unlike
+        # concept_proposal itself — it cascade-deletes with the role rather
+        # than surviving nulled; reaching that cascade at all required nulling
+        # its own dangling extraction_run_id first (same NO ACTION problem as
+        # concept_proposal's, one table further removed).
+        cur.execute("SELECT count(*) AS n FROM jobber.concept_proposal_occurrence WHERE role_instance_id = %s", (role_id,))
+        assert cur.fetchone()["n"] == 0
 
 
 def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, monkeypatch):
@@ -298,7 +309,11 @@ def test_concept_crud_and_proposal_review_workflow(client):
     assert resolve.json()["status"] == "accepted_new"
 
     role = client.get(f"/api/roles/{role_id}").json()
-    assert any(s["resolved_concept_id"] is not None for s in role["skills"] if s["name"].lower() == surface_form)
+    # Legacy import, no requirement_claim review history — resolving its
+    # vocabulary proposal links the underlying observation's
+    # canonical_concept_id, so it shows up (now resolved) in legacy_skills,
+    # not the reviewed list.
+    assert any(s["resolved_concept_id"] is not None for s in role["legacy_skills"] if s["name"].lower() == surface_form)
 
 
 def test_profile_reads_current_snapshot_and_history_from_profile360(client):

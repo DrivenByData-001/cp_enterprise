@@ -20,9 +20,14 @@ def _role_with_requirement(cur, concept_id: str, basis="stated", document=True) 
     if document:
         document_id, _ = db.create_document(cur, kind="job_posting", content_text="Requires the thing.", provenance_quality="original")
     role_id = db.upsert_role_instance(cur, None, {"instance_type": "observed_posting", "title": "R", "document_id": document_id}, skills=[])
+    # These tests exercise the *person*-side status derivation (evidenced/
+    # partial/rejected/not_found), so the role-side claim itself needs to be
+    # an accepted, current requirement to be usable at all — see
+    # role_requirements.py and test_role_requirements.py for the review-gate
+    # semantics this comparison route now relies on.
     cur.execute(
-        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span) "
-        "VALUES (%s, %s, 'required', %s, %s, %s) RETURNING id",
+        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span, review_status) "
+        "VALUES (%s, %s, 'required', %s, %s, %s, 'accepted') RETURNING id",
         (role_id, concept_id, basis, document_id, "Requires the thing." if document else None),
     )
     return role_id, str(cur.fetchone()["id"])

@@ -5,8 +5,10 @@ import Dashboard from './Dashboard'
 import Import from './Import'
 import AddTarget from './AddTarget'
 import RoleRequirements from './RoleRequirements'
+import RoleDetail from './RoleDetail'
+import Comparison from './Comparison'
 import ComparisonActions from '../components/ComparisonActions'
-import { api, type Role, type RoleListResponse, type TargetDraft, type ComparisonItem } from '../lib/api'
+import { api, type ComparisonResult, type Role, type RoleListResponse, type TargetDraft, type ComparisonItem } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: {
   listRoles: vi.fn(), getFacets: vi.fn(), checkDuplicate: vi.fn(), ingestText: vi.fn(),
@@ -14,7 +16,10 @@ vi.mock('../lib/api', () => ({ api: {
   previewTarget: vi.fn(), importTarget: vi.fn(), assertCapability: vi.fn(), retractAssertion: vi.fn(),
   promoteAssertion: vi.fn(), createDevelopmentAction: vi.fn(), updateDevelopmentAction: vi.fn(),
   deleteDevelopmentAction: vi.fn(), getRole: vi.fn(), listRequirements: vi.fn(),
-  reviewRequirement: vi.fn(), proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  acceptRequirement: vi.fn(), rejectRequirement: vi.fn(), reopenRequirement: vi.fn(),
+  editRequirement: vi.fn(), addRequirement: vi.fn(), listConcepts: vi.fn(),
+  proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  compareRole: vi.fn(), listDevelopmentActions: vi.fn(), getRoleContext: vi.fn(),
 } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 function Location() { return <output aria-label="Location">{useLocation().pathname + useLocation().search}</output> }
@@ -110,15 +115,20 @@ describe('Target creation', () => {
 })
 
 describe('Requirement review', () => {
+  const claim = { id: 'claim', canonical_name: 'Python', concept_id: 'python', type_code: 'tool',
+    requirement_type: 'required', basis: 'stated', review_status: 'unreviewed', evidence_span: 'Python',
+    importance: 3, created_at: '2026-01-01', extraction_run_id: 'run-1', superseded_by: null,
+    document_id: null, document_title: null, document_provenance: null } as Awaited<ReturnType<typeof api.listRequirements>>['items'][number]
+
   it('shows failed acceptance and allows retry without losing the claim', async () => {
-    vi.mocked(api.listRequirements).mockResolvedValue([{ id: 'claim', canonical_name: 'Python', concept_id: 'python', type_code: 'tool', requirement_type: 'required', basis: 'stated', review_status: 'unreviewed', evidence_span: 'Python', importance: 3 } as Awaited<ReturnType<typeof api.listRequirements>>[number]])
-    vi.mocked(api.reviewRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ id: 'claim', review_status: 'accepted' })
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, needs_reextraction: 0, complete: false } })
+    vi.mocked(api.acceptRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ ...claim, review_status: 'accepted' })
     render(<MemoryRouter initialEntries={['/role-instances/role/requirements']}><Routes><Route path="/role-instances/:id/requirements" element={<RoleRequirements />} /></Routes></MemoryRouter>)
     fireEvent.click(await screen.findByText('Accept'))
     await screen.findByText('Review failed')
     fireEvent.click(screen.getByText('Accept'))
     await screen.findByText('accepted')
-    expect(api.reviewRequirement).toHaveBeenCalledTimes(2)
+    expect(api.acceptRequirement).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -149,5 +159,121 @@ describe('Comparison next steps', () => {
     fireEvent.click(screen.getByText('Save development action'))
     await waitFor(() => expect(api.createDevelopmentAction).toHaveBeenCalledWith('role', expect.objectContaining({ title: 'Build project' })))
     expect(api.assertCapability).not.toHaveBeenCalled()
+  })
+})
+
+describe('incomplete-review wording covers unresolved vocabulary terms too', () => {
+  // review_summary can be incomplete purely from unresolved_proposals (a
+  // term extraction couldn't map to any concept, so it never became a
+  // requirement_claim at all) with zero unreviewed claims — the wording
+  // must not say "0 AI suggestions" in that case.
+  const baseRole = {
+    id: 'role', node_type: 'posting', title: 'Actuary', organisation: null, location: null, country: null,
+    remote_type: null, employment_type: null, posting_date: null, captured_at: null, career_track: null,
+    seniority_level: null, salary_min: null, salary_max: null, currency: null, summary: null, description: null,
+    requirements: null, responsibilities: null, key_skills_summary: null, top_adjacent_roles: null,
+    extraction_status: null, extraction_notes: null, similarity: null, url: null,
+  } as Role
+
+  it('Role Detail mentions unresolved vocabulary terms, not just "0 AI suggestions"', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      ...baseRole,
+      requirement_review: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 2, extraction_attempted: true, needs_reextraction: 0, complete: false },
+    })
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
+    render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByText(/Requirements review pending/)
+    expect(notice.textContent).toContain('2 item')
+    expect(notice.textContent).not.toContain('0 item')
+    expect(notice.textContent).toMatch(/not yet matched to the vocabulary/)
+  })
+
+  it('Comparison mentions unresolved vocabulary terms, not just "0 pending AI suggestions"', async () => {
+    const comparison: ComparisonResult = {
+      role: { id: 'role', title: 'Actuary', kind: 'posting' }, items: [],
+      counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 0 },
+      blocking_gaps: [], unverified_required: [], fit_score: null, embedding_similarity: null, engine_version: 'v1',
+      review_summary: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 2, extraction_attempted: true, needs_reextraction: 0, complete: false },
+    }
+    vi.mocked(api.compareRole).mockResolvedValue(comparison)
+    vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
+    render(<MemoryRouter initialEntries={['/comparison/role']}><Routes><Route path="/comparison/:id" element={<Comparison />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByRole('alert')
+    expect(notice.textContent).toContain('2 pending item')
+    expect(notice.textContent).not.toContain('0 pending item')
+    expect(notice.textContent).toMatch(/not yet matched to the vocabulary/)
+  })
+
+  it('Role Detail mentions terms awaiting re-extraction, not just "0 AI suggestions"', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      ...baseRole,
+      requirement_review: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 1, complete: false },
+    })
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
+    render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByText(/Requirements review pending/)
+    expect(notice.textContent).toContain('1 item')
+    expect(notice.textContent).not.toContain('0 item')
+    expect(notice.textContent).toMatch(/newly added to the vocabulary awaiting re-extraction/)
+  })
+
+  it('Comparison mentions terms awaiting re-extraction, not just "0 pending AI suggestions"', async () => {
+    const comparison: ComparisonResult = {
+      role: { id: 'role', title: 'Actuary', kind: 'posting' }, items: [],
+      counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 0 },
+      blocking_gaps: [], unverified_required: [], fit_score: null, embedding_similarity: null, engine_version: 'v1',
+      review_summary: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 1, complete: false },
+    }
+    vi.mocked(api.compareRole).mockResolvedValue(comparison)
+    vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
+    render(<MemoryRouter initialEntries={['/comparison/role']}><Routes><Route path="/comparison/:id" element={<Comparison />} /></Routes></MemoryRouter>)
+    const notice = await screen.findByRole('alert')
+    expect(notice.textContent).toContain('1 pending item')
+    expect(notice.textContent).not.toContain('0 pending item')
+    expect(notice.textContent).toMatch(/newly added to the vocabulary awaiting re-extraction/)
+  })
+})
+
+describe('Role Detail separates reviewed requirements from legacy skills', () => {
+  const baseRole = {
+    id: 'role', node_type: 'posting', title: 'Actuary', organisation: null, location: null, country: null,
+    remote_type: null, employment_type: null, posting_date: null, captured_at: null, career_track: null,
+    seniority_level: null, salary_min: null, salary_max: null, currency: null, summary: null, description: null,
+    requirements: null, responsibilities: null, key_skills_summary: null, top_adjacent_roles: null,
+    extraction_status: null, extraction_notes: null, similarity: null, url: null,
+  } as Role
+
+  it('renders reviewed and legacy skills in separate, clearly labelled sections', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      ...baseRole,
+      skills: [{ name: 'Python', category: 'tool', importance: null, requirement_type: 'preferred', resolved_concept_id: 'python' }],
+      legacy_skills: [{ name: 'Excel', category: 'tool', importance: null, requirement_type: 'required', resolved_concept_id: null }],
+    })
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
+    render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
+
+    await screen.findByText('Reviewed requirements')
+    const reviewedSection = screen.getByText('Reviewed requirements').closest('div') as HTMLElement
+    expect(reviewedSection.textContent).toContain('Python')
+    expect(reviewedSection.textContent).toContain('preferred')
+
+    const legacySection = screen.getByText('Legacy skills').closest('div') as HTMLElement
+    expect(legacySection.textContent).toContain('Excel')
+    expect(legacySection.textContent).toMatch(/not yet reviewed as requirements/)
+    // never mixed into the same section
+    expect(reviewedSection.textContent).not.toContain('Excel')
+    expect(legacySection.textContent).not.toContain('Python')
+  })
+
+  it('omits the legacy section entirely when every skill is reviewed', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      ...baseRole,
+      skills: [{ name: 'Python', category: 'tool', importance: null, requirement_type: 'required', resolved_concept_id: 'python' }],
+      legacy_skills: [],
+    })
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
+    render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
+    await screen.findByText('Reviewed requirements')
+    expect(screen.queryByText('Legacy skills')).toBeNull()
   })
 })

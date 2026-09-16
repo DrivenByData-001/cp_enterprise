@@ -1,20 +1,54 @@
 """Target requirements retain their wording and an explicit vocabulary resolution."""
 from fastapi import HTTPException
 
-from .concept_linking import exact_match_concept_id, normalize_name
+from .concept_linking import bulk_exact_match_concept_ids, normalize_name
 
 
 def resolve_requirements(cur, skills):
-    result = []
-    for skill in skills:
-        item = dict(skill)
+    items = [dict(skill) for skill in skills]
+    # Two batched lookups, each in a bounded number of queries regardless of
+    # how many skills there are — a target's requirement list is edited and
+    # re-previewed live as the user types, so this runs often, and N skills
+    # must not mean O(N) round trips:
+    #
+    # 1. Auto-match candidates (no explicit concept_id, not already marked
+    #    reviewed — an item explicitly marked reviewed with nothing chosen
+    #    means "treat as unmapped", not "go try to auto-match it") resolved
+    #    together via bulk_exact_match_concept_ids, which was previously one
+    #    exact_match_concept_id() call — up to two single-row SELECTs — per
+    #    such item.
+    names_to_match = [
+        normalize_name(item["name"]) for item in items
+        if not item.get("concept_id") and not item.get("mapping_reviewed")
+    ]
+    matched_by_name = bulk_exact_match_concept_ids(cur, names_to_match)
+
+    candidate_ids: list[str | None] = []
+    for item in items:
         explicit = item.get("concept_id")
-        cid = explicit or (None if item.get("mapping_reviewed") else
-                           exact_match_concept_id(cur, normalize_name(item["name"])))
-        concept = None
-        if cid:
-            cur.execute("SELECT id, canonical_name FROM jobber.concept WHERE id = %s AND status = 'active'", (cid,))
-            concept = cur.fetchone()
+        if explicit:
+            cid = explicit
+        elif item.get("mapping_reviewed"):
+            cid = None
+        else:
+            cid = matched_by_name.get(normalize_name(item["name"]))
+        candidate_ids.append(cid)
+
+    # 2. Every resulting candidate id (explicit or auto-matched) verified as
+    #    a currently-active concept in one WHERE id = ANY(...) query.
+    concepts_by_id: dict[str, dict] = {}
+    unique_ids = list({cid for cid in candidate_ids if cid})
+    if unique_ids:
+        cur.execute(
+            "SELECT id, canonical_name FROM jobber.concept WHERE id = ANY(%s::uuid[]) AND status = 'active'",
+            (unique_ids,),
+        )
+        concepts_by_id = {str(row["id"]): row for row in cur.fetchall()}
+
+    result = []
+    for item, cid in zip(items, candidate_ids):
+        explicit = item.get("concept_id")
+        concept = concepts_by_id.get(cid) if cid else None
         if explicit and (not item.get("mapping_reviewed") or not concept):
             raise HTTPException(422, "Select an active vocabulary concept and confirm the requirement mapping.")
         result.append({**item, "concept_id": str(concept["id"]) if concept else None,

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import VocabularyReviewView from '../components/vocabulary/VocabularyReviewView'
 import VocabularyMapView from '../components/vocabulary/VocabularyMapView'
 import { api, type ConceptType } from '../lib/api'
@@ -14,11 +15,24 @@ type Tab = 'review' | 'map'
 export default function Vocabulary() {
   const [tab, setTab] = useState<Tab>('review')
   const [conceptTypes, setConceptTypes] = useState<ConceptType[]>([])
-  const [reviewFocus, setReviewFocus] = useState<{ q: string; status: 'pending' } | null>(null)
+  const [reviewFocus, setReviewFocus] = useState<{ q: string; status: 'pending' | 'accepted' } | null>(null)
+  const [params, setParams] = useSearchParams()
 
   useEffect(() => {
     api.listConceptTypes().then(setConceptTypes).catch(() => setConceptTypes([]))
   }, [])
+
+  // Deep link from elsewhere in the app (e.g. requirement review's "concept
+  // type is global — open it here" link): focus the accepted-vocabulary row
+  // for a specific concept name, then clear the param so it doesn't re-fire
+  // on back/forward navigation.
+  useEffect(() => {
+    const focusName = params.get('focusConceptName')
+    if (!focusName) return
+    setReviewFocus({ q: focusName, status: 'accepted' })
+    setTab('review')
+    setParams((p) => { const next = new URLSearchParams(p); next.delete('focusConceptName'); return next }, { replace: true })
+  }, [params, setParams])
 
   return (
     <div>

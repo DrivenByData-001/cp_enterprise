@@ -1,8 +1,8 @@
 from app.stepping_stones import assess_candidate
 
-def requirement(key, status="accepted", required=True):
+def requirement(key, required=True, source="claim"):
     return {"concept_id": key, "canonical_name": key, "type_code": "tool",
-            "review_status": status, "requirement_type": "required" if required else "preferred", "source": "claim"}
+            "requirement_type": "required" if required else "preferred", "source": source}
 
 def test_balances_reachability_and_target_progress():
     target = [requirement("A"), requirement("B"), requirement("C")]
@@ -16,11 +16,16 @@ def test_balances_reachability_and_target_progress():
     assert assess_candidate(target, target, current)["assessment"] == "not_an_intermediate_step"
 
 def test_missing_or_pending_data_never_means_reachable():
+    # `requirements`/`target_requirements` only ever carry *usable* (accepted
+    # claim or legacy-observation fallback) rows now — an unreviewed claim
+    # never appears in them. Pending review is signalled via the separate
+    # `pending`/`target_pending` counts (role_requirements.py's review-summary
+    # helper), not by row content, so this test exercises that gate directly.
     target = [requirement("A"), requirement("B")]
     current = {"A": "evidenced", "B": "not_found"}
     assert assess_candidate([], target, current)["assessment"] == "insufficient_evidence"
-    assert assess_candidate([requirement("A", "unreviewed")], target, current)["assessment"] == "insufficient_evidence"
-    assert assess_candidate([requirement("A")], [requirement("B", "unreviewed")], current)["assessment"] == "insufficient_evidence"
+    assert assess_candidate([requirement("A")], target, current, pending=1)["assessment"] == "insufficient_evidence"
+    assert assess_candidate([requirement("A")], [requirement("B")], current, target_pending=1)["assessment"] == "insufficient_evidence"
     assert assess_candidate([requirement("A", required=False)], target, current)["assessment"] == "insufficient_evidence"
 
 def test_assertions_and_partial_evidence_are_not_full_coverage():

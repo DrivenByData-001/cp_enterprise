@@ -46,16 +46,33 @@ the same live-aggregation pattern `routes/concepts.py::_group_proposals`
 already used for occurrence counts, extended to carry the fuller evidence
 this brief needs.
 
+A code-review follow-up found this evidence was blind to half the corpus's
+unresolved terms: a role captured via source-aware ingest + extract-
+requirements never gets a `role_skill_observation` row at all (its
+evidence lives in `jobber.concept_proposal_occurrence`, migration 0021,
+instead), so a cluster made up entirely of such roles' occurrences showed
+zero role_count/observation_count/countries/seniority/examples despite
+having real evidence — undermining the priority score and evidence flags
+below, which read straight off these counts. `build_pending_cluster_index`
+now also joins `concept_proposal_occurrence`/`role_instance` (matched
+directly by `concept_proposal_id`, not surface-form text, since the
+occurrence already carries that link precisely) and folds a role's
+contribution into the same counters regardless of which pipeline captured
+it — a role's evidence counts once, the same way, whichever table
+produced it. `_group_evidence_map` (the split-cluster preview) reads the
+same second source for the same reason.
+
 **No new table, no new index.** At this corpus's scale (~1,525 pending
-proposals, ~4,700 unresolved observations in production) two SELECTs and an
-in-memory group-by comfortably run in well under 100ms — measured against
-the ~1,481-cluster/~4,000-observation local diagnostic fixture built for
-§13, the full `list_clusters` call (aggregate + filter + sort + paginate)
-completes in a few tens of milliseconds. Every index this pass's queries
-touch (`idx_concept_proposal_cluster`, `idx_rso_role_local`,
-`idx_rso_surface_local`) already existed from migration 0009 — nothing new
-was added, per the brief's "add indexes only if justified by measured
-need," because nothing here is close to needing one.
+proposals, ~4,700 unresolved observations in production) three SELECTs and
+an in-memory group-by comfortably run in well under 100ms — measured
+against the ~1,481-cluster/~4,000-observation local diagnostic fixture
+built for §13, the full `list_clusters` call (aggregate + filter + sort +
+paginate) completes in a few tens of milliseconds. Every index this pass's
+original two queries touch (`idx_concept_proposal_cluster`,
+`idx_rso_role_local`, `idx_rso_surface_local`) already existed from
+migration 0009; the third query (over `concept_proposal_occurrence`) uses
+that table's own migration-0021 indexes — nothing new was added here
+either, per the brief's "add indexes only if justified by measured need."
 
 The suggested canonical label is the longest surface form in the cluster,
 ties broken alphabetically (`suggested_canonical_label`) — the same
@@ -66,10 +83,13 @@ Once a cluster is fully resolved (no pending member left), its evidence
 becomes the lighter `_resolved_cluster_rows` shape (status, resolved
 concept, resolved date, surface forms) rather than a re-derived role/year/
 country breakdown — a deliberate, documented boundary: after acceptance,
-`role_skill_observation.canonical_concept_id` is set and the rows drop out
-of the "unresolved" query, so the rich card is reserved for the active
-review queue, and accepted/rejected rows are audit history, not a live
-re-scored item.
+`role_skill_observation.canonical_concept_id` is set (legacy source) and
+both evidence queries filter to `status = 'pending'` (occurrence source),
+so the resolved cluster's rows drop out of both and the rich card is
+reserved for the active review queue, while accepted/rejected rows are
+audit history, not a live re-scored item. The *requirement* those
+occurrences represented does not simply disappear at that point though —
+see docs/29 §12 for what happens to it per role.
 
 ---
 

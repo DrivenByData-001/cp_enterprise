@@ -116,6 +116,39 @@ def test_path_works_without_embeddings_and_prefers_reachable_bridge(client, monk
     assert next(r for r in path["stepping_stones"] if r["id"] == empty)["assessment"] == "insufficient_evidence"
 
 
+def test_path_treats_unreviewed_requirements_as_incomplete_review_not_silent_final(client, monkeypatch):
+    """Target/stepping-stone analysis (acceptance criterion §18): the
+    canonical loader excludes unreviewed claims from `path_to_target`'s
+    requirement rows entirely, but that must not make a role's incomplete
+    review invisible — an otherwise-'potential_step' candidate must show
+    'insufficient_evidence' while it still has a pending, unreviewed claim,
+    and the same for the target itself."""
+    from app import stepping_stones
+    with db.db_cursor() as cur:
+        a, b = concept(cur, "A"), concept(cur, "B")
+        target = role(cur, "Target", "user_defined_target")
+        candidate = role(cur, "Candidate")
+        claim(cur, target, a)
+        claim(cur, candidate, a)
+        pending_claim_id = claim(cur, candidate, b, "unreviewed")
+    monkeypatch.setattr(stepping_stones, "atomic_concept_evidence", lambda cur, cid: {"status": "evidenced"})
+
+    result = client.get(f"/api/roles/{target}")
+    assert result.status_code == 200, result.text
+    step = next(r for r in result.json()["path"]["stepping_stones"] if r["id"] == candidate)
+    assert step["assessment"] == "insufficient_evidence"
+
+    # Once reviewed (accepted here), the same candidate can register real
+    # progress — and the plain UPDATE below, with no manual cache bump, must
+    # be enough: migration 0019's trigger on jobber.requirement_claim
+    # invalidates the target-path cache on every accept/edit/reject/reopen.
+    with db.db_cursor() as cur:
+        cur.execute("UPDATE jobber.requirement_claim SET review_status = 'accepted' WHERE id = %s", (pending_claim_id,))
+    result2 = client.get(f"/api/roles/{target}")
+    step2 = next(r for r in result2.json()["path"]["stepping_stones"] if r["id"] == candidate)
+    assert step2["assessment"] != "insufficient_evidence"
+
+
 def test_assertion_notes_remain_retractable_with_stronger_mapped_evidence(client):
     from app.capability_engine import atomic_concept_evidence
     with db.db_cursor() as cur:

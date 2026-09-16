@@ -566,8 +566,13 @@ def _role(cur, title="Test role"):
 
 
 def _requirement(cur, role_id, concept_id, requirement_type="required", basis="user_asserted"):
+    # role_fit derivation reads only *usable* (accepted, current) claims —
+    # see role_requirements.py — so these role-fit-derivation tests need an
+    # accepted claim to exercise the status logic at all; review-status
+    # gating itself is covered separately in test_role_requirements.py.
     cur.execute(
-        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis) VALUES (%s, %s, %s, %s)",
+        "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+        "VALUES (%s, %s, %s, %s, 'accepted')",
         (role_id, concept_id, requirement_type, basis),
     )
 

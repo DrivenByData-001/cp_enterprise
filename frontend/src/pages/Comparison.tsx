@@ -115,6 +115,15 @@ export default function Comparison() {
       </Link>
       <ImportSteps step={3} />
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Structural comparison: {data.role.title}</h1>
+      {!data.review_summary.complete && (
+        <p role="alert" style={{ color: 'var(--warning)' }}>
+          This role's requirement review is incomplete — {data.review_summary.unreviewed + data.review_summary.unresolved_proposals + data.review_summary.needs_reextraction} pending item
+          {data.review_summary.unreviewed + data.review_summary.unresolved_proposals + data.review_summary.needs_reextraction === 1 ? '' : 's'}
+          {data.review_summary.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''}
+          {data.review_summary.needs_reextraction > 0 ? ' (including terms newly added to the vocabulary awaiting re-extraction)' : ''} excluded below.{' '}
+          <Link to={`/role-instances/${data.role.id}/requirements`}>Review requirements</Link>
+        </p>
+      )}
       {data.target_mapping && <div className="card">
         <p>{data.target_mapping.mapped} of {data.target_mapping.total} target requirements mapped and included. Counts below cover included requirements only.</p>
         {!data.target_mapping.complete && <p role="alert">Target mapping is incomplete; this comparison cannot establish overall target readiness. <Link to={`/roles/${data.role.id}/edit`}>Review target requirements</Link></p>}

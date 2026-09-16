@@ -12,6 +12,7 @@ review endpoints' mapping-run bookkeeping.
 """
 
 import json
+import uuid
 from datetime import datetime, timezone
 
 from .ai import AIConfigError, AITaskError, ai_model_name, load_prompt, prompt_version, run_json_task
@@ -28,6 +29,7 @@ from .models import (
     RequirementExtractionResult,
 )
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
+from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
 
 
@@ -240,10 +242,76 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         if rejected_span_count else None,
     )
 
-    claims_created = proposals_created = proposals_updated = 0
+    claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
     for idx, (surface_form, requirement_type, basis, span, importance, _context) in enumerate(validated):
         concept_id = item_concept.get(idx)
         if concept_id is not None:
+            # Conservative rerun/supersession handling (brief §7): a rerun
+            # against the same source must not accumulate indistinguishable
+            # current unreviewed proposals, but it must also never silently
+            # touch a decision a human already made. This is a small, exact
+            # match on (role, concept) — not a fuzzy claim-merging pass.
+            cur.execute(
+                "SELECT id, requirement_type, basis, evidence_span, review_status "
+                "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+                (role_instance_id, concept_id),
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                if existing["review_status"] in ("accepted", "rejected"):
+                    # A human has already decided this concept's requirement
+                    # for this role — extraction running again never
+                    # revisits that decision.
+                    continue
+                # Deliberately excludes `importance`: it isn't part of what a
+                # requirement *is* the way requirement_type/basis/evidence_span
+                # are, and importance plays no role in capability_engine's fit
+                # calculation today. A rerun that only reproduces a fresher
+                # importance guess for an already-proposed (role, concept)
+                # interpretation is treated as the same proposal, not a
+                # reason to churn the review queue — extraction is not
+                # intended to "refresh" a stored importance in place.
+                same_interpretation = (
+                    existing["requirement_type"] == requirement_type
+                    and existing["basis"] == basis
+                    and (existing["evidence_span"] or None) == (span or None)
+                )
+                if same_interpretation:
+                    claims_deduplicated += 1
+                    continue
+                # A genuinely different interpretation of the same concept:
+                # preserve the still-unreviewed old proposal through
+                # supersession rather than leaving two current unreviewed
+                # claims for one concept. Its review_status stays
+                # 'unreviewed' — no human reviewed it, so it must not gain
+                # the curator veto's authority (role_requirements.py §2)
+                # merely by being superseded through proposal churn.
+                #
+                # The new row's id is generated here so the old row's
+                # supersede-update (freeing the (role, concept) slot) can run
+                # *before* the new row's insert reclaims it — inserting first
+                # would momentarily leave two current rows for the same
+                # (role, concept) and trip migration 0020's partial unique
+                # index (see routes/role_instances.py::_supersede_with_new_claim,
+                # the same pattern used there).
+                new_claim_id = str(uuid.uuid4())
+                cur.execute(
+                    "UPDATE jobber.requirement_claim SET superseded_by = %s WHERE id = %s",
+                    (new_claim_id, existing["id"]),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO jobber.requirement_claim
+                        (id, role_instance_id, concept_id, requirement_type, importance, basis,
+                         document_id, evidence_span, extraction_run_id, review_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+                    """,
+                    (new_claim_id, role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
+                )
+                claims_created += 1
+                claims_superseded += 1
+                continue
+
             cur.execute(
                 """
                 INSERT INTO jobber.requirement_claim
@@ -258,6 +326,15 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
 
         # Unresolved vocabulary -> concept_proposal (never silently invented —
         # brief §6/§18), same convention as concept_linking.run_pass_b.
+        # concept_proposal itself is deduplicated globally by surface_form
+        # (one curation decision per term, doc 18 §3) — its own document_id/
+        # extraction_run_id only ever remember the *first* role that hit a
+        # given unresolved term (COALESCE below never overwrites them for a
+        # later role's occurrence). concept_proposal_occurrence is the
+        # separate, per-role link this proposal's own columns can't provide:
+        # role_requirements.py's unresolved_proposals count needs to know
+        # about every role that has ever produced a still-pending proposal,
+        # not only the one whose extraction happened to run first.
         normalized = normalize_name(surface_form)
         cur.execute(
             "SELECT id FROM jobber.concept_proposal WHERE surface_form = %s AND status = 'pending'",
@@ -265,6 +342,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         )
         existing = cur.fetchone()
         if existing:
+            proposal_id = existing["id"]
             cur.execute(
                 """
                 UPDATE jobber.concept_proposal SET
@@ -274,7 +352,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                     extraction_run_id = COALESCE(extraction_run_id, %s)
                 WHERE id = %s
                 """,
-                (document["id"], span, main_run_id, existing["id"]),
+                (document["id"], span, main_run_id, proposal_id),
             )
             proposals_updated += 1
         else:
@@ -285,17 +363,58 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                     (surface_form, occurrence_count, nearest_concept_id, nearest_similarity,
                      document_id, evidence_span, extraction_run_id, status)
                 VALUES (%s, 1, %s, %s, %s, %s, %s, 'pending')
+                RETURNING id
                 """,
                 (normalized, nearest[0] if nearest else None, nearest[1] if nearest else None,
                  document["id"], span, main_run_id),
             )
+            proposal_id = cur.fetchone()["id"]
             proposals_created += 1
+
+        # requirement_type/basis/span (migration 0022) preserve *this* item's
+        # own shape, not concept_proposal's shared/global columns above — if
+        # the term's vocabulary proposal is later accepted, role_requirements.
+        # resolve_occurrences_for_concept needs this to create a faithful
+        # requirement_claim for this role without inventing anything: a claim
+        # cannot exist without a requirement_type, so an occurrence with none
+        # correctly leaves that role's review incomplete (needs
+        # re-extraction) rather than guessing one at resolution time.
+        #
+        # A rerun against the same source can hit an (proposal, role) pair
+        # that already has an occurrence — the term is still unresolved, but
+        # this extraction's own reading of it may be better (or worse) than
+        # what's already stored. Refresh together (document/run provenance
+        # included, so the row reflects one coherent extraction, never a
+        # stronger requirement_type paired with a different run's document)
+        # only when this item's requirement_type is at least as strong as
+        # what's already there (same ranking resolve_occurrences_for_concept
+        # uses to pick a winner across several occurrences) — never
+        # replacing stronger, already-valid evidence with a weaker or
+        # missing reading merely because a later run happened to do worse.
+        cur.execute(
+            f"""
+            INSERT INTO jobber.concept_proposal_occurrence
+                (concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (concept_proposal_id, role_instance_id) DO UPDATE SET
+                document_id = EXCLUDED.document_id,
+                extraction_run_id = EXCLUDED.extraction_run_id,
+                requirement_type = EXCLUDED.requirement_type,
+                basis = EXCLUDED.basis,
+                evidence_span = EXCLUDED.evidence_span
+            WHERE {requirement_type_rank_sql("EXCLUDED.requirement_type")}
+                <= {requirement_type_rank_sql("jobber.concept_proposal_occurrence.requirement_type")}
+            """,
+            (proposal_id, role_instance_id, document["id"], main_run_id, requirement_type, basis, span),
+        )
 
     return {
         "status": "ok",
         "extraction_run_id": main_run_id,
         "adjudication_run_id": adjudication_run_id,
         "claims_created": claims_created,
+        "claims_superseded": claims_superseded,
+        "claims_deduplicated": claims_deduplicated,
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,

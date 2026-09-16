@@ -34,6 +34,55 @@ def _cluster_key_of(cur, surface_form: str) -> str:
     return cur.fetchone()["ck"]
 
 
+def _source_aware_role(cur, title="Source-aware role", body="Requires Foo Modelling.", **cols):
+    """A role captured via source-aware ingest + extract-requirements: has a
+    document but *no* role_skill_observation rows at all — unresolved
+    surface forms from this pipeline only ever appear via
+    concept_proposal/concept_proposal_occurrence, never the legacy table
+    _role/_skill above populate."""
+    document_id, _ = db.create_document(cur, kind="job_posting", content_text=body, provenance_quality="original")
+    role_id = db.upsert_role_instance(
+        cur, None, {"instance_type": "observed_posting", "title": title, "document_id": document_id, **cols}, skills=[]
+    )
+    return role_id, document_id
+
+
+def _occurrence(cur, role_id, document_id, *, surface_form, requirement_type="required", basis="stated",
+                 evidence_span=None, extraction_run_id=None, created_at=None) -> str:
+    """Mirrors extraction.py's unresolved-surface-form path exactly: a
+    concept_proposal (deduplicated globally by surface_form, reusing an
+    existing pending one for the same term) plus the per-role
+    concept_proposal_occurrence link, now also carrying the occurrence's own
+    requirement shape (migration 0022) so a later resolution can rebuild a
+    faithful claim from it. Returns the proposal id. `created_at` lets a
+    test pin an explicit ordering — the column defaults to `now()`, which is
+    *transaction*-start time in Postgres, so two occurrences inserted in the
+    same `db_cursor()` block otherwise tie exactly and can't establish a
+    real creation order at all."""
+    normalized = surface_form.strip().lower()
+    cur.execute("SELECT id FROM jobber.concept_proposal WHERE surface_form = %s AND status = 'pending'", (normalized,))
+    existing = cur.fetchone()
+    if existing:
+        proposal_id = existing["id"]
+        cur.execute(
+            "UPDATE jobber.concept_proposal SET occurrence_count = occurrence_count + 1 WHERE id = %s", (proposal_id,)
+        )
+    else:
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, evidence_span, status) "
+            "VALUES (%s, 1, %s, %s, 'pending') RETURNING id",
+            (normalized, document_id, evidence_span),
+        )
+        proposal_id = cur.fetchone()["id"]
+    cur.execute(
+        "INSERT INTO jobber.concept_proposal_occurrence "
+        "(concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))",
+        (proposal_id, role_id, document_id, extraction_run_id, requirement_type, basis, evidence_span, created_at),
+    )
+    return str(proposal_id)
+
+
 # --- cluster aggregation (brief §1) -----------------------------------------
 
 def test_cluster_aggregation_groups_lexical_variants_with_full_evidence(client):
@@ -572,3 +621,302 @@ def test_legacy_resolve_endpoints_still_work_after_refactor(client):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "accepted_new"
+
+
+# --- code-review follow-up: resolving a proposal must not lose the -------
+# --- requirement it represented for every role that produced it (docs/29 §13)
+
+def test_accepting_a_cluster_creates_an_unreviewed_claim_for_the_source_aware_role(client):
+    """The full lifecycle the fix exists for: unresolved term -> vocabulary
+    resolution -> role still incomplete (now for a *different* reason,
+    unreviewed rather than unresolved) -> requirement eventually
+    participates in analysis once a human accepts it."""
+    from app.role_requirements import load_requirement_review_summary, load_role_requirements
+
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires Foo Modelling expertise.")
+        _occurrence(cur, role_id, document_id, surface_form="Foo Modelling", requirement_type="required",
+                    basis="stated", evidence_span="Foo Modelling")
+
+        before = load_requirement_review_summary(cur, role_id)
+        assert before["unresolved_proposals"] == 1
+        assert before["needs_reextraction"] == 0
+        assert before["complete"] is False
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept",
+        json={"cluster_key": "foo modelling", "type_code": "domain", "canonical_name": "Foo Modelling"},
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT id, review_status, basis, evidence_span, document_id, requirement_type "
+            "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_id, concept_id),
+        )
+        claim = cur.fetchone()
+        assert claim is not None
+        assert claim["review_status"] == "unreviewed"
+        assert claim["requirement_type"] == "required"
+        assert claim["basis"] == "stated"
+        assert claim["evidence_span"] == "Foo Modelling"
+        assert str(claim["document_id"]) == document_id
+        claim_id = str(claim["id"])
+
+        # Resolved: no longer counted as an unresolved proposal — but the
+        # role must NOT look "complete" as a result. It is incomplete for a
+        # different, legitimate reason now: a fresh unreviewed claim.
+        mid = load_requirement_review_summary(cur, role_id)
+        assert mid["unresolved_proposals"] == 0
+        assert mid["unreviewed"] == 1
+        assert mid["needs_reextraction"] == 0
+        assert mid["complete"] is False
+        assert load_role_requirements(cur, role_id) == []  # unreviewed, not yet authoritative
+
+    accept_resp = client.post(f"/api/role-instances/{role_id}/requirements/{claim_id}/accept")
+    assert accept_resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        after = load_requirement_review_summary(cur, role_id)
+        assert after["complete"] is True
+        items = load_role_requirements(cur, role_id)
+    assert len(items) == 1
+    assert items[0]["concept_id"] == concept_id
+
+
+def test_accepting_a_cluster_marks_role_needing_reextraction_when_occurrence_lacks_requirement_type(client):
+    """An occurrence with no requirement_type (a pre-migration-0022
+    occurrence, or migration 0021's own backfill — neither could ever carry
+    one) has nothing faithful to build a claim from. No claim is fabricated;
+    the role stays incomplete (needs_reextraction) rather than silently
+    losing the requirement or inventing its shape. Re-running extraction
+    (simulated here by a direct claim insert — the point under test is that
+    the signal is *live*, not by which path a claim eventually appears)
+    clears it immediately."""
+    from app.role_requirements import load_requirement_review_summary
+
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires Bar Charting.")
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, status) "
+            "VALUES ('bar charting', 1, %s, 'pending') RETURNING id",
+            (document_id,),
+        )
+        proposal_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id) "
+            "VALUES (%s, %s, %s)",
+            (proposal_id, role_id, document_id),
+        )
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept",
+        json={"cluster_key": "bar charting", "type_code": "tool", "canonical_name": "Bar Charting"},
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 0  # nothing fabricated
+
+        summary = load_requirement_review_summary(cur, role_id)
+        assert summary["unresolved_proposals"] == 0
+        assert summary["needs_reextraction"] == 1
+        assert summary["complete"] is False
+
+        # Self-healing: the moment ANY current claim exists for this
+        # (role, concept), the live signal clears — no bookkeeping to update.
+        cur.execute(
+            "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+            "VALUES (%s, %s, 'required', 'user_asserted', 'unreviewed')",
+            (role_id, concept_id),
+        )
+        summary_after = load_requirement_review_summary(cur, role_id)
+        assert summary_after["needs_reextraction"] == 0
+
+
+def test_accepting_a_cluster_marks_role_needing_reextraction_when_span_is_missing_for_stated_basis(client):
+    """requirement_claim's own CHECK constraint (migration 0003) requires a
+    non-null evidence_span whenever basis is 'stated'/'implied' — an
+    occurrence claiming 'stated' with no span (should never happen from a
+    real extraction run, but this is still just data) must not crash the
+    resolution with a raw CheckViolation. Same outcome as missing
+    requirement_type: left for live re-extraction detection."""
+    from app.role_requirements import load_requirement_review_summary
+
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires Baz Modelling.")
+        _occurrence(cur, role_id, document_id, surface_form="Baz Modelling", requirement_type="required",
+                    basis="stated", evidence_span=None)
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept",
+        json={"cluster_key": "baz modelling", "type_code": "domain", "canonical_name": "Baz Modelling"},
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 0
+        summary = load_requirement_review_summary(cur, role_id)
+        assert summary["needs_reextraction"] == 1
+        assert summary["complete"] is False
+
+
+def test_accepting_a_cluster_does_not_duplicate_a_claim_that_already_exists(client):
+    """If some other route (manual add, an earlier extraction run) already
+    gave this role a current claim for the concept a proposal resolves to,
+    resolution must not create a second one — migration 0020's uniqueness
+    invariant (at most one current claim per role+concept) must hold."""
+    from app.role_requirements import load_requirement_review_summary
+
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires Quux Scripting.")
+        concept_id = _active_concept(cur, "Quux Scripting", type_code="tool")
+        cur.execute(
+            "INSERT INTO jobber.requirement_claim (role_instance_id, concept_id, requirement_type, basis, review_status) "
+            "VALUES (%s, %s, 'preferred', 'user_asserted', 'accepted')",
+            (role_id, concept_id),
+        )
+        _occurrence(cur, role_id, document_id, surface_form="Quux Scripting", requirement_type="required", basis="stated")
+
+    resp = client.post(
+        "/api/vocabulary/clusters/merge", json={"cluster_key": "quux scripting", "concept_id": concept_id}
+    )
+    assert resp.status_code == 200
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 1  # never duplicated — the pre-existing accepted claim stands
+        summary = load_requirement_review_summary(cur, role_id)
+        assert summary["complete"] is True
+
+
+def test_accepting_a_cluster_gives_one_claim_per_role_across_a_clustered_multi_surface_form_resolution(client):
+    """A cluster with more than one surface form (e.g. 'SII' and 'Solvency
+    II' merged by vocabulary_bootstrap's clustering) resolves as one unit —
+    a role that produced occurrences for *both* surface forms must still end
+    up with exactly one claim, not two (which migration 0020's unique index
+    would reject outright)."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires SII and Solvency II knowledge.")
+        _occurrence(cur, role_id, document_id, surface_form="SII", requirement_type="required", basis="stated", evidence_span="SII")
+        _occurrence(cur, role_id, document_id, surface_form="Solvency II", requirement_type="preferred", basis="implied", evidence_span="Solvency II")
+        vb.compute_cluster_keys(cur)
+        key = _cluster_key_of(cur, "sii")
+        assert key == _cluster_key_of(cur, "solvency ii")  # confirms they really did cluster together
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept", json={"cluster_key": key, "type_code": "regulation", "canonical_name": "Solvency II"}
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 1
+
+
+def test_accepting_a_cluster_picks_the_strongest_occurrence_even_when_it_is_not_the_oldest(client):
+    """Same clustered-resolution shape as the test above, but with the
+    strength/creation-order relationship reversed: the *weaker* occurrence
+    ('contextual') was created first, the *stronger* one ('required')
+    second. Collapsing by earliest-created (the pre-fix behaviour) would
+    build the claim from the weaker reading merely because it happened to
+    be extracted first; collapsing by requirement_type strength (required >
+    preferred > contextual) must pick 'required' regardless of which
+    occurrence is older."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires SII and Solvency II knowledge.")
+        _occurrence(cur, role_id, document_id, surface_form="SII", requirement_type="contextual", basis="implied",
+                    evidence_span="SII", created_at="2026-01-01T00:00:00+00:00")
+        _occurrence(cur, role_id, document_id, surface_form="Solvency II", requirement_type="required", basis="stated",
+                    evidence_span="Solvency II", created_at="2026-01-02T00:00:00+00:00")
+        vb.compute_cluster_keys(cur)
+        key = _cluster_key_of(cur, "sii")
+        assert key == _cluster_key_of(cur, "solvency ii")
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept", json={"cluster_key": key, "type_code": "regulation", "canonical_name": "Solvency II"}
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT requirement_type, basis, evidence_span FROM jobber.requirement_claim "
+            "WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_id, concept_id),
+        )
+        claims = cur.fetchall()
+    assert len(claims) == 1  # still exactly one claim, never two
+    assert claims[0]["requirement_type"] == "required"
+    assert claims[0]["basis"] == "stated"
+    assert claims[0]["evidence_span"] == "Solvency II"
+
+
+# --- code-review follow-up: cluster evidence must include source-aware ----
+# --- role occurrences, not only legacy role_skill_observation (docs/29 §14)
+
+def test_cluster_evidence_includes_a_source_aware_role_that_never_had_an_observation(client):
+    """A role captured via source-aware ingest + extract-requirements never
+    gets a role_skill_observation row at all (docs/29 §1) — before this fix,
+    a cluster made up entirely of such roles' occurrences showed zero
+    role_count/observation_count/countries/seniority despite having real
+    evidence."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(
+            cur, title="Data Engineer", body="Requires Widget Orchestration.",
+            country="Germany", seniority_level="senior", posting_date="2024-05-01",
+        )
+        _occurrence(cur, role_id, document_id, surface_form="Widget Orchestration", requirement_type="required", basis="stated")
+
+    resp = client.get("/api/vocabulary/clusters", params={"status": "pending", "q": "widget"})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    matches = [c for c in items if "widget orchestration" in c["surface_forms"]]
+    assert len(matches) == 1
+    c = matches[0]
+    assert c["role_count"] == 1
+    assert c["observation_count"] == 1
+    assert c["countries"] == ["Germany"]
+    assert c["seniority_levels"] == ["senior"]
+    assert c["distinct_years"] == [2024]
+    assert len(c["example_roles"]) == 1
+    assert c["example_roles"][0]["id"] == role_id
+
+
+def test_cluster_evidence_combines_legacy_observations_and_source_aware_occurrences(client):
+    """A cluster with contributions from *both* pipelines counts every
+    role, not only the legacy-observation ones."""
+    with db.db_cursor() as cur:
+        legacy_role = _role(cur, "Legacy Role", [_skill("Gadget Tuning")], country="UK")
+        source_aware_role, document_id = _source_aware_role(
+            cur, title="Source-aware Role", body="Requires Gadget Tuning.", country="France",
+        )
+        _occurrence(cur, source_aware_role, document_id, surface_form="Gadget Tuning", requirement_type="required", basis="stated")
+
+    resp = client.get("/api/vocabulary/clusters", params={"status": "pending", "q": "gadget"})
+    matches = [c for c in resp.json()["items"] if "gadget tuning" in c["surface_forms"]]
+    assert len(matches) == 1
+    c = matches[0]
+    assert c["role_count"] == 2
+    assert c["observation_count"] == 2
+    assert set(c["countries"]) == {"UK", "France"}
+    assert {r["id"] for r in c["example_roles"]} == {legacy_role, source_aware_role}
