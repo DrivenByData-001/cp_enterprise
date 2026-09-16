@@ -83,6 +83,14 @@ VALID_COMPONENTS = ("base", "bonus_pct", "total_package", "day_rate")
 VALID_PAY_PERIODS = ("annual", "daily")
 VALID_EMPLOYMENT_BASES = ("permanent", "contract", "unknown")
 
+# The pay period a component is stated in, in this deliberately narrow
+# extractor. A day rate is daily and a salary or package is annual; the
+# resolver reads the pair to decide what a number *means*, so an incoherent
+# pair is a wrong fact, not untidy metadata — £650 recorded as annual base pay
+# is a £650 salary. `bonus_pct` is absent deliberately: a percentage of pay
+# carries no period of its own, and nothing reads one off it.
+_COMPONENT_PAY_PERIOD = {"base": "annual", "total_package": "annual", "day_rate": "daily"}
+
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 
 
@@ -190,6 +198,12 @@ def _value_problems(item: dict, *, fallback_currency: str | None) -> list[str]:
         return [f"component must be one of {list(VALID_COMPONENTS)}"]
     if item.get("pay_period") not in VALID_PAY_PERIODS:
         problems.append(f"pay_period must be one of {list(VALID_PAY_PERIODS)}")
+    elif (expected := _COMPONENT_PAY_PERIOD.get(component)) and item["pay_period"] != expected:
+        problems.append(
+            f"a {component} figure is stated per {expected.replace('annual', 'year').replace('daily', 'day')}, "
+            f"so pay_period must be '{expected}' — the resolver reads component and pay_period together to "
+            f"decide what the number means, so {component}/{item['pay_period']} would record a different fact"
+        )
 
     if component == "bonus_pct":
         percent = item.get("bonus_pct")
@@ -333,10 +347,133 @@ def _unsupported(label: str, value, stated: set[Decimal], *, unit: str = "") -> 
     )
 
 
+# --- Corroborating what the number *means* ----------------------------------
+#
+# Matching the number is half of source fidelity. The component, the pay period
+# and the currency are how the resolver interprets that number, so a figure
+# quoted correctly but labelled wrongly is still a fabricated fact: "Rate: £650
+# per day" accepted as base/annual/GBP passes every numeric check and stores a
+# £650 annual salary, and "Total package up to £180,000" accepted as base
+# stores a base salary the advert never offered.
+#
+# These read the quote for what it says about basis, kind and currency, and
+# refuse a label the quote contradicts. Each rule is deliberately one-sided:
+# it fires only on wording that settles the question, and stays silent when
+# the passage does not — silence leaves the reviewer's judgement in place,
+# which is the right default for a quote that genuinely does not say.
+
+_DAILY_WORDING_RE = re.compile(
+    r"\bper day\b|\ba day\b|\bdaily\b|\bday rate\b|\bper diem\b|/\s*day\b", re.IGNORECASE
+)
+_ANNUAL_WORDING_RE = re.compile(
+    r"\bper annum\b|\bper year\b|\ba year\b|\bannual(?:ly)?\b|\bp\.a\.", re.IGNORECASE
+)
+
+# Two package vocabularies, and the asymmetry is the point. The bare word
+# "package" is enough to *support* a total-package claim, but not to
+# *contradict* a base-salary one: "base salary £120,000 plus a benefits
+# package" and a "Package:" heading above a salary range are both ordinary
+# advert English, and neither says the figure is the whole package. Only
+# wording that explicitly totals — "total package", "OTE", "on-target
+# earnings" — is allowed to overrule the reviewer.
+_PACKAGE_WORDING_RE = re.compile(
+    r"\bpackages?\b|\bon[-\s]target earnings\b"
+    r"|\btotal (?:compensation|comp|remuneration|reward|earnings)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_TOTAL_RE = re.compile(
+    r"\btotal (?:package|compensation|comp|remuneration|reward|earnings)\b"
+    r"|\bon[-\s]target earnings\b",
+    re.IGNORECASE,
+)
+_OTE_RE = re.compile(r"\bOTE\b")  # case-sensitive: "ote" is a fragment, "OTE" is a term
+
+# Only signs with one reading. "$" is deliberately absent (USD, CAD, AUD, SGD,
+# HKD and more all write it) and so is "¥" (JPY and CNY) — an ambiguous sign
+# must not be allowed to refuse a currency it cannot actually rule out.
+_CURRENCY_SIGNS = {"£": "GBP", "€": "EUR"}
+_ISO_CURRENCY_RE = re.compile(r"\b(GBP|USD|EUR|CHF|AUD|CAD|NZD|SGD|HKD|JPY|SEK|NOK|DKK|AED|ZAR|INR)\b")
+
+
+def _states_package(span: str) -> bool:
+    return bool(_PACKAGE_WORDING_RE.search(span) or _OTE_RE.search(span))
+
+
+def _states_explicit_total(span: str) -> bool:
+    return bool(_EXPLICIT_TOTAL_RE.search(span) or _OTE_RE.search(span))
+
+
+def _currencies_in_span(span: str) -> set[str]:
+    return (
+        {code for sign, code in _CURRENCY_SIGNS.items() if sign in span}
+        | {match.group(0) for match in _ISO_CURRENCY_RE.finditer(span)}
+    )
+
+
+def _basis_problems(item: dict, span: str) -> list[str]:
+    """The period the quote states, against the period the item claims."""
+    component, period = item.get("component"), item.get("pay_period")
+    daily, annual = bool(_DAILY_WORDING_RE.search(span)), bool(_ANNUAL_WORDING_RE.search(span))
+    if daily == annual:
+        # Neither stated, or a passage that states both ("£650 per day, c.
+        # £150,000 per annum"). The quote does not settle it, so it does not
+        # get to overrule the reviewer.
+        return []
+    if daily and (component != "day_rate" or period != "daily"):
+        return [
+            "the quoted evidence span states a rate per day, so this figure is a day rate — record it as "
+            f"component 'day_rate' with pay_period 'daily', not {component}/{period}, or quote the passage "
+            f"that states the {component} figure instead"
+        ]
+    if annual and period != "annual":
+        return [
+            "the quoted evidence span states an annual figure, so it cannot back a figure recorded as "
+            f"{period} — quote the passage that states the {period} amount instead"
+        ]
+    return []
+
+
+def _kind_problems(item: dict, span: str) -> list[str]:
+    """The kind of pay the quote states, against the component claimed."""
+    component = item.get("component")
+    if component == "total_package" and not _states_package(span):
+        return [
+            "a total package has to be quoted from wording that says it is one — package, OTE, on-target "
+            "earnings or total compensation. This span states a figure without saying it is the whole "
+            "package, so record it as the component the advert names"
+        ]
+    if component in ("base", "day_rate") and _states_explicit_total(span):
+        return [
+            f"the quoted evidence span states a total package, so it cannot back a {component} figure — "
+            f"record it as component 'total_package', or quote the passage that states the {component}"
+        ]
+    return []
+
+
+def _currency_problems(item: dict, span: str) -> list[str]:
+    """The currency the quote writes, against the currency claimed. Silent
+    when the span carries no unambiguous currency at all."""
+    currency = (item.get("currency") or "").strip().upper()
+    stated = _currencies_in_span(span)
+    if not currency or not stated or currency in stated:
+        return []
+    return [
+        f"currency {currency} is not the currency the quoted evidence span states "
+        f"({', '.join(sorted(stated))}) — a figure is not converted between currencies here, so quote the "
+        f"passage stating the {currency} amount, or record the currency the advert wrote"
+    ]
+
+
 def _corroboration_problems(item: dict, span: str) -> list[str]:
-    """Each supplied figure must be represented by the span, after the
-    normalisation above. Runs only once the span is known verbatim and the
-    value shape is known good, so its message is never one of several."""
+    """Everything the span has to support: the figure, and what that figure
+    means. Runs only once the span is known verbatim and the value shape is
+    known good, so its message is never one of several.
+
+    A bonus takes only the percentage check. Its period is inert (nothing
+    reads one off a percentage), its kind is already fixed by the component,
+    and its currency is deliberately *not* read from this quote — it is the
+    currency of the pay the bonus applies to, taken from the role's own
+    evidence, so checking it against "up to 15%" would test the wrong thing."""
     if item.get("component") == "bonus_pct":
         raw = item.get("bonus_pct")
         if raw is None:
@@ -356,7 +493,7 @@ def _corroboration_problems(item: dict, span: str) -> list[str]:
         value = _as_decimal(raw)
         if value is None or value not in stated:
             problems.append(_unsupported(label, raw, stated))
-    return problems
+    return problems + _basis_problems(item, span) + _kind_problems(item, span) + _currency_problems(item, span)
 
 
 def _annotate_proposal_item(item: dict, document_text: str, *, fallback_currency: str | None) -> dict:

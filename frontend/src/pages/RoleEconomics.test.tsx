@@ -576,6 +576,106 @@ describe('Role Detail — review findings', () => {
     )
   })
 
+  it('lets Edit & accept repair a mislabelled component and its pay period', async () => {
+    // The model can read the right quote and still label it annual base pay.
+    // Without these controls the reviewer could fix the amount but not the
+    // thing the amount describes, and the server would refuse the result.
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.proposeRoleCompensation).mockResolvedValue({
+      status: 'ok',
+      extraction_run_id: 'run1',
+      error: null,
+      error_type: null,
+      document_id: 'doc1',
+      provenance_quality: 'original',
+      proposal: {
+        items: [
+          {
+            amount_min: 650,
+            amount_max: null,
+            bonus_pct: null,
+            currency: 'GBP',
+            component: 'base',
+            pay_period: 'annual',
+            employment_basis: null,
+            evidence_span: 'Rate: £650 per day, outside IR35.',
+            note: null,
+            acceptable: false,
+            problems: ['the quoted evidence span states a rate per day, so this figure is a day rate'],
+          },
+        ],
+        no_compensation_stated: false,
+        notes: null,
+      },
+    })
+    vi.mocked(api.acceptRoleCompensation).mockResolvedValue({
+      id: 'obs9',
+      created: true,
+      status: 'accepted',
+      review_status: 'accepted',
+      superseded_observation_ids: [],
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Extract stated compensation from source'))
+    fireEvent.click(await screen.findByText('Edit & accept'))
+
+    fireEvent.change(screen.getByLabelText('Component'), { target: { value: 'day_rate' } })
+    fireEvent.click(screen.getByText('Save & accept'))
+
+    // Choosing the component carries the pay period with it, so the pair the
+    // server requires cannot be got wrong here.
+    await waitFor(() =>
+      expect(api.acceptRoleCompensation).toHaveBeenCalledWith(
+        'role',
+        expect.objectContaining({ component: 'day_rate', pay_period: 'daily', amount_min: 650 }),
+      ),
+    )
+  })
+
+  it('pins the pay period to the component that implies one', async () => {
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.proposeRoleCompensation).mockResolvedValue({
+      status: 'ok',
+      extraction_run_id: 'run1',
+      error: null,
+      error_type: null,
+      document_id: 'doc1',
+      provenance_quality: 'original',
+      proposal: {
+        items: [
+          {
+            amount_min: null,
+            amount_max: null,
+            bonus_pct: 15,
+            currency: null,
+            component: 'bonus_pct',
+            pay_period: 'annual',
+            employment_basis: null,
+            evidence_span: 'Plus an annual bonus of up to 15%',
+            note: null,
+            acceptable: true,
+            problems: [],
+          },
+        ],
+        no_compensation_stated: false,
+        notes: null,
+      },
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Extract stated compensation from source'))
+    fireEvent.click(await screen.findByText('Edit & accept'))
+
+    // A bonus percentage implies no period, so its selector stays open.
+    expect((screen.getByLabelText('Pay period') as HTMLSelectElement).disabled).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('Component'), { target: { value: 'base' } })
+    const period = screen.getByLabelText('Pay period') as HTMLSelectElement
+    expect(period.value).toBe('annual')
+    expect(period.disabled).toBe(true)
+  })
+
   it('corrects an accepted observation through the role-aware endpoint', async () => {
     vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
     vi.mocked(api.correctRoleCompensation).mockResolvedValue({

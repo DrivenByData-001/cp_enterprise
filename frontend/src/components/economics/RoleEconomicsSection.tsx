@@ -18,6 +18,22 @@ import { CompensationFigure, PersonalComparisonPanel } from './Compensation'
 // are explicit buttons — nothing fans out to AI merely because the page
 // opened.
 
+// The components a reviewer may choose between, and the pay period each is
+// stated in. The server enforces the same pairing — component and pay period
+// are how the resolver reads a number, so a day rate recorded as annual base
+// pay is a wrong fact, not untidy metadata. Deriving the period here means
+// the reviewer fixes a mislabelled item in one choice instead of discovering
+// the rule through a refusal. `bonus_pct` implies nothing: a percentage of
+// pay carries no period of its own.
+const COMPONENTS: { value: string; label: string; period: string | null }[] = [
+  { value: 'base', label: 'Base salary', period: 'annual' },
+  { value: 'day_rate', label: 'Day rate', period: 'daily' },
+  { value: 'total_package', label: 'Total package', period: 'annual' },
+  { value: 'bonus_pct', label: 'Bonus (%)', period: null },
+]
+
+const PAY_PERIODS = ['annual', 'daily']
+
 function CompensationReview({
   roleId,
   hasSourceDocument,
@@ -88,6 +104,8 @@ function CompensationReview({
   }
 
   const numeric = (value: string) => (value.trim() === '' ? null : Number(value))
+  const impliedPeriod = (component: string | null) =>
+    COMPONENTS.find((c) => c.value === component)?.period ?? null
 
   if (!hasSourceDocument) {
     return (
@@ -149,6 +167,56 @@ function CompensationReview({
                 </span>
               ) : editing === index && draft ? (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  {/* What kind of pay this is, and over what period. The model
+                      can read the right quote and still label it wrongly, and
+                      without these the reviewer could correct the amount but
+                      not the thing the amount describes. */}
+                  <label style={{ fontSize: 12 }}>
+                    Component
+                    <select
+                      aria-label="Component"
+                      value={draft.component ?? ''}
+                      onChange={(e) => {
+                        const chosen = COMPONENTS.find((c) => c.value === e.target.value)
+                        setDraft({
+                          ...draft,
+                          component: e.target.value,
+                          pay_period: chosen?.period ?? draft.pay_period,
+                        })
+                      }}
+                      style={{ display: 'block' }}
+                    >
+                      {draft.component && !COMPONENTS.some((c) => c.value === draft.component) && (
+                        <option value={draft.component}>{draft.component}</option>
+                      )}
+                      {COMPONENTS.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12 }}>
+                    Pay period
+                    <select
+                      aria-label="Pay period"
+                      value={draft.pay_period ?? ''}
+                      disabled={impliedPeriod(draft.component) !== null}
+                      title={
+                        impliedPeriod(draft.component) !== null
+                          ? 'Set by the component: a day rate is daily, a salary or package annual.'
+                          : undefined
+                      }
+                      onChange={(e) => setDraft({ ...draft, pay_period: e.target.value })}
+                      style={{ display: 'block' }}
+                    >
+                      {PAY_PERIODS.map((period) => (
+                        <option key={period} value={period}>
+                          {period}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   {draft.component === 'bonus_pct' ? (
                     <label style={{ fontSize: 12 }}>
                       Bonus %

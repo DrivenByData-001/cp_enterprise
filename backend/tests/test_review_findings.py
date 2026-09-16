@@ -455,14 +455,15 @@ def test_accepting_a_corrected_figure_retires_the_one_it_corrects():
     """Two accepted posting_stated rows for the same component both fed the
     archetype benchmark, so a corrected mistake kept influencing the market.
 
-    The mistake here is the one that is still reachable: the advert's total
-    package figure accepted as its base salary. A simply mistyped number is
-    not — it would have to be stated by the quote backing it."""
+    The mistake here is one that is still reachable: the range's upper bound
+    missed, so the role reads as paying a flat £120,000. A mistyped number is
+    not, nor is the package figure taken for the base — each would have to be
+    stated, as that kind of pay, by the quote backing it."""
     with db_cursor() as cur:
         document_id = _document(cur, _MULTI_COMPONENT_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
-        wrong = _accept(cur, role_id, component="base", amount_max=180000, currency="GBP",
-                        evidence_span="Total package up to £180,000.")
+        wrong = _accept(cur, role_id, component="base", amount_min=120000, currency="GBP",
+                        evidence_span="Base salary: £120,000 - £145,000 per annum.")
         corrected = _accept(cur, role_id, component="base", amount_min=120000, amount_max=145000, currency="GBP",
                             evidence_span="Base salary: £120,000 - £145,000 per annum.")
 
@@ -480,6 +481,7 @@ def test_accepting_a_corrected_figure_retires_the_one_it_corrects():
     assert rows[corrected["id"]]["review_status"] == "accepted"
     # Exactly one accepted base figure remains, and it is the corrected one.
     assert resolved["amount_min"] == 120000
+    assert resolved["amount_max"] == 145000
 
 
 def test_accepting_a_reviewed_figure_retires_the_unquoted_backfill_projection():
@@ -767,8 +769,10 @@ _BONUS_POSTING = (
     "Base salary: £120,000 - £145,000 per annum.\n"
     "Exceptional candidates will be considered at £125,000 - £150,000.\n"
     "Plus an annual bonus of up to 15%, rising to 20% after two years.\n"
+    "Total package, including bonus, up to £165,000.\n"
 )
 _SENIOR_BAND = "Exceptional candidates will be considered at £125,000 - £150,000."
+_PACKAGE_LINE = "Total package, including bonus, up to £165,000."
 
 
 def test_the_accept_endpoint_takes_the_bonus_shape_the_prompt_returns(client):
@@ -981,7 +985,11 @@ def test_a_correction_that_changes_nothing_is_a_no_op(client):
 
 def test_a_correction_that_changes_the_component_still_retires_the_original(client):
     """Supersession keys on the new component, so a base -> total_package
-    correction would otherwise leave the original accepted alongside it."""
+    correction would otherwise leave the original accepted alongside it.
+
+    Changing the component re-anchors the whole item: a total package has to
+    be quoted from wording that says it is one, so the correction moves to the
+    advert's package line and the figure that line gives."""
     with db_cursor() as cur:
         document_id = _document(cur, _BONUS_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
@@ -989,7 +997,8 @@ def test_a_correction_that_changes_the_component_still_retires_the_original(clie
 
     response = client.patch(
         f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
-        json={"component": "total_package"},
+        json={"component": "total_package", "amount_min": None, "amount_max": 165000,
+              "evidence_span": _PACKAGE_LINE},
     )
     assert response.status_code == 200, response.text
 
@@ -1338,21 +1347,21 @@ def test_the_proposal_screen_flags_a_figure_the_quote_does_not_state(monkeypatch
 
 
 @pytest.mark.parametrize(
-    "span,amount",
+    "span,amount,component,period",
     [
-        ("Base salary: £120,000 - £145,000 per annum.", 120000),   # grouped
-        ("Salary 120000 to 145000", 145000),                       # bare
-        ("Paying £120k - £145k", 120000),                          # k suffix
-        ("Paying £120-145k", 120000),                              # shared suffix
-        ("Up to £1.2m in total compensation", 1200000),            # m suffix
-        ("Rate: £650 per day, outside IR35.", 650),                # day rate
+        ("Base salary: £120,000 - £145,000 per annum.", 120000, "base", "annual"),   # grouped
+        ("Salary 120000 to 145000", 145000, "base", "annual"),                       # bare
+        ("Paying £120k - £145k", 120000, "base", "annual"),                          # k suffix
+        ("Paying £120-145k", 120000, "base", "annual"),                              # shared suffix
+        ("Up to £1.2m in total compensation", 1200000, "total_package", "annual"),   # m suffix
+        ("Rate: £650 per day, outside IR35.", 650, "day_rate", "daily"),             # day rate
     ],
 )
-def test_the_normalisation_reads_the_ways_adverts_write_money(span, amount):
+def test_the_normalisation_reads_the_ways_adverts_write_money(span, amount, component, period):
     """Sensible normalisation, not string equality: an advert writing £120k
     and a reviewer entering 120000 mean the same figure."""
     assert posting_compensation._corroboration_problems(
-        {"component": "base", "amount_min": amount}, span
+        {"component": component, "pay_period": period, "currency": "GBP", "amount_min": amount}, span
     ) == []
 
 
@@ -1360,7 +1369,7 @@ def test_a_shared_scale_suffix_does_not_also_corroborate_the_bare_number():
     """"£120-145k" states £120,000, not £120 — reading the lower bound without
     the suffix would corroborate a figure a thousand times too small."""
     problems = posting_compensation._corroboration_problems(
-        {"component": "base", "amount_min": 120}, "Paying £120-145k"
+        {"component": "base", "pay_period": "annual", "amount_min": 120}, "Paying £120-145k"
     )
     assert problems and "not stated" in problems[0]
 
@@ -1370,6 +1379,189 @@ def test_a_percentage_in_the_quote_is_not_an_amount():
     corroborates — otherwise any percentage in a quote would license a
     matching salary figure."""
     problems = posting_compensation._corroboration_problems(
-        {"component": "base", "amount_min": 15}, "Plus an annual bonus of up to 15%"
+        {"component": "base", "pay_period": "annual", "amount_min": 15}, "Plus an annual bonus of up to 15%"
     )
     assert problems and "no such figure" in problems[0]
+
+
+# --- ...and must mean what the advert says it means -------------------------
+#
+# Matching the number is half of source fidelity. Component and pay period are
+# how the resolver interprets that number, and currency is what it is
+# denominated in, so a figure quoted correctly but labelled wrongly is still a
+# fabricated fact.
+
+def test_a_day_rate_cannot_be_recorded_as_an_annual_salary():
+    """The exact hole: "Rate: £650 per day" submitted as base/annual/GBP. The
+    component is valid, annual is a valid period, GBP is the right currency
+    and 650 is in the quote — and the stored fact would be a £650 salary."""
+    posting = "Interim Capital Actuary.\nRate: £650 per day, outside IR35.\n"
+    with db_cursor() as cur:
+        document_id = _document(cur, posting)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", pay_period="annual", amount_min=650, currency="GBP",
+                    evidence_span="Rate: £650 per day, outside IR35.")
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation WHERE role_instance_id = %s", (role_id,)
+        )
+        assert cur.fetchone()["n"] == 0
+
+    message = str(excinfo.value)
+    assert "states a rate per day" in message
+    assert "'day_rate'" in message and "'daily'" in message, "the refusal names the labels that would be right"
+
+
+def test_the_same_quote_is_accepted_as_the_day_rate_it_states():
+    """The rule refuses the mislabel, not the figure."""
+    posting = "Interim Capital Actuary.\nRate: £650 per day, outside IR35.\n"
+    with db_cursor() as cur:
+        document_id = _document(cur, posting)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        _accept(cur, role_id, component="day_rate", pay_period="daily", amount_min=650, currency="GBP",
+                employment_basis="contract", evidence_span="Rate: £650 per day, outside IR35.")
+        resolved = resolver.resolve_role_compensation(cur, role_id)
+
+    assert resolved["component"] == "day_rate"
+    assert resolved["pay_period"] == "daily"
+    assert resolved["amount_reference"] == 650
+
+
+def test_a_total_package_cannot_be_recorded_as_a_base_salary():
+    """"Total package up to £180,000" as base would offer a base salary the
+    advert never did — and it is the figure the archetype benchmark would
+    then aggregate as a salary."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _MULTI_COMPONENT_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_max=180000, currency="GBP",
+                    evidence_span="Total package up to £180,000.")
+    assert "states a total package" in str(excinfo.value)
+    assert "'total_package'" in str(excinfo.value)
+
+
+def test_a_total_package_must_be_quoted_from_wording_that_says_it_is_one():
+    """The other direction: claiming a package needs more than the same
+    number appearing somewhere."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _MULTI_COMPONENT_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="total_package", amount_min=120000, amount_max=145000,
+                    currency="GBP", evidence_span="Base salary: £120,000 - £145,000 per annum.")
+    assert "without saying it is the whole package" in str(excinfo.value)
+
+
+def test_a_benefits_package_mentioned_beside_a_salary_does_not_veto_a_base_figure():
+    """The asymmetry is deliberate. Bare "package" supports a package claim,
+    but only wording that explicitly totals may overrule a base one —
+    otherwise "plus a generous benefits package" would refuse an ordinary
+    base salary."""
+    posting = "Head of Capital.\nBase salary £120,000 plus a generous benefits package.\n"
+    with db_cursor() as cur:
+        document_id = _document(cur, posting)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        result = _accept(cur, role_id, component="base", amount_min=120000, currency="GBP",
+                         evidence_span="Base salary £120,000 plus a generous benefits package.")
+    assert result["review_status"] == "accepted"
+
+
+@pytest.mark.parametrize(
+    "component,pay_period,expected",
+    [
+        ("day_rate", "annual", "pay_period must be 'daily'"),
+        ("base", "daily", "pay_period must be 'annual'"),
+        ("total_package", "daily", "pay_period must be 'annual'"),
+    ],
+)
+def test_an_incoherent_component_and_pay_period_is_refused(component, pay_period, expected):
+    """Checked without needing a span at all: these pairs are wrong on their
+    own terms, whatever the advert says."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _MULTI_COMPONENT_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component=component, pay_period=pay_period, amount_min=120000,
+                    currency="GBP", evidence_span="Base salary: £120,000 - £145,000 per annum.")
+    assert expected in str(excinfo.value)
+
+
+def test_a_bonus_percentage_keeps_its_period_unconstrained():
+    """A percentage of pay carries no period of its own and nothing reads one
+    off it, so the coherence rule deliberately leaves it alone rather than
+    inventing a constraint."""
+    assert posting_compensation._value_problems(
+        {"component": "bonus_pct", "pay_period": "daily", "bonus_pct": 15, "currency": "GBP"},
+        fallback_currency="GBP",
+    ) == []
+
+
+def test_a_currency_the_quote_contradicts_is_refused():
+    with db_cursor() as cur:
+        document_id = _document(cur, _MULTI_COMPONENT_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_min=120000, amount_max=145000, currency="USD",
+                    evidence_span="Base salary: £120,000 - £145,000 per annum.")
+    assert "currency USD is not the currency the quoted evidence span states (GBP)" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "span,currency,accepted",
+    [
+        ("Salary GBP 120,000 per annum", "GBP", True),    # ISO code agrees
+        ("Salary GBP 120,000 per annum", "EUR", False),   # ISO code disagrees
+        ("Salary €120,000 per annum", "EUR", True),       # sign agrees
+        ("Salary 120,000 per annum", "USD", True),        # no signal, no opinion
+        ("Salary $120,000 per annum", "CAD", True),       # "$" is ambiguous, so it rules nothing out
+    ],
+)
+def test_currency_is_corroborated_only_where_the_quote_is_unambiguous(span, currency, accepted):
+    problems = posting_compensation._corroboration_problems(
+        {"component": "base", "pay_period": "annual", "currency": currency, "amount_min": 120000}, span
+    )
+    assert (problems == []) is accepted
+
+
+def test_a_quote_stating_both_bases_leaves_the_judgement_to_the_reviewer():
+    """A passage giving a day rate and its annual equivalent does not settle
+    which the figure is, so it does not get to overrule the reviewer."""
+    span = "£650 per day, c. £150,000 per annum"
+    for component, period, amount in (("day_rate", "daily", 650), ("base", "annual", 150000)):
+        assert posting_compensation._corroboration_problems(
+            {"component": component, "pay_period": period, "currency": "GBP", "amount_min": amount}, span
+        ) == []
+
+
+def test_the_proposal_screen_flags_a_mislabelled_day_rate(monkeypatch):
+    """The same rules annotate the proposal, so a model that reads the right
+    quote but labels it annual base is caught on the review screen."""
+    from app import ai
+    from app.posting_compensation import PostingCompensationProposal
+
+    def fake_run(**kwargs):
+        output = PostingCompensationProposal.model_validate(
+            {
+                "items": [
+                    {"amount_min": 650, "currency": "GBP", "component": "base", "pay_period": "annual",
+                     "evidence_span": "Rate: £650 per day, outside IR35."},
+                ],
+                "no_compensation_stated": False,
+            }
+        )
+        run = ai.AITaskRun("posting_compensation_extract", "test-model",
+                           "extract_posting_compensation.md", "v1",
+                           "2026-09-16", "2026-09-16", "ok", 100, 50)
+        return ai.AITaskResult(output, run)
+
+    monkeypatch.setattr(posting_compensation, "run_json_task", fake_run)
+
+    with db_cursor() as cur:
+        document_id = _document(cur, "Interim Capital Actuary.\nRate: £650 per day, outside IR35.\n")
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        items = posting_compensation.propose_posting_compensation(cur, role_id)["proposal"]["items"]
+
+    assert items[0]["acceptable"] is False
+    assert any("states a rate per day" in p for p in items[0]["problems"])

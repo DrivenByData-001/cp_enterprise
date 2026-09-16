@@ -207,7 +207,10 @@ Server-side validation on accept, in order:
 - the value shape matches the component: an amount range in a three-letter
   currency for base / day_rate / total_package, or a percentage in
   `bonus_pct` with no cash amount for a bonus;
-- **every submitted figure is stated by that span** (below);
+- component and pay period are coherent: `day_rate` is `daily`, `base` and
+  `total_package` are `annual`;
+- **every submitted figure is stated by that span, and means what the span
+  says it means** (below);
 - component / pay_period / employment_basis are in the controlled sets.
 
 ### A stated figure must be a figure the advert states
@@ -259,6 +262,64 @@ accepted before it existed keeps its stored figures. It is enforced the
 moment anything tries to make such a row accepted again, so a `/reaccept` of
 an uncorroborated legacy row is refused with the same message rather than
 silently restoring it.
+
+### ...and must mean what the advert says it means
+
+Matching the number is half of source fidelity. `component` and `pay_period`
+are how the resolver *interprets* that number and `currency` is what it is
+denominated in, so a figure quoted correctly but labelled wrongly is still a
+fabricated fact. Two cases that passed every numeric check:
+
+```
+"Rate: £650 per day"          as base / annual / GBP  →  a £650 annual salary
+"Total package up to £180,000" as base                →  a base salary never offered
+```
+
+The second is the worse of the two: that figure would then be aggregated into
+`d_archetype_comp` as a *salary* benchmark for the archetype.
+
+So the quote is read for three more things:
+
+| What the span says | What it requires |
+| --- | --- |
+| "per day", "day rate", "per diem", "/day" | `day_rate` + `daily` |
+| "per annum", "a year", "annually", "p.a." | `annual` |
+| "total package", "OTE", "on-target earnings" | `total_package` — and it may not back `base` or `day_rate` |
+| a `total_package` claim | needs package / OTE / total-compensation wording to support it |
+| `£`, `€`, or an ISO code | the same currency, never converted |
+
+Each rule is deliberately one-sided: it fires only on wording that settles
+the question and stays silent when the passage does not, because silence
+leaves the reviewer's judgement in place — the right default for a quote that
+genuinely does not say. Three consequences of that stance:
+
+- **The two package vocabularies differ, and the asymmetry is the point.**
+  The bare word "package" *supports* a total-package claim but may not
+  *contradict* a base one. "Base salary £120,000 plus a benefits package" and
+  a `Package:` heading above a salary range are both ordinary advert English,
+  and neither says the figure is the whole package. Only wording that
+  explicitly totals may overrule the reviewer.
+- **Ambiguous currency signs rule nothing out.** `£` reads as GBP and `€` as
+  EUR, but `$` (USD, CAD, AUD, SGD, HKD…) and `¥` (JPY, CNY) are deliberately
+  absent: a sign that cannot settle the question must not be allowed to
+  refuse a currency.
+- **A passage stating both bases settles neither.** "£650 per day, c.
+  £150,000 per annum" supports the day rate *or* the annual equivalent, as
+  the reviewer judges.
+
+`bonus_pct` takes only the percentage check. Its period is inert (nothing
+reads one off a percentage), its kind is fixed by the component, and its
+currency is deliberately *not* read from its own quote — it is the currency
+of the pay the bonus applies to, taken from the role's evidence, so checking
+it against "up to 15%" would test the wrong thing.
+
+Component and pay period are also checked against each other without a span
+at all, since `day_rate`/`annual` is wrong on its own terms whatever the
+advert says. The Edit & accept control carries component and pay-period
+selectors for that reason: the model can read the right quote and still label
+it annual base pay, and without them a reviewer could correct the amount but
+not the thing the amount describes. Choosing a component sets the period it
+implies, so the pairing cannot be got wrong there.
 
 Only source-supported fields are extracted: amount min/max, currency,
 component, pay period if supported, employment basis if supported, and the

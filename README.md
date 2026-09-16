@@ -139,10 +139,13 @@ kept for reproducibility.
   the other. A day rate is never silently annualised, currencies are never
   converted, PAYE and contracting are never merged, and a bonus never stands
   in for base pay. An advert-stated figure must be a figure the advert
-  states: it is checked against the numbers written in the quote backing it
-  (£120k and 120000 being the same figure), so a number the source does not
-  give cannot be recorded as advert-stated — it belongs on the
-  curator-asserted pathway, and the refusal says so. Correcting an accepted
+  states, meaning what the advert says it means: it is checked against the
+  numbers written in the quote backing it (£120k and 120000 being the same
+  figure), and against what that quote says the figure *is* — "Rate: £650 per
+  day" cannot be recorded as a £650 annual salary, and "Total package up to
+  £180,000" cannot be recorded as a base salary. A number the source does not
+  give cannot be advert-stated at all: it belongs on the curator-asserted
+  pathway, and the refusal says so. Correcting an accepted
   figure records a new one and retires the old, so the history shows what was
   once accepted rather than rewriting it, and a correction to a number from
   elsewhere in the advert re-quotes the passage that states it. An open-ended salary belonging to an employment episode
