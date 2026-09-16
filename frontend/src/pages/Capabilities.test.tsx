@@ -91,3 +91,49 @@ it('distinguishes an empty Vocabulary from a configured-empty catalogue', async 
   await screen.findByText('0 capability concepts in Vocabulary need assessment specifications.')
   expect(screen.queryByRole('button', { name: 'Configure Capital Modelling' })).toBeNull()
 })
+
+it('keeps configured rows visible and reports a failed Vocabulary request without a false zero count', async () => {
+  vi.mocked(api.listCapabilities).mockResolvedValue([ready])
+  vi.mocked(api.listUnconfiguredCapabilities).mockRejectedValue(new Error('404 Not Found'))
+  render(<Capabilities />)
+  expect((await screen.findByRole('alert')).textContent).toContain('/api/capabilities/unconfigured')
+  expect(screen.getByText('Capital Modelling')).toBeTruthy()
+  expect(screen.queryByText('0 capability concepts in Vocabulary need assessment specifications.')).toBeNull()
+  expect(screen.queryByText('No configured capabilities match this view.')).toBeNull()
+})
+
+it('keeps Vocabulary rows visible when the configured endpoint fails', async () => {
+  vi.mocked(api.listCapabilities).mockRejectedValue(new Error('500 Internal Server Error'))
+  render(<Capabilities />)
+  await screen.findByRole('button', { name: 'Configure Capital Modelling' })
+  expect(screen.getByRole('alert').textContent).toContain('Could not load configured capabilities')
+  expect(screen.queryByText('No configured capabilities match this view.')).toBeNull()
+})
+
+it('retries failed loading and clears the error after recovery', async () => {
+  vi.mocked(api.listUnconfiguredCapabilities).mockRejectedValueOnce(new Error('500 Internal Server Error'))
+  render(<Capabilities />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry Needs specification' }))
+  await screen.findByRole('button', { name: 'Configure Capital Modelling' })
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('does not report empty lists before loading completes', async () => {
+  render(<Capabilities />)
+  expect(screen.getByText('Loading Vocabulary capabilities…')).toBeTruthy()
+  expect(screen.queryByText('0 capability concepts in Vocabulary need assessment specifications.')).toBeNull()
+  expect(screen.queryByText('No configured capabilities match this view.')).toBeNull()
+  await screen.findByRole('button', { name: 'Configure Capital Modelling' })
+})
+
+it('ignores a stale request failure after a newer search succeeds', async () => {
+  let rejectOld!: (error: Error) => void
+  vi.mocked(api.listUnconfiguredCapabilities).mockReturnValueOnce(new Promise((_, reject) => { rejectOld = reject }))
+  render(<Capabilities />)
+  fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'Capital' } })
+  await screen.findByRole('button', { name: 'Configure Capital Modelling' })
+  rejectOld(new Error('old request failed'))
+  await waitFor(() => expect(api.listUnconfiguredCapabilities).toHaveBeenCalledTimes(2))
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Configure Capital Modelling' })).toBeTruthy()
+})
