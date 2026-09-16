@@ -188,10 +188,40 @@ def list_draft_observations(review_status: str = "unreviewed"):
     return rows
 
 
+# A posting-stated observation is a source-backed fact with invariants this
+# survey-review lifecycle cannot uphold: its span must still occur verbatim in
+# the role's immutable document, its provenance must still be original, and a
+# role must never carry two accepted figures for the same (component,
+# pay_period) — the second of which both feeds the archetype benchmark twice
+# and makes the headline depend on row ordering.
+#
+# These two endpoints update by id alone. Their *listing* endpoint above is
+# survey-only, but nothing stopped a caller naming a posting-stated id
+# directly: a bare re-accept here would recreate two accepted base salaries,
+# and a PATCH would mutate amounts with no source re-validation at all. So
+# they refuse those rows outright and name the lifecycle that owns them. See
+# app/posting_compensation.py.
+_POSTING_STATED_REDIRECT = (
+    "this is a posting-stated observation — correct, reject or re-accept it through "
+    "/api/role-instances/{role_id}/compensation/{observation_id} (and its /reject and /reaccept "
+    "siblings), which re-validate it against the source document and keep one accepted figure per component"
+)
+
+
+def _refuse_posting_stated(cur, observation_id: str) -> None:
+    cur.execute("SELECT basis FROM jobber.compensation_observation WHERE id = %s", (observation_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "compensation observation not found")
+    if row["basis"] == "posting_stated":
+        raise HTTPException(400, _POSTING_STATED_REDIRECT)
+
+
 @router.post("/compensation-observations/{observation_id}/review")
 def review_observation(observation_id: str, payload: CompensationObservationReview):
     new_status = "accepted" if payload.action == "accept" else "rejected"
     with db_cursor() as cur:
+        _refuse_posting_stated(cur, observation_id)
         cur.execute(
             "UPDATE jobber.compensation_observation SET review_status = %s, reviewed_at = now() WHERE id = %s",
             (new_status, observation_id),
@@ -214,6 +244,7 @@ def correct_observation(observation_id: str, payload: CompensationObservationCor
         fields["source_quality"] = source_quality_for_sample_size(fields["reported_sample_size"])
 
     with db_cursor() as cur:
+        _refuse_posting_stated(cur, observation_id)
         if "market_id" in fields:
             cur.execute("SELECT 1 FROM jobber.market WHERE id = %s", (fields["market_id"],))
             if not cur.fetchone():

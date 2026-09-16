@@ -1970,11 +1970,15 @@ export type CompensationAcceptInput = {
 }
 
 export type CompensationAcceptResult = {
+  // A correction creates a *new* accepted observation rather than rewriting
+  // the old one, so this is not necessarily the id that was corrected — the
+  // prior figure survives, retired and annotated, as history.
   id: string
   created?: boolean
   status: string
   review_status?: string
   market_unassigned_reason?: string | null
+  corrected_from_observation_id?: string
   // Accepting a corrected figure retires the one it corrects, so a role never
   // carries two accepted stated figures for the same component.
   superseded_observation_ids: string[]

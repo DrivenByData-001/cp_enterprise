@@ -579,10 +579,13 @@ describe('Role Detail — review findings', () => {
   it('corrects an accepted observation through the role-aware endpoint', async () => {
     vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
     vi.mocked(api.correctRoleCompensation).mockResolvedValue({
-      id: 'obs1',
-      status: 'accepted',
+      // A correction returns the *new* accepted observation; the corrected
+      // one survives as retired history.
+      id: 'obs2',
+      status: 'corrected',
       review_status: 'accepted',
-      superseded_observation_ids: [],
+      corrected_from_observation_id: 'obs1',
+      superseded_observation_ids: ['obs1'],
     })
     renderRole()
 
@@ -616,10 +619,11 @@ describe('Role Detail — review findings', () => {
     ]
     vi.mocked(api.getRoleCompensation).mockResolvedValue(data)
     vi.mocked(api.correctRoleCompensation).mockResolvedValue({
-      id: 'obs-bonus',
-      status: 'accepted',
+      id: 'obs-bonus-2',
+      status: 'corrected',
       review_status: 'accepted',
-      superseded_observation_ids: [],
+      corrected_from_observation_id: 'obs-bonus',
+      superseded_observation_ids: ['obs-bonus'],
     })
     renderRole()
 

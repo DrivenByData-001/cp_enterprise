@@ -877,7 +877,10 @@ def test_correcting_an_accepted_figure_revalidates_against_the_source(client):
     assert "only applies to a bonus_pct component" in bad_shape.json()["detail"]
 
 
-def test_correcting_an_accepted_figure_updates_it_and_keeps_one_accepted(client):
+def test_correcting_an_accepted_figure_preserves_the_value_it_replaces(client):
+    """A correction must not rewrite history. The prior accepted figure is
+    source-backed financial evidence: it stays, retired and annotated, so the
+    record reads "£120k-£145k was accepted, then corrected to £125k-£150k"."""
     with db_cursor() as cur:
         document_id = _document(cur, _BONUS_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
@@ -888,39 +891,108 @@ def test_correcting_an_accepted_figure_updates_it_and_keeps_one_accepted(client)
         json={"amount_min": 125000, "amount_max": 150000},
     )
     assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "corrected"
+    assert body["corrected_from_observation_id"] == accepted["id"]
+    assert body["id"] != accepted["id"], "a correction creates a new observation"
 
     with db_cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) AS n FROM jobber.compensation_observation "
-            "WHERE role_instance_id = %s AND review_status = 'accepted'",
+            "SELECT id, review_status, amount_min, amount_max, source_note "
+            "FROM jobber.compensation_observation WHERE role_instance_id = %s ORDER BY created_at",
             (role_id,),
         )
-        assert cur.fetchone()["n"] == 1
+        rows = {str(r["id"]): r for r in cur.fetchall()}
         resolved = resolver.resolve_role_compensation(cur, role_id)
+
+    # Both figures survive; exactly one is accepted.
+    assert len(rows) == 2
+    original, corrected = rows[accepted["id"]], rows[body["id"]]
+    assert original["review_status"] == "rejected"
+    assert original["amount_min"] == 120000 and original["amount_max"] == 145000
+    assert f"superseded by reviewed observation {body['id']}" in original["source_note"]
+    assert corrected["review_status"] == "accepted"
+    assert corrected["amount_min"] == 125000 and corrected["amount_max"] == 150000
+
+    assert sum(r["review_status"] == "accepted" for r in rows.values()) == 1
     assert resolved["amount_min"] == 125000
     assert resolved["amount_max"] == 150000
 
 
-def test_a_correction_keeps_the_content_addressed_source_key_true(client):
-    """The key is a hash of the figures and quote, so a correction has to
-    recompute it — otherwise a later acceptance of the corrected figures
-    would collide with a row whose key no longer described it."""
+def test_each_figure_keeps_its_own_content_addressed_source_key(client):
+    """The key hashes the figures and quote. With a correction creating a new
+    row, each row's key describes its own content — the original's is not
+    rewritten to describe a figure it never held."""
     with db_cursor() as cur:
         document_id = _document(cur, _BONUS_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
         accepted = _accepted_base(cur, role_id)
         cur.execute("SELECT source_key FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],))
-        before = cur.fetchone()["source_key"]
+        original_key = cur.fetchone()["source_key"]
 
-    client.patch(
+    corrected_id = client.patch(
         f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
         json={"amount_min": 125000, "amount_max": 150000},
-    )
+    ).json()["id"]
 
     with db_cursor() as cur:
-        cur.execute("SELECT source_key FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],))
-        after = cur.fetchone()["source_key"]
-    assert before != after
+        cur.execute(
+            "SELECT id, source_key FROM jobber.compensation_observation WHERE role_instance_id = %s", (role_id,)
+        )
+        keys = {str(r["id"]): r["source_key"] for r in cur.fetchall()}
+
+    assert keys[accepted["id"]] == original_key, "the original's key still describes the original"
+    assert keys[corrected_id] != original_key
+    assert len(set(keys.values())) == 2
+
+
+def test_a_correction_that_changes_nothing_is_a_no_op(client):
+    """Content-addressed keys mean re-submitting identical figures lands on
+    the same row — no spurious history entry for a non-correction."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    response = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}", json={"amount_min": 120000}
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == accepted["id"]
+    assert response.json()["status"] == "unchanged"
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation WHERE role_instance_id = %s", (role_id,)
+        )
+        assert cur.fetchone()["n"] == 1
+
+
+def test_a_correction_that_changes_the_component_still_retires_the_original(client):
+    """Supersession keys on the new component, so a base -> total_package
+    correction would otherwise leave the original accepted alongside it."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    response = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"component": "total_package"},
+    )
+    assert response.status_code == 200, response.text
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT id, component, review_status FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s",
+            (role_id,),
+        )
+        rows = {str(r["id"]): r for r in cur.fetchall()}
+
+    assert rows[accepted["id"]]["review_status"] == "rejected"
+    assert sum(r["review_status"] == "accepted" for r in rows.values()) == 1
+    assert next(r["component"] for r in rows.values() if r["review_status"] == "accepted") == "total_package"
 
 
 def test_a_bonus_can_be_corrected_as_a_percentage(client):
@@ -934,14 +1006,104 @@ def test_a_bonus_can_be_corrected_as_a_percentage(client):
         f"/api/role-instances/{role_id}/compensation/{bonus['id']}", json={"bonus_pct": 20}
     )
     assert response.status_code == 200, response.text
+    corrected_id = response.json()["id"]
 
     with db_cursor() as cur:
         cur.execute(
-            "SELECT bonus_pct, amount_min FROM jobber.compensation_observation WHERE id = %s", (bonus["id"],)
+            "SELECT id, bonus_pct, amount_min, review_status FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s",
+            (role_id,),
+        )
+        rows = {str(r["id"]): r for r in cur.fetchall()}
+
+    assert rows[bonus["id"]]["bonus_pct"] == 15 and rows[bonus["id"]]["review_status"] == "rejected"
+    assert rows[corrected_id]["bonus_pct"] == 20 and rows[corrected_id]["review_status"] == "accepted"
+    assert rows[corrected_id]["amount_min"] is None
+
+
+# --- The generic market-data endpoints must not reach posting-stated rows ---
+
+def test_the_generic_review_endpoint_cannot_reaccept_a_posting_stated_row(client):
+    """Its listing is survey-only, but it updated by id alone — so naming a
+    posting-stated id directly would flip it back to accepted with no
+    supersession, recreating two accepted base salaries."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        first = _accepted_base(cur, role_id)
+        second = _accept(cur, role_id, component="base", amount_min=125000, amount_max=150000, currency="GBP",
+                         evidence_span="Base salary: £120,000 - £145,000 per annum.")
+        assert second["superseded_observation_ids"] == [first["id"]]
+
+    response = client.post(
+        f"/api/market-data/compensation-observations/{first['id']}/review", json={"action": "accept"}
+    )
+    assert response.status_code == 400
+    assert "posting-stated observation" in response.json()["detail"]
+    assert "/api/role-instances/" in response.json()["detail"]
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s AND review_status = 'accepted' AND component = 'base'",
+            (role_id,),
+        )
+        assert cur.fetchone()["n"] == 1, "the bypass must not have recreated a second accepted base salary"
+
+
+def test_the_generic_patch_cannot_mutate_a_posting_stated_row(client):
+    """It sets columns without re-reading the source, so it could move a
+    stated figure away from the quote that justifies it."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    response = client.patch(
+        f"/api/market-data/compensation-observations/{accepted['id']}", json={"amount_min": 999999}
+    )
+    assert response.status_code == 400
+    assert "posting-stated observation" in response.json()["detail"]
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT amount_min FROM jobber.compensation_observation WHERE id = %s", (accepted["id"],)
+        )
+        assert cur.fetchone()["amount_min"] == 120000
+
+
+def test_the_generic_endpoints_still_work_for_survey_rows(client):
+    """Closing the loophole must not break the lifecycle those endpoints
+    actually exist for."""
+    with db_cursor() as cur:
+        market_id = _market(cur)
+        archetype_id = _archetype(cur)
+        cur.execute(
+            """
+            INSERT INTO jobber.compensation_observation
+                (source_key, archetype_concept_id, market_id, component, pay_period, currency,
+                 amount_min, amount_max, basis, review_status)
+            VALUES (%s, %s, %s, 'base', 'annual', 'GBP', 100000, 120000, 'survey', 'unreviewed')
+            RETURNING id
+            """,
+            (f"test:{uuid.uuid4()}", archetype_id, market_id),
+        )
+        survey_id = str(cur.fetchone()["id"])
+
+    assert client.post(
+        f"/api/market-data/compensation-observations/{survey_id}/review", json={"action": "accept"}
+    ).status_code == 200
+    assert client.patch(
+        f"/api/market-data/compensation-observations/{survey_id}", json={"amount_min": 105000}
+    ).status_code == 200
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT review_status, amount_min FROM jobber.compensation_observation WHERE id = %s", (survey_id,)
         )
         row = cur.fetchone()
-    assert row["bonus_pct"] == 20
-    assert row["amount_min"] is None
+    assert row["review_status"] == "accepted"
+    assert row["amount_min"] == 105000
 
 
 def test_rejecting_through_the_role_endpoint_retires_without_deleting(client):
@@ -988,3 +1150,23 @@ def test_the_role_correction_endpoints_refuse_a_foreign_or_non_posting_observati
     refused = client.post(f"/api/role-instances/{role_id}/compensation/{survey_id}/reject")
     assert refused.status_code == 404
     assert "posting-stated" in refused.json()["detail"]
+
+
+def test_the_content_key_is_stable_across_number_spellings():
+    """The same figure arrives as an int from JSON, a float from Pydantic and
+    a Decimal from the database. If those hashed differently, re-accepting an
+    unchanged figure would create a duplicate accepted row."""
+    from decimal import Decimal
+
+    from app.posting_compensation import _source_key
+
+    def key(amount_min, amount_max, bonus_pct=None):
+        return _source_key(
+            "role-1",
+            {"component": "base", "pay_period": "annual", "currency": "GBP",
+             "amount_min": amount_min, "amount_max": amount_max, "bonus_pct": bonus_pct,
+             "evidence_span": "£120,000 - £145,000"},
+        )
+
+    assert key(120000, 145000) == key(120000.0, 145000.0) == key(Decimal("120000"), Decimal("145000"))
+    assert key(120000, 145000) != key(125000, 150000)

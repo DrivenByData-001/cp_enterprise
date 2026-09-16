@@ -150,6 +150,40 @@ extraction is a separate, explicit action on a captured role:
    accepted runs the same validation and the same supersession, so neither
    invariant can be reached around.
 
+   The generic endpoints **refuse** `basis='posting_stated'` outright with a
+   400 naming the lifecycle that owns those rows. Their *listing* endpoint
+   was already survey-only, but both updated by id alone, so nothing stopped
+   a caller passing a posting-stated id directly — which is precisely the
+   bypass that would have recreated two accepted base salaries. They still
+   work unchanged for the survey rows they exist for.
+
+### A correction preserves what it replaces
+
+A correction is **a new accepted observation plus the retirement of the old
+one**, never an in-place rewrite. Overwriting the row would give the right
+current answer while erasing the fact that a different figure was once
+accepted as source-backed financial evidence — exactly what this codebase's
+curation model refuses everywhere else (compare
+`routes/role_instances.py::_supersede_with_new_claim`, which does the same
+non-destructive supersession for requirement claims). After a correction the
+history reads:
+
+```
+£120,000–£145,000   rejected   "corrected; superseded by reviewed observation <id>"
+£125,000–£150,000   accepted
+```
+
+Both rows survive, exactly one is accepted, and each keeps its own
+content-addressed `source_key` describing its own figures. A correction that
+changes the component (base → total_package, say) retires the original
+explicitly, since supersession otherwise keys on the *new* component and
+would leave the old row accepted alongside it.
+
+Numbers are canonicalised before hashing that key: the same figure arrives as
+an int from JSON, a float from Pydantic and a Decimal from the database, and
+without normalising, re-submitting an unchanged figure would hash to a new
+key and duplicate the row instead of being the no-op it is.
+
 The accept payload is deliberately permissive at the HTTP boundary and strict
 in the service layer: `bonus_pct` is accepted and `currency` is nullable,
 because a bonus percentage genuinely has neither a cash amount nor a currency

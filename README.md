@@ -138,7 +138,9 @@ kept for reproducibility.
   here; role/market compensation lives in `jobber`. Nothing copies one into
   the other. A day rate is never silently annualised, currencies are never
   converted, PAYE and contracting are never merged, and a bonus never stands
-  in for base pay. An open-ended salary belonging to an employment episode
+  in for base pay. Correcting an accepted figure records a new one and
+  retires the old, so the history shows what was once accepted rather than
+  rewriting it. An open-ended salary belonging to an employment episode
   that has ended is reported as latest-known, not current. Every displayed
   figure names its basis — advert salary, market estimate, legacy estimate,
   or insufficient evidence — those four are never blurred together, and an
