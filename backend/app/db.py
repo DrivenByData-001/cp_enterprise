@@ -599,6 +599,17 @@ def build_role_view(cur, role_id: str) -> dict | None:
     from .role_requirements import load_requirement_review_summary
 
     role["requirement_review"] = load_requirement_review_summary(cur, role_id)
+
+    # Build §14: Role/Target Detail shows the reviewed archetype assignment
+    # (or an explicit unclassified state) alongside the rest of the role. One
+    # extra query on a view that already runs several, never a separate
+    # round trip from the browser — and never an AI call. Compensation is
+    # deliberately NOT resolved here: it has its own endpoint
+    # (GET /api/role-instances/{id}/compensation) so a list view that reuses
+    # this projection never pays for benchmark resolution it will not show.
+    from .archetype_classification import role_archetype_summary
+
+    role["archetype"] = role_archetype_summary(cur, role_id)
     return role
 
 

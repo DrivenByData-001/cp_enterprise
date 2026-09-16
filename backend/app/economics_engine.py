@@ -642,13 +642,25 @@ def rebuild_phase4_derivations(cur) -> dict:
     """Safe to repeat — see module docstring. Order matters: archetype
     comp must be rebuilt before gap value, since gap value reads
     d_archetype_comp rather than recomputing it inline (unlike role fit,
-    which capability_engine.py always recomputes fresh)."""
-    return {
+    which capability_engine.py always recomputes fresh).
+
+    Records the source state this rebuild saw (`economics_freshness.
+    record_rebuild`) as its final step, in this same transaction. That
+    record is what lets a later read tell "these derived figures reflect
+    current evidence" from "these are last week's numbers" — a distinction
+    the cache-invalidation counters alone cannot make, since invalidating a
+    cache only forces recomposition *from* these tables, never a rebuild of
+    them."""
+    from .economics_freshness import record_rebuild
+
+    result = {
         "engine_version": ENGINE_VERSION,
         "archetype_demand": rebuild_archetype_demand(cur),
         "archetype_comp": rebuild_archetype_comp(cur),
         "gap_value": rebuild_all_gap_value(cur),
     }
+    result["rebuild_state"] = record_rebuild(cur, ENGINE_VERSION)
+    return result
 
 
 # --- Phase 4 readiness indicator (prompt §12) -------------------------------

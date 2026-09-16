@@ -74,6 +74,7 @@ def _pg_available(admin_url: str) -> bool:
 # legacy_role_analysis; that data now lives directly on role_instance or in
 # profile360, per the reconciliation pass.
 _RESETTABLE_JOBBER_TABLES = [
+    "d_pathways",
     "d_target_path",
     "d_target_evidence",
     "development_action",
@@ -82,9 +83,12 @@ _RESETTABLE_JOBBER_TABLES = [
     "gold_claim",
     "gold_document",
     "d_gap_value",
+    "archetype_context_enrichment",
     "d_archetype_comp",
     "d_archetype_demand",
     "compensation_observation",
+    "planning_assumption",
+    "economics_rebuild_state",
     "market",
     "d_role_fit",
     "d_capability_coverage",
@@ -112,7 +116,13 @@ _RESETTABLE_JOBBER_TABLES = [
 # The profile360 stub tables local_baseline.sql provides, all matching the
 # confirmed live shape (docs/14 §5/§6) — reset between tests same as
 # jobber's own tables.
-_RESETTABLE_PROFILE360_TABLES = ["claims", "capabilities", "episodes", "snapshots", "manual_import_queue"]
+# profile360.compensation_observation / compensation_evidence are created by
+# migration 0015 against the same stub schema and reset alongside the rest —
+# personal earnings tests seed and clear them per test like any other table.
+_RESETTABLE_PROFILE360_TABLES = [
+    "compensation_evidence", "compensation_observation",
+    "claims", "capabilities", "episodes", "snapshots", "manual_import_queue",
+]
 
 
 @pytest.fixture(scope="session")
@@ -168,6 +178,21 @@ def _reset_data(_configure_app_database):
     with db_module.db_cursor() as cur:
         cur.execute("TRUNCATE TABLE jobber." + ", jobber.".join(_RESETTABLE_JOBBER_TABLES) + " RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE TABLE profile360." + ", profile360.".join(_RESETTABLE_PROFILE360_TABLES) + " RESTART IDENTITY CASCADE")
+        # jobber.planning_assumption is a migration-seeded singleton, so
+        # truncating it (which is what resets a user-set billable-days
+        # assumption between tests) must put the seeded row back — a real
+        # deployment always has it. app/personal_earnings.py tolerates the
+        # row being absent too, but tests should exercise the normal shape.
+        cur.execute(
+            "INSERT INTO jobber.planning_assumption (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING"
+        )
+        # Reseeded with NULL revisions, i.e. "never rebuilt" — the correct
+        # starting state for a fresh deployment, and the one that makes a
+        # test's own `record_rebuild` meaningful instead of inheriting a
+        # previous test's.
+        cur.execute(
+            "INSERT INTO jobber.economics_rebuild_state (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING"
+        )
     yield
 
 

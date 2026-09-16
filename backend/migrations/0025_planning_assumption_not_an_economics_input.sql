@@ -1,0 +1,26 @@
+-- The contract planning assumption is not an input to derived economics.
+--
+-- Migration 0023 put `jobber.planning_assumption` on the `economics`
+-- invalidation trigger alongside compensation_observation, market and the
+-- three derived tables. That was right for cache invalidation and wrong once
+-- migration 0024 gave the same counter a second job: `economics_freshness`
+-- reads any change in it as "the derived economics tables need rebuilding".
+--
+-- Billable days per year affect nothing in `d_archetype_comp`,
+-- `d_archetype_demand` or `d_gap_value` — they are used only to derive a
+-- personal planning equivalent at read time, on the person's side of the
+-- boundary. So setting "215 days" would have marked every market benchmark
+-- stale and withheld it until the user rebuilt economics, for a change that
+-- cannot alter a single derived figure.
+--
+-- Dropping the trigger loses nothing: the planning assumption is already
+-- folded into the Pathways cache key directly, through
+-- `personal_earnings.personal_compensation_fingerprint` (see
+-- `target_cache.pathways_revision`). Changing it still invalidates a cached
+-- Pathways result; it simply no longer claims the market benchmarks are out
+-- of date.
+--
+-- Append-only, per this directory's convention: 0023 is left exactly as it
+-- was applied, and this migration corrects the state it produced. Safe to
+-- run against a database that never had the trigger.
+DROP TRIGGER IF EXISTS invalidate_target_analysis_economics ON jobber.planning_assumption;

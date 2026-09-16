@@ -18,12 +18,13 @@ import Capabilities from './pages/Capabilities'
 import CapabilityCoverage from './pages/CapabilityCoverage'
 import Trends from './pages/Trends'
 import Economics from './pages/Economics'
+import Pathways from './pages/Pathways'
 
 function App() {
   const { logout } = useAuth()
   const { pathname } = useLocation()
   const groups = [
-    { label: 'Explore roles', links: [['/', 'Roles'], ['/space', 'Role map'], ['/trends', 'Trends'], ['/economics', 'Economics'], ['/targets', 'Targets']] },
+    { label: 'Explore roles', links: [['/', 'Roles'], ['/space', 'Role map'], ['/trends', 'Trends'], ['/economics', 'Economics'], ['/pathways', 'Pathways'], ['/targets', 'Targets']] },
     { label: 'My evidence', links: [['/profile', 'Profile overview'], ['/profile360', 'Evidence and mappings'], ['/coverage', 'Capability coverage'], ['/episodes', 'Career history'], ['/preferences', 'Preferences']] },
     { label: 'Manage vocabulary', links: [['/vocabulary', 'Vocabulary'], ['/capabilities', 'Capability catalogue']] },
   ]
@@ -46,6 +47,8 @@ function App() {
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
+        <Route path="/pathways" element={<Pathways />} />
+        <Route path="/pathways/:id" element={<Pathways />} />
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
         <Route path="/episodes" element={<Episodes />} />
