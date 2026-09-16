@@ -604,6 +604,57 @@ describe('Role Detail — review findings', () => {
     )
   })
 
+  it('lets a correction re-quote the passage that states the new figure', async () => {
+    // A posting-stated figure has to be stated by the quote backing it, so a
+    // correction to a number from elsewhere in the advert has to re-anchor.
+    // Without an editable span the reviewer would get a refusal they could
+    // not act on.
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.correctRoleCompensation).mockResolvedValue({
+      id: 'obs2',
+      status: 'corrected',
+      review_status: 'accepted',
+      corrected_from_observation_id: 'obs1',
+      superseded_observation_ids: ['obs1'],
+    })
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Correct'))
+
+    const span = screen.getByLabelText('Evidence span for base') as HTMLTextAreaElement
+    expect(span.value).toBe('£120,000 - £145,000 per annum')
+
+    fireEvent.change(screen.getByLabelText('Minimum amount for base'), { target: { value: '125000' } })
+    fireEvent.change(screen.getByLabelText('Maximum amount for base'), { target: { value: '150000' } })
+    fireEvent.change(span, { target: { value: 'Exceptional candidates at £125,000 - £150,000' } })
+    fireEvent.click(screen.getByText('Save correction'))
+
+    await waitFor(() =>
+      expect(api.correctRoleCompensation).toHaveBeenCalledWith('role', 'obs1', {
+        amount_min: 125000,
+        amount_max: 150000,
+        evidence_span: 'Exceptional candidates at £125,000 - £150,000',
+      }),
+    )
+  })
+
+  it('surfaces the server refusal when a figure is not in its quote', async () => {
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation())
+    vi.mocked(api.correctRoleCompensation).mockRejectedValue(
+      new Error('amount_min 999999 is not stated by the quoted evidence span, which states 120000, 145000'),
+    )
+    renderRole()
+
+    fireEvent.click(await screen.findByText('Compensation evidence on this role (1)'))
+    fireEvent.click(screen.getByText('Correct'))
+    fireEvent.change(screen.getByLabelText('Minimum amount for base'), { target: { value: '999999' } })
+    fireEvent.click(screen.getByText('Save correction'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('is not stated by the quoted evidence span')
+  })
+
   it('edits a bonus as a percentage, not as min/max amounts', async () => {
     const data = compensation()
     data.observations = [

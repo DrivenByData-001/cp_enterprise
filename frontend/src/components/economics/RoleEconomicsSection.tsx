@@ -364,6 +364,7 @@ function ObservationRow({
   const [min, setMin] = useState(observation.amount_min?.toString() ?? '')
   const [max, setMax] = useState(observation.amount_max?.toString() ?? '')
   const [bonus, setBonus] = useState(observation.bonus_pct?.toString() ?? '')
+  const [span, setSpan] = useState(observation.evidence_span ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isBonus = observation.component === 'bonus_pct'
@@ -477,6 +478,20 @@ function ObservationRow({
               </label>
             </>
           )}
+          {/* Editable because a corrected figure has to be stated by the quote
+              backing it. When the right number is in a different sentence of
+              the advert, the correction re-quotes that sentence; without this
+              box the reviewer would hit a refusal they could not act on. */}
+          <label style={{ fontSize: 12, flexBasis: '100%' }}>
+            Quote from the source that states it
+            <textarea
+              aria-label={`Evidence span for ${observation.component}`}
+              value={span}
+              onChange={(e) => setSpan(e.target.value)}
+              rows={2}
+              style={{ display: 'block', width: '100%', fontSize: 12 }}
+            />
+          </label>
           <button
             type="button"
             // Only supplied fields change, so a blank box means "leave as is",
@@ -484,16 +499,15 @@ function ObservationRow({
             disabled={busy || (isBonus ? bonus.trim() === '' : min.trim() === '' && max.trim() === '')}
             onClick={() =>
               act(() =>
-                api.correctRoleCompensation(
-                  roleId,
-                  observation.id,
-                  isBonus
+                api.correctRoleCompensation(roleId, observation.id, {
+                  ...(isBonus
                     ? { bonus_pct: Number(bonus) }
                     : {
                         ...(min.trim() === '' ? {} : { amount_min: Number(min) }),
                         ...(max.trim() === '' ? {} : { amount_max: Number(max) }),
-                      },
-                ),
+                      }),
+                  ...(span === (observation.evidence_span ?? '') ? {} : { evidence_span: span }),
+                }),
               )
             }
           >

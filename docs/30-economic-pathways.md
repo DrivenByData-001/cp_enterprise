@@ -173,6 +173,10 @@ history reads:
 £125,000–£150,000   accepted
 ```
 
+(with the corrected row quoting the passage of the advert that states
+£125,000–£150,000 — see "A stated figure must be a figure the advert states"
+below.)
+
 Both rows survive, exactly one is accepted, and each keeps its own
 content-addressed `source_key` describing its own figures. A correction that
 changes the component (base → total_package, say) retires the original
@@ -203,7 +207,58 @@ Server-side validation on accept, in order:
 - the value shape matches the component: an amount range in a three-letter
   currency for base / day_rate / total_package, or a percentage in
   `bonus_pct` with no cash amount for a bonus;
+- **every submitted figure is stated by that span** (below);
 - component / pay_period / employment_basis are in the controlled sets.
+
+### A stated figure must be a figure the advert states
+
+The verbatim check proves the *quote* is real. It says nothing about whether
+the numbers submitted beside it are the numbers that quote gives, and the
+shape rules only check shape. Between them, an accept of £999,999 carrying a
+perfectly genuine `"£120,000 - £145,000 per annum"` span satisfied every rule
+and was stored with `basis='posting_stated'` — the tier the resolver treats
+as fact, that feeds the archetype benchmark and the user's own comparison.
+
+So each figure is matched against the numbers the span actually contains:
+
+- `amount_min` / `amount_max` against the amounts written in the span;
+- `bonus_pct` against the percentages written in the span;
+- a number written as a percentage is **never** an amount, so a quote saying
+  "a bonus of up to 15%" does not license a salary of 15.
+
+Normalisation is by value, not by string — an advert writing `£120k` and a
+reviewer entering `120000` mean the same figure. The parser reads what
+adverts write and nothing more:
+
+| Written in the span | Reads as |
+| --- | --- |
+| `£120,000`, `120000` | 120000 |
+| `£120k`, `120 k` | 120000 |
+| `£1.2m` | 1200000 |
+| `£120-145k` | 120000 **and** 145000 |
+| `15%`, `15 per cent` | 15 percent (never the amount 15) |
+
+`"£120-145k"` states £120,000, not £120: in a range whose upper bound carries
+a scale suffix, the lower bound inherits it, and that reading *replaces* the
+bare one rather than joining it.
+
+When a figure is not in its quote the answer is to refuse, never to guess
+which number was meant. The refusal names what the span does state and points
+at the `curator_asserted` basis, because a figure that is the reviewer's own
+judgement rather than the advert's is a legitimate thing to record — just not
+as `posting_stated`.
+
+This makes a correction **re-anchor rather than drift**: a PATCH that changes
+the amounts without changing the span is refused unless the span already
+states them, so correcting a figure to one from a different passage means
+quoting that passage. A figure the advert states nowhere cannot be reached
+from this flow at all.
+
+The rule governs *writes*, and no migration rewrites existing rows: a row
+accepted before it existed keeps its stored figures. It is enforced the
+moment anything tries to make such a row accepted again, so a `/reaccept` of
+an uncorroborated legacy row is refused with the same message rather than
+silently restoring it.
 
 Only source-supported fields are extracted: amount min/max, currency,
 component, pay period if supported, employment basis if supported, and the

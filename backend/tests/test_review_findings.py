@@ -453,12 +453,16 @@ def test_a_non_bonus_component_may_not_carry_a_percentage():
 
 def test_accepting_a_corrected_figure_retires_the_one_it_corrects():
     """Two accepted posting_stated rows for the same component both fed the
-    archetype benchmark, so a corrected mistake kept influencing the market."""
+    archetype benchmark, so a corrected mistake kept influencing the market.
+
+    The mistake here is the one that is still reachable: the advert's total
+    package figure accepted as its base salary. A simply mistyped number is
+    not — it would have to be stated by the quote backing it."""
     with db_cursor() as cur:
         document_id = _document(cur, _MULTI_COMPONENT_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
-        wrong = _accept(cur, role_id, component="base", amount_min=12000, amount_max=14500, currency="GBP",
-                        evidence_span="Base salary: £120,000 - £145,000 per annum.")
+        wrong = _accept(cur, role_id, component="base", amount_max=180000, currency="GBP",
+                        evidence_span="Total package up to £180,000.")
         corrected = _accept(cur, role_id, component="base", amount_min=120000, amount_max=145000, currency="GBP",
                             evidence_span="Base salary: £120,000 - £145,000 per annum.")
 
@@ -753,11 +757,18 @@ def test_changing_the_planning_assumption_still_invalidates_the_pathways_cache()
 
 # --- The HTTP accept contract -----------------------------------------------
 
+# Every figure a correction test corrects *to* has to be a figure this advert
+# states, because a posting-stated observation may only carry numbers its own
+# quote contains. So the advert states two base ranges and two bonus rates,
+# exactly as a real posting with a senior band and a service-related bonus
+# does — and a correction between them re-quotes the passage it moves to.
 _BONUS_POSTING = (
     "Head of Capital, London.\n\n"
     "Base salary: £120,000 - £145,000 per annum.\n"
-    "Plus an annual bonus of up to 15%.\n"
+    "Exceptional candidates will be considered at £125,000 - £150,000.\n"
+    "Plus an annual bonus of up to 15%, rising to 20% after two years.\n"
 )
+_SENIOR_BAND = "Exceptional candidates will be considered at £125,000 - £150,000."
 
 
 def test_the_accept_endpoint_takes_the_bonus_shape_the_prompt_returns(client):
@@ -773,7 +784,7 @@ def test_the_accept_endpoint_takes_the_bonus_shape_the_prompt_returns(client):
         json={
             "amount_min": None, "amount_max": None, "bonus_pct": 15, "currency": None,
             "component": "bonus_pct", "pay_period": "annual",
-            "evidence_span": "Plus an annual bonus of up to 15%.",
+            "evidence_span": "Plus an annual bonus of up to 15%",
         },
     )
     assert response.status_code == 200, response.text
@@ -800,7 +811,7 @@ def test_the_accept_endpoint_still_refuses_a_bonus_with_no_percentage(client):
         f"/api/role-instances/{role_id}/compensation/accept",
         json={"amount_min": None, "amount_max": None, "bonus_pct": None, "currency": None,
               "component": "bonus_pct", "pay_period": "annual",
-              "evidence_span": "Plus an annual bonus of up to 15%."},
+              "evidence_span": "Plus an annual bonus of up to 15%"},
     )
     assert response.status_code == 400
     assert "percentage" in response.json()["detail"]
@@ -837,7 +848,7 @@ def test_re_accepting_a_retired_figure_retires_its_replacement(client):
         role_id = _role(cur, document_id=document_id, currency="GBP")
         first = _accepted_base(cur, role_id)
         second = _accept(cur, role_id, component="base", amount_min=125000, amount_max=150000, currency="GBP",
-                         evidence_span="Base salary: £120,000 - £145,000 per annum.")
+                         evidence_span=_SENIOR_BAND)
         assert second["superseded_observation_ids"] == [first["id"]]
 
     response = client.post(f"/api/role-instances/{role_id}/compensation/{first['id']}/reaccept")
@@ -888,7 +899,7 @@ def test_correcting_an_accepted_figure_preserves_the_value_it_replaces(client):
 
     response = client.patch(
         f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
-        json={"amount_min": 125000, "amount_max": 150000},
+        json={"amount_min": 125000, "amount_max": 150000, "evidence_span": _SENIOR_BAND},
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -932,7 +943,7 @@ def test_each_figure_keeps_its_own_content_addressed_source_key(client):
 
     corrected_id = client.patch(
         f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
-        json={"amount_min": 125000, "amount_max": 150000},
+        json={"amount_min": 125000, "amount_max": 150000, "evidence_span": _SENIOR_BAND},
     ).json()["id"]
 
     with db_cursor() as cur:
@@ -1000,10 +1011,11 @@ def test_a_bonus_can_be_corrected_as_a_percentage(client):
         document_id = _document(cur, _BONUS_POSTING)
         role_id = _role(cur, document_id=document_id, currency="GBP")
         bonus = _accept(cur, role_id, component="bonus_pct", bonus_pct=15,
-                        evidence_span="Plus an annual bonus of up to 15%.")
+                        evidence_span="Plus an annual bonus of up to 15%")
 
     response = client.patch(
-        f"/api/role-instances/{role_id}/compensation/{bonus['id']}", json={"bonus_pct": 20}
+        f"/api/role-instances/{role_id}/compensation/{bonus['id']}",
+        json={"bonus_pct": 20, "evidence_span": "rising to 20% after two years"},
     )
     assert response.status_code == 200, response.text
     corrected_id = response.json()["id"]
@@ -1032,7 +1044,7 @@ def test_the_generic_review_endpoint_cannot_reaccept_a_posting_stated_row(client
         role_id = _role(cur, document_id=document_id, currency="GBP")
         first = _accepted_base(cur, role_id)
         second = _accept(cur, role_id, component="base", amount_min=125000, amount_max=150000, currency="GBP",
-                         evidence_span="Base salary: £120,000 - £145,000 per annum.")
+                         evidence_span=_SENIOR_BAND)
         assert second["superseded_observation_ids"] == [first["id"]]
 
     response = client.post(
@@ -1170,3 +1182,194 @@ def test_the_content_key_is_stable_across_number_spellings():
 
     assert key(120000, 145000) == key(120000.0, 145000.0) == key(Decimal("120000"), Decimal("145000"))
     assert key(120000, 145000) != key(125000, 150000)
+
+
+# --- A stated figure must be a figure the advert states ---------------------
+#
+# Proving the *quote* is real said nothing about whether the numbers submitted
+# beside it were the numbers that quote gives. Everything below feeds the
+# resolver's advert-stated tier, the archetype benchmark and the personal
+# comparison, so a figure the source never states must not be able to enter it
+# wearing basis='posting_stated'.
+
+def test_a_figure_the_quote_does_not_state_is_refused_even_with_a_valid_span():
+    """The exact hole: a genuine, verbatim "£120,000 - £145,000 per annum"
+    span carrying £999,999. Both the span check and the shape check pass."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_min=999999, currency="GBP",
+                    evidence_span="Base salary: £120,000 - £145,000 per annum.")
+
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.compensation_observation WHERE role_instance_id = %s", (role_id,)
+        )
+        assert cur.fetchone()["n"] == 0, "nothing may be written when corroboration fails"
+
+    message = str(excinfo.value)
+    assert "not stated by the quoted evidence span" in message
+    assert "120000, 145000" in message, "the refusal names what the span does state"
+    assert "curator-asserted" in message, "and names where a reviewer's own figure belongs"
+
+
+def test_a_figure_that_is_off_by_a_digit_is_refused():
+    """The typo this rule exists for — £12,000 is not £120,000, and the quote
+    justifying it says so."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="base", amount_min=12000, amount_max=14500, currency="GBP",
+                    evidence_span="Base salary: £120,000 - £145,000 per annum.")
+    assert "amount_min 12000 is not stated" in str(excinfo.value)
+
+
+def test_a_bonus_percentage_the_quote_does_not_state_is_refused():
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        with pytest.raises(posting_compensation.PostingCompensationValidationError) as excinfo:
+            _accept(cur, role_id, component="bonus_pct", bonus_pct=25,
+                    evidence_span="Plus an annual bonus of up to 15%")
+    assert "bonus_pct 25% is not stated" in str(excinfo.value)
+    assert "15%" in str(excinfo.value)
+
+
+def test_a_correction_cannot_move_a_figure_away_from_its_quote(client):
+    """A PATCH that changes the amounts but not the span is refused unless the
+    span already states them — so correcting to a figure from another passage
+    means quoting that passage, and the stored row never drifts from its
+    evidence."""
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        accepted = _accepted_base(cur, role_id)
+
+    drifting = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"amount_min": 125000, "amount_max": 150000},
+    )
+    assert drifting.status_code == 400
+    assert "not stated by the quoted evidence span" in drifting.json()["detail"]
+
+    # Quoting the passage that does state them is accepted.
+    re_anchored = client.patch(
+        f"/api/role-instances/{role_id}/compensation/{accepted['id']}",
+        json={"amount_min": 125000, "amount_max": 150000, "evidence_span": _SENIOR_BAND},
+    )
+    assert re_anchored.status_code == 200, re_anchored.text
+
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT amount_min, amount_max, evidence_span FROM jobber.compensation_observation "
+            "WHERE role_instance_id = %s AND review_status = 'accepted'",
+            (role_id,),
+        )
+        row = cur.fetchone()
+    assert row["amount_min"] == 125000 and row["amount_max"] == 150000
+    assert row["evidence_span"] == _SENIOR_BAND
+
+
+def test_a_re_accept_will_not_reinstate_an_uncorroborated_figure(client):
+    """Re-accept re-validates in full, so a row whose figures its own quote
+    does not state cannot be brought back as a stated fact — including a row
+    written before this rule existed."""
+    with db_cursor() as cur:
+        market_id = _market(cur)
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        cur.execute(
+            """
+            INSERT INTO jobber.compensation_observation
+                (source_key, role_instance_id, document_id, market_id, component, pay_period, currency,
+                 amount_min, amount_max, basis, review_status, evidence_span)
+            VALUES (%s, %s, %s, %s, 'base', 'annual', 'GBP', 999999, NULL, 'posting_stated', 'rejected', %s)
+            RETURNING id
+            """,
+            (f"test:{uuid.uuid4()}", role_id, document_id, market_id,
+             "Base salary: £120,000 - £145,000 per annum."),
+        )
+        legacy_id = str(cur.fetchone()["id"])
+
+    response = client.post(f"/api/role-instances/{role_id}/compensation/{legacy_id}/reaccept")
+    assert response.status_code == 400
+    assert "not stated by the quoted evidence span" in response.json()["detail"]
+
+    with db_cursor() as cur:
+        cur.execute("SELECT review_status FROM jobber.compensation_observation WHERE id = %s", (legacy_id,))
+        assert cur.fetchone()["review_status"] == "rejected"
+
+
+def test_the_proposal_screen_flags_a_figure_the_quote_does_not_state(monkeypatch):
+    """The review screen must never offer an Accept the server will refuse, so
+    the same rule annotates the proposal."""
+    from app import ai
+    from app.posting_compensation import PostingCompensationProposal
+
+    def fake_run(**kwargs):
+        output = PostingCompensationProposal.model_validate(
+            {
+                "items": [
+                    {"amount_min": 120000, "amount_max": 145000, "currency": "GBP", "component": "base",
+                     "pay_period": "annual",
+                     "evidence_span": "Base salary: £120,000 - £145,000 per annum."},
+                    {"amount_min": 160000, "currency": "GBP", "component": "base", "pay_period": "annual",
+                     "evidence_span": "Base salary: £120,000 - £145,000 per annum."},
+                ],
+                "no_compensation_stated": False,
+            }
+        )
+        run = ai.AITaskRun("posting_compensation_extract", "test-model",
+                           "extract_posting_compensation.md", "v1",
+                           "2026-09-16", "2026-09-16", "ok", 100, 50)
+        return ai.AITaskResult(output, run)
+
+    monkeypatch.setattr(posting_compensation, "run_json_task", fake_run)
+
+    with db_cursor() as cur:
+        document_id = _document(cur, _BONUS_POSTING)
+        role_id = _role(cur, document_id=document_id, currency="GBP")
+        items = posting_compensation.propose_posting_compensation(cur, role_id)["proposal"]["items"]
+
+    assert items[0]["acceptable"] is True and items[0]["problems"] == []
+    assert items[1]["acceptable"] is False
+    assert any("not stated by the quoted evidence span" in p for p in items[1]["problems"])
+
+
+@pytest.mark.parametrize(
+    "span,amount",
+    [
+        ("Base salary: £120,000 - £145,000 per annum.", 120000),   # grouped
+        ("Salary 120000 to 145000", 145000),                       # bare
+        ("Paying £120k - £145k", 120000),                          # k suffix
+        ("Paying £120-145k", 120000),                              # shared suffix
+        ("Up to £1.2m in total compensation", 1200000),            # m suffix
+        ("Rate: £650 per day, outside IR35.", 650),                # day rate
+    ],
+)
+def test_the_normalisation_reads_the_ways_adverts_write_money(span, amount):
+    """Sensible normalisation, not string equality: an advert writing £120k
+    and a reviewer entering 120000 mean the same figure."""
+    assert posting_compensation._corroboration_problems(
+        {"component": "base", "amount_min": amount}, span
+    ) == []
+
+
+def test_a_shared_scale_suffix_does_not_also_corroborate_the_bare_number():
+    """"£120-145k" states £120,000, not £120 — reading the lower bound without
+    the suffix would corroborate a figure a thousand times too small."""
+    problems = posting_compensation._corroboration_problems(
+        {"component": "base", "amount_min": 120}, "Paying £120-145k"
+    )
+    assert problems and "not stated" in problems[0]
+
+
+def test_a_percentage_in_the_quote_is_not_an_amount():
+    """"a bonus of up to 15%" states no cash, so 15 is not an amount the span
+    corroborates — otherwise any percentage in a quote would license a
+    matching salary figure."""
+    problems = posting_compensation._corroboration_problems(
+        {"component": "base", "amount_min": 15}, "Plus an annual bonus of up to 15%"
+    )
+    assert problems and "no such figure" in problems[0]

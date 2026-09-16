@@ -44,7 +44,14 @@ standing between an AI proposal and a stated economic fact:
    `bonus_pct` with no cash amount for a bonus (the schema's `currency`
    column is NOT NULL, so a bonus borrows the currency of the pay it applies
    to, read from the role's own evidence and never guessed);
-5. component / pay_period / employment_basis are in the controlled sets the
+5. **every submitted figure is corroborated by the numbers in that span**
+   (`_corroboration_problems`). Rules 2 and 4 together prove the quote is
+   real and the shape is sane, and still say nothing about whether the
+   amounts belong to the quote: £999,999 carrying a genuine
+   "£120,000 - £145,000 per annum" span satisfies both, and would be stored
+   as a stated fact. A `posting_stated` figure has to be a figure the advert
+   states, so it is matched against the numbers the span actually contains;
+6. component / pay_period / employment_basis are in the controlled sets the
    `compensation_observation` CHECK constraints already enforce — rejected
    here with a clear message rather than as a raw integrity error.
 
@@ -59,6 +66,7 @@ see `compensation_resolver.py`.
 import hashlib
 import re
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from pydantic import BaseModel
@@ -220,17 +228,157 @@ def _value_problems(item: dict, *, fallback_currency: str | None) -> list[str]:
     return problems
 
 
+# --- Corroborating a figure against the quote that backs it ------------------
+#
+# `validate_span` proves the *quote* is real. It says nothing about whether the
+# numbers submitted alongside it are the numbers that quote states, and neither
+# does `_value_problems`, which only checks shape. Between them an accept of
+# £999,999 carrying a perfectly genuine "£120,000 - £145,000 per annum" span
+# passed every rule and was stored with `basis='posting_stated'` — the tier the
+# compensation resolver treats as fact, that feeds the archetype benchmark and
+# the user's personal comparison.
+#
+# So the figures are matched against the numbers the span actually contains.
+# The parsing below is deliberately narrow: it reads what adverts write
+# (£120,000, 120000, £120k, £1.2m, "£120-145k", "up to 15%") and nothing more.
+# When a reviewer's figure is not in the quote the answer is to refuse, not to
+# guess which number was meant — and the refusal names the curator-asserted
+# pathway, because a figure that is the reviewer's own judgement rather than
+# the advert's is a legitimate thing to record, just not as `posting_stated`.
+
+_SCALE_SUFFIXES = {"k": Decimal(1_000), "m": Decimal(1_000_000)}
+
+# A comma-grouped or plain decimal number. The comma form leads the
+# alternation so "120,000" can never be read as "120".
+_NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+
+# A scale suffix counts only when attached to its number ("120k", "1.2 m") and
+# not followed by more letters, so the "m" of "monthly" is not a million.
+_NUMBER_RE = re.compile(
+    rf"(?<![\d.,])(?P<number>{_NUMBER})(?:\s?(?P<suffix>[kKmM])(?![a-zA-Z]))?(?![\d,])"
+)
+
+# "£120-145k" states £120,000-£145,000, not £120. The lower bound of a range
+# inherits the suffix its upper bound carries, and that reading *replaces* the
+# bare one rather than joining it — 120 is not a figure that span states.
+_SHARED_SCALE_RE = re.compile(
+    rf"(?<![\d.,])(?P<lead>{_NUMBER})\s*(?:-|–|—|to)\s*[^\d\s]{{0,3}}\s*"
+    rf"(?P<second>{_NUMBER})\s?(?P<suffix>[kKmM])(?![a-zA-Z])"
+)
+
+_PERCENT_RE = re.compile(r"\s*(?:%|percent|per cent|pct)", re.IGNORECASE)
+
+
+def _scaled(number: str, suffix: str | None) -> Decimal:
+    value = Decimal(number.replace(",", ""))
+    return value * _SCALE_SUFFIXES[suffix.lower()] if suffix else value
+
+
+def _as_decimal(value) -> Decimal | None:
+    """The submitted figure as an exact Decimal, or None if it will not
+    parse. A value that cannot be read is *not* corroborated — the callers
+    below refuse it rather than skipping the check, because "we could not
+    tell" must never resolve to "accepted" in a validation layer."""
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _is_percentage(text: str, at: int) -> bool:
+    """True when the number ending at `at` is written as a percentage — so
+    "15" in "a bonus of up to 15%" is a percentage and never an amount."""
+    return _PERCENT_RE.match(text, at) is not None
+
+
+def _amounts_in_span(span: str) -> set[Decimal]:
+    inherited = {
+        match.start("lead"): _scaled(match.group("lead"), match.group("suffix"))
+        for match in _SHARED_SCALE_RE.finditer(span)
+    }
+    amounts: set[Decimal] = set()
+    for match in _NUMBER_RE.finditer(span):
+        if _is_percentage(span, match.end()):
+            continue
+        start = match.start("number")
+        amounts.add(
+            inherited[start] if start in inherited
+            else _scaled(match.group("number"), match.group("suffix"))
+        )
+    return amounts
+
+
+def _percentages_in_span(span: str) -> set[Decimal]:
+    return {
+        _scaled(match.group("number"), None)
+        for match in _NUMBER_RE.finditer(span)
+        if _is_percentage(span, match.end())
+    }
+
+
+def _figure(value) -> str:
+    try:
+        return _canonical_amount(value)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _unsupported(label: str, value, stated: set[Decimal], *, unit: str = "") -> str:
+    found = ", ".join(f"{_canonical_amount(v)}{unit}" for v in sorted(stated)) or "no such figure"
+    return (
+        f"{label} {_figure(value)}{unit} is not stated by the quoted evidence span, which "
+        f"states {found} — a posting-stated figure has to be a figure the advert gives. Quote the "
+        "passage this number comes from, or, if it is your own judgement rather than the advert's, "
+        "record it as a curator-asserted observation on the Economics page instead"
+    )
+
+
+def _corroboration_problems(item: dict, span: str) -> list[str]:
+    """Each supplied figure must be represented by the span, after the
+    normalisation above. Runs only once the span is known verbatim and the
+    value shape is known good, so its message is never one of several."""
+    if item.get("component") == "bonus_pct":
+        raw = item.get("bonus_pct")
+        if raw is None:
+            return []
+        percent = _as_decimal(raw)
+        stated = _percentages_in_span(span)
+        if percent is None or percent not in stated:
+            return [_unsupported("bonus_pct", raw, stated, unit="%")]
+        return []
+
+    stated = _amounts_in_span(span)
+    problems = []
+    for label in ("amount_min", "amount_max"):
+        raw = item.get(label)
+        if raw is None:
+            continue
+        value = _as_decimal(raw)
+        if value is None or value not in stated:
+            problems.append(_unsupported(label, raw, stated))
+    return problems
+
+
 def _annotate_proposal_item(item: dict, document_text: str, *, fallback_currency: str | None) -> dict:
     """Every proposal item is returned with the server's own verdict on it
     already attached, so the review UI can show "this quote was not found in
     the source" before the user clicks Accept rather than only after."""
     span = (item.get("evidence_span") or "").strip()
+    quoted = False
     problems = []
     if not span:
         problems.append("no evidence span was quoted")
     elif not validate_span(document_text, span):
         problems.append("the quoted evidence span does not appear verbatim in the source document")
-    problems += _value_problems(item, fallback_currency=fallback_currency)
+    else:
+        quoted = True
+    value_problems = _value_problems(item, fallback_currency=fallback_currency)
+    problems += value_problems
+    if quoted and not value_problems:
+        # Same rule, same order as acceptance — a proposal whose figures are
+        # not in its own quote is shown as unacceptable on the review screen
+        # rather than discovered at the moment the user clicks Accept.
+        problems += _corroboration_problems(item, span)
     return {**item, "acceptable": not problems, "problems": problems}
 
 
@@ -306,8 +454,15 @@ def _record_run(
 def _validate_accept(item: dict, document: dict, *, fallback_currency: str | None) -> dict:
     """Every rule from this module's docstring, applied server-side to the
     (possibly user-edited) payload. Raises with the first failing rule
-    named. Shares `_value_problems` with the proposal annotator, so the
-    review screen's verdict and acceptance can never disagree."""
+    named. Shares `_value_problems` and `_corroboration_problems` with the
+    proposal annotator, so the review screen's verdict and acceptance can
+    never disagree.
+
+    Order matters: the span is proved verbatim, then the value shape, then
+    the figures against the span. Corroborating an amount against a quote
+    that is not in the document, or against a bonus that wrongly carries a
+    cash amount, would only produce a confusing second complaint about a
+    payload already known to be wrong."""
     if document["provenance_quality"] != "original":
         raise PostingCompensationValidationError(
             "this role's source document does not have original provenance, so it cannot back a stated "
@@ -331,6 +486,10 @@ def _validate_accept(item: dict, document: dict, *, fallback_currency: str | Non
         )
 
     problems = _value_problems(item, fallback_currency=fallback_currency)
+    if problems:
+        raise PostingCompensationValidationError(problems[0])
+
+    problems = _corroboration_problems(item, span)
     if problems:
         raise PostingCompensationValidationError(problems[0])
 
@@ -570,10 +729,17 @@ def correct_role_observation(cur, role_instance_id: str, observation_id: str, pa
     `patch` carries only the fields the reviewer changed; everything else is
     read back off the stored row. The result is re-validated in full — the
     span must still occur verbatim in the role's immutable source document,
-    the document's provenance must still be original, and the value shape
-    must still match the component — so a correction can never detach a
-    stated fact from the quote that justifies it, or turn a bonus percentage
-    into a cash amount."""
+    the document's provenance must still be original, the value shape must
+    still match the component, and the corrected figures must be stated by
+    the span — so a correction can never detach a stated fact from the quote
+    that justifies it, or turn a bonus percentage into a cash amount.
+
+    That last rule is what makes a correction re-anchor rather than drift:
+    changing the amounts without changing the quote is refused unless the
+    quote already states the new numbers, so correcting a figure to one from
+    a different passage means quoting that passage. A figure the advert does
+    not state anywhere cannot be reached from here at all — it is not a
+    posting-stated fact, whatever the reviewer believes about the role."""
     role, document = _load_role_and_document(cur, role_instance_id)
     stored = _load_role_observation(cur, role_instance_id, observation_id)
     item = _observation_as_item(stored, patch)

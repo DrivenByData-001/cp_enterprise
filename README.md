@@ -138,9 +138,14 @@ kept for reproducibility.
   here; role/market compensation lives in `jobber`. Nothing copies one into
   the other. A day rate is never silently annualised, currencies are never
   converted, PAYE and contracting are never merged, and a bonus never stands
-  in for base pay. Correcting an accepted figure records a new one and
-  retires the old, so the history shows what was once accepted rather than
-  rewriting it. An open-ended salary belonging to an employment episode
+  in for base pay. An advert-stated figure must be a figure the advert
+  states: it is checked against the numbers written in the quote backing it
+  (£120k and 120000 being the same figure), so a number the source does not
+  give cannot be recorded as advert-stated — it belongs on the
+  curator-asserted pathway, and the refusal says so. Correcting an accepted
+  figure records a new one and retires the old, so the history shows what was
+  once accepted rather than rewriting it, and a correction to a number from
+  elsewhere in the advert re-quotes the passage that states it. An open-ended salary belonging to an employment episode
   that has ended is reported as latest-known, not current. Every displayed
   figure names its basis — advert salary, market estimate, legacy estimate,
   or insufficient evidence — those four are never blurred together, and an

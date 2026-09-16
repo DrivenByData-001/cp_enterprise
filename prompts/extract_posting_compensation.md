@@ -40,6 +40,15 @@ Return a single JSON object of this shape:
    the immutable source document, so an approximate quote is worse than no
    item at all.
 
+   **The span must contain the figures the item reports.** A second
+   server-side check matches `amount_min`, `amount_max` and `bonus_pct`
+   against the numbers written in the span, so quote the passage each figure
+   actually comes from — not a nearby heading, and not one passage for
+   figures taken from two. Where an advert states a range in one place and a
+   different range elsewhere (a senior band, a location uplift), each is its
+   own item quoting its own passage. Scale is read as written: "£120k" in a
+   span supports `120000`, and "£120-145k" supports `120000` and `145000`.
+
 2. **A bonus percentage is a percentage, not an amount.** When the posting
    states a bonus as a proportion of pay ("10% bonus", "bonus up to 20% of
    base"), set `"component": "bonus_pct"` and put the number in `bonus_pct`
