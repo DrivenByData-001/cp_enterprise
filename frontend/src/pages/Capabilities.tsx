@@ -587,34 +587,40 @@ export default function Capabilities() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('active')
   const [q, setQ] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [readyError, setReadyError] = useState<string | null>(null)
+  const [pendingError, setPendingError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [rebuildBusy, setRebuildBusy] = useState(false)
   const [rebuildResult, setRebuildResult] = useState<RebuildSummary | null>(null)
 
   const requestVersion = useRef(0)
-  const reload = async () => {
+  const reload = async (status = statusFilter, search = q) => {
     const version = ++requestVersion.current
-    const [ready, pending] = await Promise.all([
-      api.listCapabilities({ status: statusFilter, q: q || undefined }),
-      api.listUnconfiguredCapabilities(q || undefined),
+    setLoading(true)
+    const [ready, pending] = await Promise.allSettled([
+      api.listCapabilities({ status, q: search || undefined }),
+      api.listUnconfiguredCapabilities(search || undefined),
     ])
     if (version !== requestVersion.current) return
-    setCapabilities(ready)
-    setUnconfigured(pending)
+    setCapabilities(ready.status === 'fulfilled' ? ready.value : [])
+    setUnconfigured(pending.status === 'fulfilled' ? pending.value : [])
+    setReadyError(ready.status === 'rejected' ? String(ready.reason) : null)
+    setPendingError(pending.status === 'rejected' ? String(pending.reason) : null)
+    setLoading(false)
   }
   const onAdded = async (id: string) => {
-    ++requestVersion.current
     setStatusFilter('active')
     setQ('')
-    const [ready, pending] = await Promise.all([api.listCapabilities({ status: 'active' }), api.listUnconfiguredCapabilities()])
-    setCapabilities(ready)
-    setUnconfigured(pending)
     setConfiguring(null)
     setSelectedId(id)
+    await reload('active', '')
   }
 
   useEffect(() => {
-    reload().catch((e) => setError(String(e)))
+    const versions = requestVersion
+    void reload()
+    return () => { ++versions.current }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, q])
 
@@ -660,16 +666,26 @@ export default function Capabilities() {
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <h2 style={{ fontSize: 16, margin: 0 }}>Needs specification</h2>
-          <p className="muted" style={{ margin: 0 }}>
+          {loading ? <p className="muted">Loading Vocabulary capabilities…</p> : pendingError ? (
+            <div role="alert" style={{ color: 'var(--critical)' }}>
+              <p>Could not load Vocabulary capabilities needing specification from /api/capabilities/unconfigured. Check the backend deployment and connection, then retry. {pendingError}</p>
+              <button onClick={() => void reload()}>Retry Needs specification</button>
+            </div>
+          ) : <p className="muted" style={{ margin: 0 }}>
             {unconfigured.length} capability concepts in Vocabulary need assessment specifications{q ? ' matching this search' : ''}.
-          </p>
+          </p>}
           {unconfigured.map((c) => (
             <button key={c.id} className="primary" style={{ textAlign: 'left' }} onClick={() => { setConfiguring(c); setSelectedId(null) }}>
               Configure {c.canonical_name}
             </button>
           ))}
           <h2 style={{ fontSize: 16 }}> {statusFilter === 'active' ? 'Assessment-ready' : 'Configured — ' + statusFilter}</h2>
-          {capabilities.length === 0 && <p className="muted">No configured capabilities match this view.</p>}
+          {loading ? <p className="muted">Loading configured capabilities…</p> : readyError ? (
+            <div role="alert" style={{ color: 'var(--critical)' }}>
+              <p>Could not load configured capabilities from /api/capabilities. Check the backend deployment and connection, then retry. {readyError}</p>
+              <button onClick={() => void reload()}>Retry configured capabilities</button>
+            </div>
+          ) : capabilities.length === 0 && <p className="muted">No configured capabilities match this view.</p>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {capabilities.map((c) => (
               <div
