@@ -167,6 +167,102 @@ def test_unresolved_surface_form_becomes_concept_proposal_and_accumulates(client
     assert after["occ"] == 2  # accumulated across the two runs
 
 
+def test_unresolved_rerun_refreshes_occurrence_when_the_new_reading_is_stronger(client, monkeypatch):
+    """A rerun against the same still-unresolved term can genuinely read it
+    better the second time (e.g. more context, a clearer sentence). The
+    occurrence (concept_proposal_occurrence, migration 0022) should adopt
+    the stronger requirement_type — together with that run's own
+    basis/evidence_span/document/extraction_run provenance, never a
+    Frankenstein row mixing one run's type with another's span."""
+    body = "Requires Widget Modelling context."
+    calls = {"n": 0}
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        assert prompt_name == "extract_role_requirements.md"
+        calls["n"] += 1
+        reading = (
+            RequirementItem(surface_form="Widget Modelling", requirement_type="contextual", basis="implied", evidence_span="Widget Modelling context.")
+            if calls["n"] == 1
+            else RequirementItem(surface_form="Widget Modelling", requirement_type="required", basis="stated", evidence_span="Requires Widget Modelling")
+        )
+        return _fake_run(RequirementExtractionResult(requirements=[reading]), task, prompt_name)
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        role_id, doc_id = _make_role_with_document(cur, body)
+        first_run = extraction.extract_role_requirements(cur, role_id)
+
+        cur.execute(
+            "SELECT o.requirement_type, o.basis, o.evidence_span, o.extraction_run_id "
+            "FROM jobber.concept_proposal_occurrence o JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id "
+            "WHERE cp.surface_form = 'widget modelling' AND o.role_instance_id = %s",
+            (role_id,),
+        )
+        before = cur.fetchone()
+        assert before["requirement_type"] == "contextual"
+
+        second_run = extraction.extract_role_requirements(cur, role_id)
+        assert second_run["extraction_run_id"] != first_run["extraction_run_id"]
+
+        cur.execute(
+            "SELECT o.requirement_type, o.basis, o.evidence_span, o.document_id, o.extraction_run_id "
+            "FROM jobber.concept_proposal_occurrence o JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id "
+            "WHERE cp.surface_form = 'widget modelling' AND o.role_instance_id = %s",
+            (role_id,),
+        )
+        after = cur.fetchone()
+
+    assert after["requirement_type"] == "required"
+    assert after["basis"] == "stated"
+    assert after["evidence_span"] == "Requires Widget Modelling"
+    assert str(after["document_id"]) == doc_id
+    assert str(after["extraction_run_id"]) == second_run["extraction_run_id"]
+
+
+def test_unresolved_rerun_does_not_downgrade_occurrence_with_a_weaker_reading(client, monkeypatch):
+    """The reverse of the test above: a rerun that reads the same
+    still-unresolved term *less* confidently than before must not overwrite
+    the stronger, already-valid evidence — including its provenance, which
+    must stay pinned to the run that actually produced the stronger
+    reading, not silently move to whichever run happened to be latest."""
+    body = "Requires Gadget Tuning expertise."
+    calls = {"n": 0}
+
+    def _dispatch(*, task, prompt_name, user_input, output_model):
+        assert prompt_name == "extract_role_requirements.md"
+        calls["n"] += 1
+        reading = (
+            RequirementItem(surface_form="Gadget Tuning", requirement_type="required", basis="stated", evidence_span="Gadget Tuning expertise")
+            if calls["n"] == 1
+            else RequirementItem(surface_form="Gadget Tuning", requirement_type="contextual", basis="implied", evidence_span="Requires Gadget Tuning expertise.")
+        )
+        return _fake_run(RequirementExtractionResult(requirements=[reading]), task, prompt_name)
+
+    monkeypatch.setattr(extraction, "run_json_task", _dispatch)
+
+    with db.db_cursor() as cur:
+        role_id, doc_id = _make_role_with_document(cur, body)
+        first_run = extraction.extract_role_requirements(cur, role_id)
+
+        second_run = extraction.extract_role_requirements(cur, role_id)
+        assert second_run["extraction_run_id"] != first_run["extraction_run_id"]
+
+        cur.execute(
+            "SELECT o.requirement_type, o.basis, o.evidence_span, o.document_id, o.extraction_run_id "
+            "FROM jobber.concept_proposal_occurrence o JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id "
+            "WHERE cp.surface_form = 'gadget tuning' AND o.role_instance_id = %s",
+            (role_id,),
+        )
+        after = cur.fetchone()
+
+    assert after["requirement_type"] == "required"
+    assert after["basis"] == "stated"
+    assert after["evidence_span"] == "Gadget Tuning expertise"
+    assert str(after["document_id"]) == doc_id
+    assert str(after["extraction_run_id"]) == first_run["extraction_run_id"]  # never moved to the weaker rerun
+
+
 def test_declined_adjudication_falls_through_to_proposal(client, monkeypatch):
     body = "Requires stochastic reserving skills."
 

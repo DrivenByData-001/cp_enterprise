@@ -48,13 +48,17 @@ def _source_aware_role(cur, title="Source-aware role", body="Requires Foo Modell
 
 
 def _occurrence(cur, role_id, document_id, *, surface_form, requirement_type="required", basis="stated",
-                 evidence_span=None, extraction_run_id=None) -> str:
+                 evidence_span=None, extraction_run_id=None, created_at=None) -> str:
     """Mirrors extraction.py's unresolved-surface-form path exactly: a
     concept_proposal (deduplicated globally by surface_form, reusing an
     existing pending one for the same term) plus the per-role
     concept_proposal_occurrence link, now also carrying the occurrence's own
     requirement shape (migration 0022) so a later resolution can rebuild a
-    faithful claim from it. Returns the proposal id."""
+    faithful claim from it. Returns the proposal id. `created_at` lets a
+    test pin an explicit ordering — the column defaults to `now()`, which is
+    *transaction*-start time in Postgres, so two occurrences inserted in the
+    same `db_cursor()` block otherwise tie exactly and can't establish a
+    real creation order at all."""
     normalized = surface_form.strip().lower()
     cur.execute("SELECT id FROM jobber.concept_proposal WHERE surface_form = %s AND status = 'pending'", (normalized,))
     existing = cur.fetchone()
@@ -72,9 +76,9 @@ def _occurrence(cur, role_id, document_id, *, surface_form, requirement_type="re
         proposal_id = cur.fetchone()["id"]
     cur.execute(
         "INSERT INTO jobber.concept_proposal_occurrence "
-        "(concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (proposal_id, role_id, document_id, extraction_run_id, requirement_type, basis, evidence_span),
+        "(concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))",
+        (proposal_id, role_id, document_id, extraction_run_id, requirement_type, basis, evidence_span, created_at),
     )
     return str(proposal_id)
 
@@ -827,6 +831,44 @@ def test_accepting_a_cluster_gives_one_claim_per_role_across_a_clustered_multi_s
             (role_id, concept_id),
         )
         assert cur.fetchone()["n"] == 1
+
+
+def test_accepting_a_cluster_picks_the_strongest_occurrence_even_when_it_is_not_the_oldest(client):
+    """Same clustered-resolution shape as the test above, but with the
+    strength/creation-order relationship reversed: the *weaker* occurrence
+    ('contextual') was created first, the *stronger* one ('required')
+    second. Collapsing by earliest-created (the pre-fix behaviour) would
+    build the claim from the weaker reading merely because it happened to
+    be extracted first; collapsing by requirement_type strength (required >
+    preferred > contextual) must pick 'required' regardless of which
+    occurrence is older."""
+    with db.db_cursor() as cur:
+        role_id, document_id = _source_aware_role(cur, body="Requires SII and Solvency II knowledge.")
+        _occurrence(cur, role_id, document_id, surface_form="SII", requirement_type="contextual", basis="implied",
+                    evidence_span="SII", created_at="2026-01-01T00:00:00+00:00")
+        _occurrence(cur, role_id, document_id, surface_form="Solvency II", requirement_type="required", basis="stated",
+                    evidence_span="Solvency II", created_at="2026-01-02T00:00:00+00:00")
+        vb.compute_cluster_keys(cur)
+        key = _cluster_key_of(cur, "sii")
+        assert key == _cluster_key_of(cur, "solvency ii")
+
+    resp = client.post(
+        "/api/vocabulary/clusters/accept", json={"cluster_key": key, "type_code": "regulation", "canonical_name": "Solvency II"}
+    )
+    assert resp.status_code == 200
+    concept_id = resp.json()["resolved_concept_id"]
+
+    with db.db_cursor() as cur:
+        cur.execute(
+            "SELECT requirement_type, basis, evidence_span FROM jobber.requirement_claim "
+            "WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_id, concept_id),
+        )
+        claims = cur.fetchall()
+    assert len(claims) == 1  # still exactly one claim, never two
+    assert claims[0]["requirement_type"] == "required"
+    assert claims[0]["basis"] == "stated"
+    assert claims[0]["evidence_span"] == "Solvency II"
 
 
 # --- code-review follow-up: cluster evidence must include source-aware ----

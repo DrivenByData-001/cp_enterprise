@@ -348,6 +348,30 @@ pair — not a fuzzy claim-merging subsystem. The extraction summary surfaces
 existing `proposals_created`/`proposals_updated`/`rejected_span_count`, and
 the Review requirements page's run summary reports them.
 
+The *unresolved* side (a surface form that still doesn't map to any
+concept) has a parallel rerun concern, at the occurrence level rather than
+the claim level: `concept_proposal_occurrence`'s own
+`requirement_type`/`basis`/`evidence_span`/`document_id`/
+`extraction_run_id` (migration 0022, §12) used to be written once, on
+first insert, and never touched again (`ON CONFLICT ... DO NOTHING`) — a
+rerun that read the same still-unresolved term *better* the second time
+(more surrounding context, a cleaner sentence) couldn't improve the stored
+occurrence, and §12's `resolve_occurrences_for_concept` would go on to
+build a claim from whichever reading happened to be captured first,
+however weak. The upsert now refreshes on conflict, but only when this
+run's `requirement_type` is at least as strong as what's already stored
+(`role_requirements.requirement_type_rank_sql` — the identical ranking
+§12 uses to pick a winner across several occurrences, so "which reading
+wins" means the same thing in both places). A weaker rerun changes
+nothing — including provenance, which stays pinned to whichever run
+actually produced the stronger reading rather than drifting to whatever
+ran most recently. All five refreshed fields move together as one
+decision, never a stronger `requirement_type` paired with a different
+run's `document_id`/`evidence_span`.
+`test_requirement_claims.py::test_unresolved_rerun_refreshes_occurrence_when_the_new_reading_is_stronger`
+and `::test_unresolved_rerun_does_not_downgrade_occurrence_with_a_weaker_reading`
+cover both directions through the real `extract_role_requirements` pipeline.
+
 ## 7. Manual "Add requirement"
 
 `POST /api/role-instances/{id}/requirements` lets a curator add a
@@ -493,10 +517,28 @@ once, immediately after an `accept_new`/`accept_alias` resolution, over
 every proposal id the resolution just moved (the whole cluster, not one
 surface form at a time — a role that hit two clustered surface forms for
 the same concept must get exactly one claim, not two, which migration
-0020's unique index would reject outright). For every role that ever
-produced an occurrence of one of those proposals
+0020's unique index would reject outright). When a role produced *more
+than one* occurrence of the resolved concept (that same multi-surface-form
+case, or simply two extraction runs against it), exactly one is chosen to
+build the claim from — deterministically, by `requirement_type` strength
+(`required` > `preferred` > `contextual` > missing,
+`role_requirements.requirement_type_rank_sql`), never by which occurrence
+happened to be created first. Picking the oldest regardless of strength
+would let a vague "contextual" mention from one posting section silently
+outrank a "required" reading from another, purely because it was extracted
+a moment earlier — a role that hit a concept once as merely contextual and
+again as required must build its claim from the *stronger*, more
+informative reading. Ties (including two occurrences of equal strength)
+fall back to earliest `created_at`, kept only as a stable, deterministic
+resolution rather than a meaningful preference.
+`test_vocabulary_curation.py::test_accepting_a_cluster_picks_the_strongest_occurrence_even_when_it_is_not_the_oldest`
+proves the ordering is driven by strength, not creation time, by
+constructing the two deliberately out of sync.
+
+For every role that ever produced an occurrence of one of those proposals
 (`concept_proposal_occurrence`, migration 0021), exactly one of three
-things happens — nothing is ever fabricated:
+things happens with the occurrence chosen above — nothing is ever
+fabricated:
 
 1. **Already covered.** A current claim already exists for (role,
    resolved concept), from any source — a prior manual add, a prior

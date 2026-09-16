@@ -29,6 +29,7 @@ from .models import (
     RequirementExtractionResult,
 )
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
+from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
 
 
@@ -378,12 +379,31 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         # cannot exist without a requirement_type, so an occurrence with none
         # correctly leaves that role's review incomplete (needs
         # re-extraction) rather than guessing one at resolution time.
+        #
+        # A rerun against the same source can hit an (proposal, role) pair
+        # that already has an occurrence — the term is still unresolved, but
+        # this extraction's own reading of it may be better (or worse) than
+        # what's already stored. Refresh together (document/run provenance
+        # included, so the row reflects one coherent extraction, never a
+        # stronger requirement_type paired with a different run's document)
+        # only when this item's requirement_type is at least as strong as
+        # what's already there (same ranking resolve_occurrences_for_concept
+        # uses to pick a winner across several occurrences) — never
+        # replacing stronger, already-valid evidence with a weaker or
+        # missing reading merely because a later run happened to do worse.
         cur.execute(
-            """
+            f"""
             INSERT INTO jobber.concept_proposal_occurrence
                 (concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (concept_proposal_id, role_instance_id) DO NOTHING
+            ON CONFLICT (concept_proposal_id, role_instance_id) DO UPDATE SET
+                document_id = EXCLUDED.document_id,
+                extraction_run_id = EXCLUDED.extraction_run_id,
+                requirement_type = EXCLUDED.requirement_type,
+                basis = EXCLUDED.basis,
+                evidence_span = EXCLUDED.evidence_span
+            WHERE {requirement_type_rank_sql("EXCLUDED.requirement_type")}
+                <= {requirement_type_rank_sql("jobber.concept_proposal_occurrence.requirement_type")}
             """,
             (proposal_id, role_instance_id, document["id"], main_run_id, requirement_type, basis, span),
         )

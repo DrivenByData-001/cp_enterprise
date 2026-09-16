@@ -311,6 +311,18 @@ def load_requirement_review_summary(cur, role_instance_id: str) -> dict:
 _RESOLVED_PROPOSAL_STATUSES = ("accepted_new", "accepted_alias")
 
 
+def requirement_type_rank_sql(column_expr: str) -> str:
+    """Lower is stronger — required > preferred > contextual > (missing).
+    Shared by resolve_occurrences_for_concept's cross-occurrence dedup below
+    and extraction.py's occurrence upsert, so "which occurrence wins" means
+    the same thing in both places rather than two independently-maintained
+    rankings drifting apart."""
+    return (
+        f"CASE {column_expr} "
+        "WHEN 'required' THEN 0 WHEN 'preferred' THEN 1 WHEN 'contextual' THEN 2 ELSE 3 END"
+    )
+
+
 def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_concept_id: str) -> dict:
     """Called immediately after concept_proposal rows (`proposal_ids`) resolve
     to `resolved_concept_id`. For every role that ever produced one of these
@@ -341,17 +353,24 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
     One claim per role even when several occurrences of this same resolved
     concept exist for it (e.g. two clustered surface forms both extracted
     from the same posting) — migration 0020's unique index allows at most
-    one current claim per (role, concept) regardless."""
+    one current claim per (role, concept) regardless. Collapsed
+    deterministically by requirement_type strength (required > preferred >
+    contextual > missing), not by which occurrence happens to be oldest: a
+    role that hit the same concept once as merely "contextual" and again as
+    "required" must build its claim from the stronger, more informative
+    reading, whichever occurrence was created first. Ties (including two
+    occurrences with the same strength) fall back to earliest `created_at`
+    as a stable tiebreak."""
     if not proposal_ids:
         return {"claims_created": 0, "already_covered": 0, "needs_reextraction": 0}
     cur.execute(
-        """
+        f"""
         SELECT DISTINCT ON (o.role_instance_id)
                o.role_instance_id, o.document_id, o.extraction_run_id,
                o.requirement_type, o.basis, o.evidence_span
         FROM jobber.concept_proposal_occurrence o
         WHERE o.concept_proposal_id = ANY(%s::uuid[])
-        ORDER BY o.role_instance_id, o.created_at
+        ORDER BY o.role_instance_id, {requirement_type_rank_sql("o.requirement_type")}, o.created_at
         """,
         (proposal_ids,),
     )
