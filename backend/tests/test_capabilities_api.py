@@ -1,5 +1,10 @@
 """Capability catalogue CRUD + component_of edge API (brief §5/§6/§27)."""
 
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+
 from app import db
 
 
@@ -250,3 +255,113 @@ def test_merge_capability_rejects_self_merge_and_missing_target(client):
 
     bad_target = client.post(f"/api/capabilities/{cap['id']}/merge", json={"merge_into_id": "00000000-0000-0000-0000-000000000000"})
     assert bad_target.status_code == 400
+
+
+# Vocabulary concepts exist independently of their assessment specification.
+
+
+def _vocabulary_capability(name="Capital Modelling", status="active", type_code="capability"):
+    with db.db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobber.concept (canonical_name, definition, type_code, status, origin) "
+            "VALUES (%s, 'Existing Vocabulary definition', %s, %s, 'curator') RETURNING id",
+            (name, type_code, status),
+        )
+        return str(cur.fetchone()["id"])
+
+
+def test_discover_only_active_unconfigured_capabilities(client):
+    pending = _vocabulary_capability()
+    for status in ("proposed", "deprecated", "merged", "rejected"):
+        _vocabulary_capability(status, status=status)
+    _vocabulary_capability("Tool", type_code="tool")
+    client.post("/api/capabilities", json={"canonical_name": "Configured", "demonstration_standard": "x"})
+    rows = client.get("/api/capabilities/unconfigured").json()
+    assert [r["id"] for r in rows] == [pending]
+    assert "min_depth" not in rows[0]
+    assert client.get("/api/capabilities/unconfigured?q=capital").json() == rows
+    assert client.get("/api/capabilities/unconfigured?q=missing").json() == []
+    assert all(r["capability_concept_id"] != pending for r in client.get("/api/capabilities/coverage").json())
+
+
+def test_configure_preserves_vocabulary_identity_and_components(client):
+    cap_id = _vocabulary_capability()
+    with db.db_cursor() as cur:
+        cur.execute("INSERT INTO jobber.concept_alias (concept_id, alias, origin) VALUES (%s, 'Capital models', 'curator')", (cap_id,))
+        tool = _tool_concept(cur, "Capital tool")
+        edge = _proposed_edge(cur, tool, cap_id)
+        cur.execute("SELECT * FROM jobber.concept ORDER BY id")
+        concepts = cur.fetchall()
+        cur.execute("SELECT * FROM jobber.concept_alias")
+        aliases = cur.fetchall()
+        cur.execute("SELECT * FROM jobber.concept_edge")
+        edges = cur.fetchall()
+    spec = dict(demonstration_standard="Own a capital modelling cycle", min_depth="owned",
+                min_autonomy="independent", requires_all_core=False, min_core_required=1,
+                economic_salience="high", notes="Curated specification")
+    response = client.post(f"/api/capabilities/{cap_id}/configure", json=spec)
+    assert response.status_code == 200
+    assert response.json()["id"] == cap_id
+    assert client.get("/api/capabilities/unconfigured").json() == []
+    assert [r["id"] for r in client.get("/api/capabilities").json()] == [cap_id]
+    detail = client.get(f"/api/capabilities/{cap_id}").json()
+    assert all(detail[k] == v for k, v in spec.items())
+    assert detail["components_proposed"]["core"][0]["edge_id"] == edge
+    assert detail["components"]["core"] == []
+    assert detail["coverage"]["status"] == "not_found"
+    assert client.post(f"/api/capabilities/{cap_id}/configure", json={**spec, "notes": "overwrite"}).status_code == 409
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.concept ORDER BY id")
+        assert cur.fetchall() == concepts
+        cur.execute("SELECT * FROM jobber.concept_alias")
+        assert cur.fetchall() == aliases
+        cur.execute("SELECT * FROM jobber.concept_edge")
+        assert cur.fetchall() == edges
+        cur.execute("SELECT notes FROM jobber.capability_detail WHERE concept_id = %s", (cap_id,))
+        assert cur.fetchall() == [{"notes": spec["notes"]}]
+    assert client.post(f"/api/capabilities/{cap_id}/components/{edge}/review", json={"action": "accept"}).status_code == 200
+    assert len(client.get(f"/api/capabilities/{cap_id}/components").json()["core"]) == 1
+
+
+@pytest.mark.parametrize("status,type_code", [("active", "tool"), ("deprecated", "capability"), ("proposed", "capability"), ("merged", "capability")])
+def test_configure_rejects_ineligible_concept(client, status, type_code):
+    cap_id = _vocabulary_capability(status=status, type_code=type_code)
+    assert client.post(f"/api/capabilities/{cap_id}/configure", json={"demonstration_standard": "x"}).status_code == 400
+    with db.db_cursor() as cur:
+        cur.execute("SELECT * FROM jobber.capability_detail")
+        assert cur.fetchall() == []
+
+
+def test_configure_missing_and_invalid_id(client):
+    for cap_id, code in [(str(uuid.uuid4()), 404), ("bad-id", 422)]:
+        assert client.post(f"/api/capabilities/{cap_id}/configure", json={"demonstration_standard": "x"}).status_code == code
+
+
+@pytest.mark.parametrize("fields", [{"demonstration_standard": " "}, {"min_depth": "expert"}, {"min_autonomy": "boss"}, {"economic_salience": "extreme"}, {"min_core_required": -1}, {"canonical_name": "Replacement"}])
+def test_configure_rejects_invalid_specification(client, fields):
+    cap_id = _vocabulary_capability()
+    assert client.post(f"/api/capabilities/{cap_id}/configure", json={"demonstration_standard": "x", **fields}).status_code == 422
+
+
+def test_concurrent_configuration_creates_one_detail(client):
+    cap_id = _vocabulary_capability()
+    def configure(_):
+        return client.post(f"/api/capabilities/{cap_id}/configure", json={"demonstration_standard": "x"}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(configure, range(2))) == [200, 409]
+    with db.db_cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM jobber.capability_detail WHERE concept_id = %s", (cap_id,))
+        assert cur.fetchone()["n"] == 1
+
+
+def test_clear_optional_specification_fields(client):
+    cap_id = _vocabulary_capability()
+    assert client.post(f"/api/capabilities/{cap_id}/configure", json={
+        "demonstration_standard": "Own a cycle", "min_autonomy": "independent",
+        "economic_salience": "high", "notes": "old", "min_core_required": 2,
+    }).status_code == 200
+    fields = {"min_autonomy": None, "economic_salience": None, "notes": None, "min_core_required": None}
+    assert client.put(f"/api/capabilities/{cap_id}", json=fields).status_code == 200
+    detail = client.get(f"/api/capabilities/{cap_id}").json()
+    assert all(detail[k] is None for k in fields)
+    assert detail["demonstration_standard"] == "Own a cycle"

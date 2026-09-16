@@ -882,6 +882,9 @@ export type CapabilityInput = {
   status?: string
 }
 
+export type CapabilitySpecificationInput = Omit<CapabilityInput, 'canonical_name' | 'definition' | 'status'>
+export type UnconfiguredCapability = Pick<CapabilitySummary, 'id' | 'canonical_name' | 'definition' | 'status' | 'origin' | 'created_at' | 'reviewed_at'>
+
 export type RebuildSummary = {
   engine_version: string
   capability_coverage: { computed: number; removed_stale: number; engine_version: string }
@@ -1962,6 +1965,10 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : ''
     return req<CapabilitySummary[]>(`/capabilities${suffix}`)
   },
+  listUnconfiguredCapabilities: (q?: string) =>
+    req<UnconfiguredCapability[]>(`/capabilities/unconfigured${q ? `?${new URLSearchParams({ q })}` : ''}`),
+  configureCapability: (id: string, payload: CapabilitySpecificationInput) =>
+    req<{ id: string; status: string }>(`/capabilities/${id}/configure`, { method: 'POST', body: JSON.stringify(payload) }),
   listCapabilityCoverage: () => req<CapabilityCoverage[]>('/capabilities/coverage'),
   createCapability: (payload: CapabilityInput) =>
     req<{ id: string; status: string }>('/capabilities', { method: 'POST', body: JSON.stringify(payload) }),
