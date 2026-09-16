@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type RoleSkill, type TeamSizeEstimate } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
+import { RoleEconomicsSection } from '../components/economics/RoleEconomicsSection'
 
 // Shared chip rendering for both the reviewed-requirements and legacy-skills
 // sections below — same look, so the *labelling of the section itself* is
@@ -312,13 +313,15 @@ export default function RoleDetail() {
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     if (!id) return
     api
       .getRole(id)
       .then(setRole)
       .catch((e) => setError(String(e)))
   }, [id])
+
+  useEffect(reload, [reload])
 
   if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
   if (!role) return <p className="muted">Loading…</p>
@@ -398,18 +401,22 @@ export default function RoleDetail() {
 
       <ExtractionQualityNotice role={role} />
 
+      {/* Build §14: compensation with its basis, the personal comparison,
+          the reviewed archetype and the Pathways entry point. This replaces
+          the old bare "Salary" card, which showed the legacy salary_min/max
+          columns with no indication of where the numbers came from — the
+          resolver behind this section still reads those columns as its
+          lowest-precedence tier, clearly labelled as a legacy estimate. */}
+      <RoleEconomicsSection
+        roleId={role.id}
+        isTarget={isTarget}
+        hasSourceDocument={Boolean(role.url || role.source_document_text || role.description)}
+        archetype={role.archetype}
+        onArchetypeChanged={reload}
+      />
+
       {!isTarget && (
         <div className="form-grid" style={{ marginTop: 16 }}>
-          <div className="card">
-            <h3 style={{ marginTop: 0, fontSize: 14 }}>Salary</h3>
-            {role.salary_min || role.salary_max ? (
-              <p>
-                {role.salary_min ?? '?'} – {role.salary_max ?? '?'} {role.currency ?? ''}
-              </p>
-            ) : (
-              <p className="muted">Not stated</p>
-            )}
-          </div>
           <div className="card">
             <h3 style={{ marginTop: 0, fontSize: 14 }}>Dates</h3>
             <p className="secondary">

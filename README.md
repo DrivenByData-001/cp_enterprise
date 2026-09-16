@@ -1,6 +1,8 @@
 # Career Navigator
 
-The latest workflow improvements are described in [Career workflow improvements](docs/27-career-workflow-improvements.md): guided posting import, form-based target creation, consistent concept filters, evidence-based intermediate roles, and actionable comparison.
+The newest surface is **Pathways** — see [Economic pathways, compensation and archetype context](docs/30-economic-pathways.md): your current or latest-known earnings from accepted profile360 evidence, what a target and each useful intermediate archetype would pay (always with the basis the figure came from), the structural gaps between you and them, and the market option value of closing each gap. Route depth in this version is deliberately limited to direct plus one intermediate archetype.
+
+The preceding workflow improvements are described in [Career workflow improvements](docs/27-career-workflow-improvements.md): guided posting import, form-based target creation, consistent concept filters, evidence-based intermediate roles, and actionable comparison.
 
 A personal career navigation tool. Treats the job market as a multidimensional
 space: your career narrative and captured job postings are embedded into the
@@ -131,6 +133,25 @@ kept for reproducibility.
   stated; a gap-value ranking is a counterfactual about structural
   opportunity, never a claim that you've acquired the capability. See
   `docs/24-phase4-economics-and-vocabulary-overview.md`.
+- **Your pay and the market's pay are different things, combined only at
+  read time.** Personal compensation lives in `profile360`, read-only from
+  here; role/market compensation lives in `jobber`. Nothing copies one into
+  the other. A day rate is never silently annualised, currencies are never
+  converted, PAYE and contracting are never merged, and a bonus never stands
+  in for base pay. Every displayed figure names its basis — advert salary,
+  market estimate, legacy estimate, or insufficient evidence — and those four
+  are never blurred together. See `docs/30-economic-pathways.md`.
+- **Pathways composes; it does not predict.** It reuses the capability
+  engine, the stepping-stone analysis, reviewed archetypes, `d_archetype_comp`
+  and `d_gap_value` without adding a new score, and makes no AI call at all.
+  Where target review, target mapping, candidate review, compensation or
+  archetype assignment is incomplete it returns an explicit state instead of
+  a confident number. Nothing estimates learning duration, hiring probability
+  or transition time; the UI says so. See `docs/30-economic-pathways.md` §8.
+- **Compensation never moves anything in the 3D Role map.** Space stays
+  semantically driven by embeddings and PCA — salary is not in the embedding
+  text, never repositions a node, and is not required for a role to appear.
+  Financial navigation belongs in Pathways. See `docs/30-economic-pathways.md` §13.
 - **Market analytics uses every accepted market observation, not just
   archetype-linked ones.** The Market Data tab's Market Summary section
   (PQE/experience progression, same-context practice and base-vs-total-
@@ -318,13 +339,29 @@ editing, and the `concept_dossier` table.
 `docs/24-phase4-economics-and-vocabulary-overview.md` covers Phase 4's five
 new tables (`market`, `compensation_observation`, `d_archetype_demand`,
 `d_archetype_comp`, `d_gap_value`) and the Accepted Vocabulary overview.
+`docs/30-economic-pathways.md` covers migration 0023's additions
+(`planning_assumption`, `archetype_context_enrichment`, `d_pathways`, the
+`economics` revision counter, `compensation_observation.evidence_span`, and
+two optional human planning columns on `development_action`), the
+compensation resolver's precedence, Pathways' methodology and its
+one-intermediate-hop limitation, and which old JSON fields were deliberately
+not revived.
 
 ## Deliberately out of scope for now
 
-- Personal salary-history tracking — deferred until profile360 exposes a
-  structured compensation source; "current benchmark" in the Economics
-  page means the best reference among structurally reachable roles, never
-  your actual salary. See `docs/24-phase4-economics-and-vocabulary-overview.md` §2.
+- Multi-step career routes — Pathways v1 searches exactly two shapes
+  (direct, and via one intermediate archetype). Chained archetype sequences
+  and any general N-hop optimiser are deliberately out of scope: each extra
+  hop compounds structural uncertainty without adding evidence. See
+  `docs/30-economic-pathways.md` §8.
+- Learning duration, hiring probability and transition-time estimates —
+  Pathways reports blocking/unverified gaps, evidence coverage and the user's
+  own planning entries, and names each of these absent quantities explicitly
+  rather than filling them in. See `docs/30-economic-pathways.md` §10.
+- Currency conversion and cross-basis pay comparison — no FX rate exists
+  anywhere in this codebase, and PAYE/contract figures are only ever compared
+  through a planning equivalent the user has explicitly stated. See
+  `docs/30-economic-pathways.md` §3/§6.
 - Multi-period (year-over-year) compensation comparison — Phase 4 v1
   computes one rolling "to date" snapshot per bucket. See docs/24 §10.
 - Prerequisite/adjacent/substitutable capability graphs, transition-effort/

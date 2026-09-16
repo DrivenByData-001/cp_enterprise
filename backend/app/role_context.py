@@ -65,11 +65,90 @@ def _safe_task_metadata() -> tuple[str, str]:
     return model, version
 
 
-def _build_input_text(role: dict) -> str:
+def _archetype_context_grounding(cur, role: dict) -> dict | None:
+    """Secondary grounding for a role that has a *reviewed* archetype with an
+    active context enrichment (build §11).
+
+    Read-only and entirely optional: a role with no archetype, or an
+    archetype with no generated context, gets `None` and generation proceeds
+    exactly as it did before — this can never turn a working generation into
+    a failing one. Only the archetype's own generic characteristics are
+    passed through (the grounded/inferred summaries and its caveats), never
+    another posting's specifics."""
+    archetype_id = role.get("archetype_concept_id")
+    if not archetype_id:
+        return None
+    cur.execute(
+        "SELECT ace.grounding_summary, ace.caveats, ace.day_in_life, ace.typical_week, "
+        "       ace.team_context, ace.manager_context, ace.stakeholder_context, ace.career_progression, "
+        "       c.canonical_name AS archetype_name "
+        "FROM jobber.archetype_context_enrichment ace "
+        "JOIN jobber.concept c ON c.id = ace.archetype_concept_id "
+        "WHERE ace.archetype_concept_id = %s AND ace.status = 'active'",
+        (str(archetype_id),),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _render_archetype_grounding(grounding: dict) -> str:
+    """The archetype block appended to the prompt, explicitly framed as
+    *generic* and explicitly subordinate to the role's own detail (build
+    §11: "explicit target details override generic archetype context")."""
+    lines = [
+        "",
+        "---",
+        "",
+        f"GENERIC ARCHETYPE CONTEXT — SECONDARY GROUNDING ONLY ({grounding['archetype_name']}).",
+        "",
+        "This describes what this KIND of role is typically like across several postings. It is background,",
+        "not evidence about the specific role above. Where the role's own material says something different,",
+        "the role's own material wins — always. Never restate an archetype characteristic as if this specific",
+        "role stated it: anything you take from this block is `inferred`, never `advert_grounded`. Use it to",
+        "fill gaps the role's own material leaves open, and say nothing from it that the role contradicts.",
+    ]
+    summary = grounding.get("grounding_summary") or {}
+    for label, key in (("Typical, evidence-grounded across the archetype", "advert_grounded_points"),
+                       ("Typical, inferred across the archetype", "inferred_points")):
+        points = summary.get(key) or []
+        if points:
+            lines.append("")
+            lines.append(f"{label}:")
+            lines.extend(f"- {p}" for p in points[:10])
+
+    for label, items, text_key in (
+        ("Typical day shape", grounding.get("day_in_life") or [], "activity"),
+        ("Typical week shape", grounding.get("typical_week") or [], "activity"),
+        ("Typical career progression", grounding.get("career_progression") or [], "step"),
+    ):
+        if items:
+            lines.append("")
+            lines.append(f"{label} for this archetype:")
+            lines.extend(f"- {i.get(text_key)}" for i in items[:8] if i.get(text_key))
+
+    stakeholders = (grounding.get("stakeholder_context") or {}).get("stakeholders") or []
+    if stakeholders:
+        lines.append("")
+        lines.append("Typical stakeholders for this archetype:")
+        lines.extend(f"- {s.get('text')}" for s in stakeholders[:8] if s.get("text"))
+
+    if grounding.get("caveats"):
+        lines.append("")
+        lines.append(f"Archetype context caveats: {grounding['caveats']}")
+    return "\n".join(lines)
+
+
+def _build_input_text(role: dict, archetype_grounding: dict | None = None) -> str:
     """Role evidence only (brief §6.7) — title, organisation, location,
     seniority, description/requirements/responsibilities or the captured
     source text fallback, known skills, and (for a target) existing
-    typical_tasks. Never touches profile360."""
+    typical_tasks. Never touches profile360.
+
+    Since build §11, a role with a reviewed archetype may additionally carry
+    that archetype's context as clearly-labelled *secondary* grounding,
+    appended after the role's own material by
+    `_render_archetype_grounding` — still never profile360, and still never
+    allowed to outrank what the role itself says."""
     lines = [f"Title: {role.get('title') or 'Unknown'}"]
     for label, key in (
         ("Organisation", "organisation"), ("Location", "location"), ("Country", "country"),
@@ -103,7 +182,10 @@ def _build_input_text(role: dict) -> str:
     if role.get("node_type") != "posting" and role.get("typical_tasks"):
         body.append("Typical tasks (existing target data):\n" + "\n".join(f"- {t}" for t in role["typical_tasks"]))
 
-    return "\n".join(lines) + "\n\n" + "\n\n".join(body)
+    text = "\n".join(lines) + "\n\n" + "\n\n".join(body)
+    if archetype_grounding is not None:
+        text += "\n" + _render_archetype_grounding(archetype_grounding)
+    return text
 
 
 def _active_row(cur, role_instance_id: str) -> dict | None:
@@ -144,11 +226,32 @@ def _serialize(row: dict) -> dict:
 def get_role_context(cur, role_instance_id: str) -> dict:
     """Read-only (brief §6.6/§7: "The GET endpoint must not trigger
     generation") — never calls the AI provider, never writes anything."""
-    cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_instance_id,))
-    if not cur.fetchone():
+    cur.execute(
+        "SELECT ri.id, ri.archetype_concept_id, c.canonical_name AS archetype_name "
+        "FROM jobber.role_instance ri LEFT JOIN jobber.concept c ON c.id = ri.archetype_concept_id "
+        "WHERE ri.id = %s",
+        (role_instance_id,),
+    )
+    role = cur.fetchone()
+    if not role:
         raise RoleContextSubjectError(f"role_instance {role_instance_id!r} not found")
     active = _active_row(cur, role_instance_id)
-    return {"role_instance_id": role_instance_id, "enrichment": _serialize(active) if active else None}
+    grounding = _archetype_context_grounding(cur, dict(role))
+    return {
+        "role_instance_id": role_instance_id,
+        "enrichment": _serialize(active) if active else None,
+        # Build §11: lets the UI say "this will also draw on the <X>
+        # archetype's context" before the user clicks Generate, and explain
+        # afterwards what the generation was allowed to see.
+        "archetype_grounding": (
+            {
+                "archetype_concept_id": str(role["archetype_concept_id"]),
+                "archetype_name": role["archetype_name"],
+                "available": grounding is not None,
+            }
+            if role["archetype_concept_id"] else None
+        ),
+    }
 
 
 def _persist(
@@ -238,12 +341,17 @@ def generate_role_context(role_instance_id: str, *, force: bool = False) -> dict
         if role is None:
             raise RoleContextSubjectError(f"role_instance {role_instance_id!r} not found")
         existing = _active_row(cur, role_instance_id)
+        # Build §11: a reviewed archetype's context becomes secondary
+        # grounding when one exists. Read here, alongside the role's own
+        # evidence and before any AI call, so generation stays a single
+        # read-then-call-then-write pass.
+        archetype_grounding = _archetype_context_grounding(cur, role)
 
     if existing is not None and not force:
         return {"created": False, "enrichment": _serialize(existing)}
 
     source_document_id = role.pop("_source_document_id", None)
-    input_text = _build_input_text(role)
+    input_text = _build_input_text(role, archetype_grounding)
     fingerprint = hashlib.sha256(input_text.encode("utf-8")).hexdigest()
     model, pversion = _safe_task_metadata()
     started_at = datetime.now(timezone.utc)

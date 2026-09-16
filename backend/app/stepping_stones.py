@@ -87,14 +87,23 @@ def assess_candidate(requirements, target_requirements, status_by_concept, pendi
     }
 
 
-def path_to_target(cur, target_id, target_vec, profile_vec):
-    started = perf_counter()
-    evidence_revision, path_revision = revisions(cur, target_vec, profile_vec)
-    cur.execute("SELECT result FROM jobber.d_target_path WHERE role_id = %s AND revision = %s", (target_id, path_revision))
-    cached = cur.fetchone()
-    if cached:
-        return measured(dict(cached["result"]), started, True, 0)
-    cur.execute("SELECT id, title, organisation, career_track, posting_date FROM jobber.role_instance "
+def assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revision):
+    """Every observed posting assessed against one target, with the shared
+    bulk loads done once: requirement evidence and review summaries for the
+    target plus every candidate in two queries, embeddings in one, and each
+    distinct concept's evidence status evaluated at most once per request
+    (cached across requests by revision in `jobber.d_target_evidence`).
+
+    Extracted from `path_to_target` so Pathways (app/pathways.py) can group
+    the *full* ranked list by reviewed archetype without either duplicating
+    this loading or re-deriving fit per candidate — `path_to_target` still
+    slices its own top 5 out of the same list. Returns the ranked candidates
+    plus the shared artefacts a caller needs to interpret them (target
+    requirement mapping, per-concept evidence statuses, the target's own
+    pending-review count) rather than only the ranking, so nothing
+    downstream has to re-query for them."""
+    cur.execute("SELECT id, title, organisation, career_track, posting_date, archetype_concept_id "
+                "FROM jobber.role_instance "
                 "WHERE instance_type = 'observed_posting' AND id != %s", (target_id,))
     candidates = cur.fetchall()
     ids = [str(c["id"]) for c in candidates]
@@ -129,18 +138,37 @@ def path_to_target(cur, target_id, target_vec, profile_vec):
         if not mapping["complete"]:
             assessment.update(assessment="incomplete_target_mapping", ranking_score=0,
                               explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.")
-        ranked.append({**dict(c), "id": key, **assessment,
-                       "similarity_to_target": cosine_similarity(target_vec, vector),
-                       "similarity_to_profile": cosine_similarity(profile_vec, vector) if profile_vec else None})
+        candidate = {**dict(c), "id": key, **assessment,
+                     "similarity_to_target": cosine_similarity(target_vec, vector),
+                     "similarity_to_profile": cosine_similarity(profile_vec, vector) if profile_vec else None}
+        candidate["archetype_concept_id"] = str(c["archetype_concept_id"]) if c["archetype_concept_id"] else None
+        ranked.append(candidate)
     ranked.sort(key=lambda r: (
         r["assessment"] != "potential_step", -r["ranking_score"],
         len(r["missing_required"]), len(r["unverified_required"]),
         -(r["similarity_to_profile"] or 0), -(r["similarity_to_target"] or 0), r["id"],
     ))
+    return {
+        "ranked": ranked, "target_mapping": mapping, "statuses": statuses,
+        "target_requirements": requirements.get(target_id, []),
+        "target_pending_requirements": target_pending, "distinct_concepts": len(concepts),
+        "concepts_evaluated": evaluated,
+    }
+
+
+def path_to_target(cur, target_id, target_vec, profile_vec):
+    started = perf_counter()
+    evidence_revision, path_revision = revisions(cur, target_vec, profile_vec)
+    cur.execute("SELECT result FROM jobber.d_target_path WHERE role_id = %s AND revision = %s", (target_id, path_revision))
+    cached = cur.fetchone()
+    if cached:
+        return measured(dict(cached["result"]), started, True, 0)
+    assessed = assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revision)
+    ranked, evaluated = assessed["ranked"], assessed["concepts_evaluated"]
     result = {
         "profile_to_target_similarity": cosine_similarity(profile_vec, target_vec) if profile_vec else None,
         "stepping_stones": ranked[:5], "candidates_assessed": len(ranked),
-        "target_mapping": mapping, "distinct_concepts": len(concepts),
+        "target_mapping": assessed["target_mapping"], "distinct_concepts": assessed["distinct_concepts"],
         "method": "Evidence coverage balanced with coverage of target evidence gaps; similarity breaks ties. "
                   "A role involving a gap is an opportunity to develop it, not proof you will acquire it. "
                   "Historical postings describe role patterns, not confirmed vacancies.",

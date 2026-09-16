@@ -67,6 +67,11 @@ export type TargetRequirementMapping = { name: string; concept_id: string | null
 export type DevelopmentAction = {
   id: string; concept_id: string; role_instance_id: string; title: string; note: string
   due_date: string | null; status: 'open' | 'done'
+  // Human planning fields (build §9). Recorded by the user, never derived,
+  // and never evidence of a capability — completing an action changes no
+  // capability status anywhere.
+  planned_start_date?: string | null
+  estimated_effort_hours?: number | null
 }
 
 // The authoritative ok/partial signal (docs/18 §5) for a role produced by
@@ -134,6 +139,12 @@ export type Role = {
   // show a "Requirements review pending" indicator without a second
   // round-trip. Always present for a role that went through build_role_view.
   requirement_review?: RequirementReviewSummary
+  // Reviewed archetype assignment (build §5/§14). Carried on the role view
+  // itself so Role Detail never needs a second round-trip just to know
+  // whether the role is classified. Compensation is deliberately NOT here:
+  // it has its own endpoint, so a list view reusing this projection never
+  // pays for benchmark resolution it will not show.
+  archetype?: RoleArchetypeSummary
 }
 
 // --- Day-in-the-Life / Role Context enrichment ------------------------------
@@ -1716,11 +1727,486 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// --- Economic pathways, compensation and archetype context ------------------
+//
+// Every compensation figure in this app carries a `basis` saying where it
+// came from, and the four bases are never merged or relabelled into each
+// other. `insufficient_evidence` is a real, expected answer — not an error
+// and not a reason to show a zero.
+
+export type CompensationBasis =
+  | 'advert_stated'
+  | 'market_estimate'
+  | 'legacy_estimate'
+  | 'insufficient_evidence'
+
+export type EvidenceQuality = 'insufficient' | 'thin' | 'moderate' | 'good'
+
+export type ResolvedCompensation = {
+  basis: CompensationBasis
+  basis_label: string
+  currency: string | null
+  amount_min: number | null
+  amount_reference: number | null
+  amount_max: number | null
+  component: string | null
+  pay_period: string | null
+  employment_basis: string | null
+  market: { id: string; label: string; code?: string } | null
+  period: { start: string; end: string } | null
+  as_of: string | null
+  archetype: { id: string; name: string } | null
+  evidence: {
+    n_observations: number
+    n_posting_stated: number
+    n_posting_estimated?: number
+    n_survey_sources: number
+  }
+  reference_source: string | null
+  evidence_quality: EvidenceQuality
+  reason: string
+  trace: Record<string, unknown>
+}
+
+export type PlanningEquivalent = {
+  amount: number
+  currency: string
+  unit: 'annual'
+  basis: 'planning_equivalent'
+  assumption: { billable_days_per_year: number; day_rate: number; note: string | null }
+  label: string
+  caveat: string
+}
+
+export type EarningsBaseline = {
+  observation_id: string
+  episode_id: string | null
+  source_kind: string
+  employment_basis: string | null
+  employment_basis_equivalent: string | null
+  component: string
+  amount: number
+  currency: string | null
+  unit: string | null
+  quantity: number | null
+  effective_from: string | null
+  period_start: string | null
+  period_end: string | null
+  pay_date: string | null
+  evidence_period: string | null
+  evidence_status: 'current' | 'historical'
+  notes: string | null
+  uncertainty: string | null
+  planning_equivalent: PlanningEquivalent | null
+  label: string
+  other_evidence_in_group: {
+    observation_id: string
+    component: string
+    amount: number
+    unit: string | null
+    evidence_status: string
+    evidence_period: string | null
+  }[]
+  group: { currency: string | null; employment_basis: string | null }
+}
+
+export type PlanningAssumption = {
+  contract_billable_days_per_year: number | null
+  note: string | null
+  updated_at: string | null
+}
+
+export type PersonalEarningsState = {
+  status: 'current' | 'historical' | 'unavailable' | 'profile360_unavailable'
+  as_of: string
+  baselines: EarningsBaseline[]
+  other_components: Omit<EarningsBaseline, 'planning_equivalent' | 'label' | 'other_evidence_in_group' | 'group'>[]
+  currencies: string[]
+  planning_assumption: PlanningAssumption
+  notes: string[]
+  fingerprint: string
+}
+
+export type PersonalComparison = {
+  comparable: boolean
+  reason: string | null
+  baseline: {
+    observation_id: string
+    component: string
+    amount: number
+    source_amount: number
+    currency: string | null
+    unit: string | null
+    employment_basis: string | null
+    evidence_status: string
+    evidence_period: string | null
+    label: string
+    planning_equivalent: PlanningEquivalent | null
+  } | null
+  uses_planning_equivalent: boolean
+  difference_min: number | null
+  difference_reference: number | null
+  difference_max: number | null
+  opportunity?: {
+    basis: CompensationBasis
+    basis_label: string
+    currency: string | null
+    amount_min: number | null
+    amount_reference: number | null
+    amount_max: number | null
+  }
+  limitations?: string[]
+}
+
+export type RoleCompensationObservation = {
+  id: string
+  basis: string
+  review_status: string
+  component: string
+  pay_period: string
+  employment_basis: string | null
+  currency: string
+  amount_min: number | null
+  amount_mid: number | null
+  amount_max: number | null
+  evidence_span: string | null
+  observed_at: string | null
+  source_note: string | null
+  market_id: string | null
+  market_label: string | null
+  created_at: string
+  reviewed_at: string | null
+}
+
+export type RoleCompensationResponse = {
+  role_instance_id: string
+  compensation: ResolvedCompensation
+  personal_comparison: PersonalComparison
+  personal_earnings: PersonalEarningsState
+  observations: RoleCompensationObservation[]
+}
+
+export type CompensationProposalItem = {
+  amount_min: number | null
+  amount_max: number | null
+  currency: string | null
+  component: string | null
+  pay_period: string | null
+  employment_basis: string | null
+  evidence_span: string | null
+  note: string | null
+  // The server's own verdict on this item, computed with the same rules
+  // acceptance re-applies — so the review screen never offers an Accept the
+  // server will then refuse.
+  acceptable: boolean
+  problems: string[]
+}
+
+export type CompensationProposalResult = {
+  status: 'ok'
+  extraction_run_id: string
+  error: string | null
+  error_type: string | null
+  document_id: string
+  provenance_quality: string
+  proposal: {
+    items: CompensationProposalItem[]
+    no_compensation_stated: boolean
+    notes: string | null
+  }
+}
+
+export type CompensationAcceptInput = {
+  amount_min: number | null
+  amount_max: number | null
+  currency: string
+  component: string
+  pay_period: string
+  employment_basis?: string | null
+  evidence_span: string
+  note?: string | null
+}
+
+export type RoleArchetypeSummary = {
+  assigned: boolean
+  archetype_concept_id: string | null
+  archetype_name: string | null
+  archetype_status?: string
+  seniority_band: string | null
+  typical_market: string | null
+  catalogue_size: number
+  state: 'unclassified' | 'assigned' | 'assigned_to_deprecated_archetype'
+}
+
+export type ArchetypeCatalogueEntry = {
+  id: string
+  canonical_name: string
+  seniority_band: string | null
+  typical_market: string | null
+  notes: string | null
+}
+
+export type ArchetypeProposalResult = {
+  status: 'ok'
+  extraction_run_id: string
+  error: string | null
+  error_type: string | null
+  proposal: {
+    matched: boolean
+    archetype_concept_id: string | null
+    archetype_name: string | null
+    raw_suggestion: string | null
+    confidence: string | null
+    rationale: string | null
+    alternatives: { id: string; canonical_name: string }[]
+    catalogue_size: number
+    note: string | null
+  }
+}
+
+export type ArchetypeContextEnrichment = {
+  id: string
+  archetype_concept_id: string
+  status: 'active' | 'superseded'
+  generated_at: string
+  generator_version: string
+  model: string
+  source_fingerprint: string | null
+  grounding_provenance: {
+    posting_ids: string[]
+    postings_used_in_prompt: number
+    postings_total: number
+    requirement_counts: Record<string, number>
+    demand_capability_ids: string[]
+    role_context_ids: string[]
+    reads_profile360: false
+  }
+  day_in_life: DayInLifeItem[]
+  typical_week: TypicalWeekItem[]
+  team_context: TeamContext
+  manager_context: ManagerContext
+  stakeholder_context: { stakeholders: GroundedNote[] }
+  career_progression: CareerStep[]
+  grounding_summary: GroundingSummary
+  caveats: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ArchetypeContextResponse = {
+  archetype_concept_id: string
+  archetype_name: string
+  enrichment: ArchetypeContextEnrichment | null
+  synthesis_note: string
+}
+
+export type ArchetypeContextGenerateResult = { created: boolean; enrichment: ArchetypeContextEnrichment }
+
+export type MarketContext = {
+  market_id: string
+  market_label: string
+  market_code: string
+  currency: string
+  accepted_observations: number
+}
+
+export type PathwayTransition = {
+  blocking_required_gaps: number
+  blocking_required_gap_names: string[]
+  unverified_required_gaps: number
+  unverified_required_gap_names: string[]
+  evidence_coverage: number | null
+  evidenced_requirements: number | null
+  requirements_total: number | null
+  target_gaps_addressed: string[]
+  development_actions: {
+    open: number
+    done: number
+    earliest_planned_start: string | null
+    estimated_effort_hours: number | null
+    actions_with_estimated_effort: number
+  }
+  not_estimated: string[]
+}
+
+export type DirectRoute = {
+  kind: 'direct'
+  role_instance_id: string
+  title: string
+  organisation: string | null
+  archetype: { id: string; name: string } | null
+  state:
+    | 'structurally_evidenced'
+    | 'blocking_gaps'
+    | 'unverified_gaps'
+    | 'review_incomplete'
+    | 'mapping_incomplete'
+    | 'insufficient_evidence'
+    | 'no_required_requirements'
+  state_reason: string
+  fit: {
+    evidenced_requirements: number
+    requirements_total: number
+    evidence_coverage: number | null
+    blocking_required_gaps: string[]
+    unverified_required_gaps: string[]
+    review_complete: boolean
+    unreviewed_requirement_claims: number
+    mapping_complete: boolean
+    unmapped_requirements: number
+  }
+  compensation: ResolvedCompensation
+  personal_comparison: PersonalComparison
+  transition: PathwayTransition
+}
+
+export type SupportingPosting = {
+  id: string
+  title: string
+  organisation: string | null
+  posting_date: string | null
+  career_track: string | null
+  assessment: string
+  explanation: string
+  evidenced_requirements: number
+  requirements_total: number
+  evidence_coverage: number | null
+  target_gaps_addressed: string[]
+  missing_required: string[]
+  unverified_required: string[]
+  pending_requirements: number
+  similarity_to_target: number | null
+  similarity_to_profile: number | null
+}
+
+export type IntermediateArchetypeRoute = {
+  kind: 'intermediate_archetype'
+  archetype_concept_id: string
+  archetype_name: string
+  seniority_band: string | null
+  typical_market: string | null
+  state: 'useful_intermediate' | 'route_without_compensation' | 'no_target_progress'
+  state_reason: string
+  supporting_posting_ids: string[]
+  supporting_posting_count: number
+  supporting_postings: SupportingPosting[]
+  fit: {
+    best_evidence_coverage: number | null
+    blocking_required_gaps: string[]
+    unverified_required_gaps: string[]
+    unreviewed_requirement_claims: number
+    review_complete: boolean
+  }
+  target_gaps_addressed: string[]
+  compensation: ResolvedCompensation
+  personal_comparison: PersonalComparison
+  transition: PathwayTransition
+  day_in_the_life_available: boolean
+  evidence_quality: EvidenceQuality
+}
+
+export type GapValueItem = {
+  concept_id: string
+  canonical_name: string
+  type_code: string
+  evidence_status: string | null
+  target_relevance: {
+    required_by_target: boolean
+    requirement_type: string | null
+    addresses_target_gaps: number
+    current_evidence_status: string | null
+    intermediate_archetypes_involving_it: { archetype_concept_id: string; archetype_name: string }[]
+  }
+  market_option_value:
+    | { available: false; reason: string }
+    | {
+        available: true
+        archetypes_unlocked: number
+        archetypes_improved: number
+        roles_unlocked: number
+        roles_improved: number
+        highest_qualifying_reference_compensation: number | null
+        currency: string
+        delta_vs_best_currently_reachable: number | null
+        n_compensation_observations: number
+        rank: number | null
+        as_of: string | null
+        scope_note: string
+      }
+  your_context: PersonalComparison | { comparable: false; reason: string }
+  evidence_quality: EvidenceQuality
+}
+
+export type PathwaysGates = {
+  target_requirements_reviewed: boolean
+  target_mapping_complete: boolean
+  target_has_requirements: boolean
+  target_archetype_assigned: boolean
+  compensation_context_available: boolean
+  target_compensation_available: boolean
+  personal_earnings_available: boolean
+  candidate_review_complete: boolean
+}
+
+export type PathwaysResult = {
+  target: {
+    id: string
+    title: string
+    organisation: string | null
+    instance_type: string
+    archetype: { id: string; name: string; status: string } | null
+  }
+  market_context: {
+    market_id: string | null
+    market_label: string | null
+    market_code: string | null
+    currency: string | null
+    selected_by: 'explicit' | 'target_archetype_benchmark' | 'most_evidenced_context' | 'none_available'
+  }
+  available_market_contexts: MarketContext[]
+  personal_earnings: PersonalEarningsState
+  direct_route: DirectRoute
+  intermediate_archetypes: IntermediateArchetypeRoute[]
+  unclassified_supporting_postings: {
+    id: string
+    title: string
+    organisation: string | null
+    target_gaps_addressed: string[]
+  }[]
+  gap_value: GapValueItem[]
+  gates: PathwaysGates
+  incomplete: string[]
+  candidates_assessed: number
+  distinct_concepts: number
+  method: {
+    route_depth: string
+    route_depth_limitation: string
+    intermediate_basis: string
+    ranking: string
+    compensation: string
+    not_a_prediction: string
+  }
+  metrics: {
+    cache_hit: boolean
+    candidates: number
+    archetypes_assessed: number
+    distinct_concepts: number
+    concepts_evaluated: number
+    elapsed_ms: number
+  }
+}
+
 export const api = {
   previewTarget: (payload: { title: string; organisation?: string | null; is_imagined: boolean; description: string; supporting_material: string }) =>
     req<{ status: 'ok' | 'failed'; proposal: TargetDraft | null; error: string | null; extraction_run_id: string }>('/targets/preview', { method: 'POST', body: JSON.stringify(payload) }),
   listDevelopmentActions: (roleId: string) => req<DevelopmentAction[]>(`/comparison/role/${roleId}/actions`),
-  createDevelopmentAction: (roleId: string, payload: { concept_id: string; title: string; note: string; due_date: string | null }) =>
+  createDevelopmentAction: (
+    roleId: string,
+    payload: {
+      concept_id: string; title: string; note: string; due_date: string | null
+      planned_start_date?: string | null; estimated_effort_hours?: number | null
+    },
+  ) =>
     req<DevelopmentAction>(`/comparison/role/${roleId}/actions`, { method: 'POST', body: JSON.stringify(payload) }),
   updateDevelopmentAction: (roleId: string, actionId: string, status: 'open' | 'done') =>
     req<DevelopmentAction>(`/comparison/role/${roleId}/actions/${actionId}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
@@ -1759,6 +2245,59 @@ export const api = {
     return req<RoleListResponse>(`/roles${suffix}`)
   },
   getRole: (id: string) => req<Role>(`/roles/${id}`),
+
+  // --- Economic pathways, compensation and archetype review ----------------
+  //
+  // Every call below is an explicit user action. The GETs never trigger AI
+  // generation; the two `propose` POSTs are the only ones that call a model,
+  // and neither of them writes anything — they return a proposal for review.
+  getRoleCompensation: (id: string, params: { market_id?: string; currency?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.market_id) qs.set('market_id', params.market_id)
+    if (params.currency) qs.set('currency', params.currency)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<RoleCompensationResponse>(`/role-instances/${id}/compensation${suffix}`)
+  },
+  proposeRoleCompensation: (id: string) =>
+    req<CompensationProposalResult>(`/role-instances/${id}/compensation/propose`, { method: 'POST' }),
+  acceptRoleCompensation: (id: string, payload: CompensationAcceptInput) =>
+    req<{ id: string; created: boolean; status: string; market_unassigned_reason: string | null }>(
+      `/role-instances/${id}/compensation/accept`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  getRoleArchetype: (id: string) => req<RoleArchetypeSummary>(`/role-instances/${id}/archetype`),
+  getArchetypeCatalogue: () => req<ArchetypeCatalogueEntry[]>('/role-instances/archetype-catalogue'),
+  proposeRoleArchetype: (id: string) =>
+    req<ArchetypeProposalResult>(`/role-instances/${id}/archetype/propose`, { method: 'POST' }),
+  setRoleArchetype: (id: string, archetype_concept_id: string | null) =>
+    req<{ role_instance_id: string; archetype_concept_id: string | null; archetype_name: string | null; status: string }>(
+      `/role-instances/${id}/archetype`,
+      { method: 'PUT', body: JSON.stringify({ archetype_concept_id }) },
+    ),
+  getArchetypeContext: (id: string) => req<ArchetypeContextResponse>(`/archetypes/${id}/context`),
+  generateArchetypeContext: (id: string) =>
+    req<ArchetypeContextGenerateResult>(`/archetypes/${id}/context/generate`, { method: 'POST' }),
+  regenerateArchetypeContext: (id: string) =>
+    req<ArchetypeContextGenerateResult>(`/archetypes/${id}/context/regenerate`, { method: 'POST' }),
+  getArchetypeCompensation: (id: string, params: { market_id?: string; currency?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.market_id) qs.set('market_id', params.market_id)
+    if (params.currency) qs.set('currency', params.currency)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<ResolvedCompensation>(`/archetypes/${id}/compensation${suffix}`)
+  },
+  getPathways: (targetId: string, params: { market_id?: string; currency?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.market_id) qs.set('market_id', params.market_id)
+    if (params.currency) qs.set('currency', params.currency)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<PathwaysResult>(`/pathways/${targetId}${suffix}`)
+  },
+  getPathwaysMarketContexts: () => req<MarketContext[]>('/pathways/market-contexts'),
+  getPersonalEarnings: () => req<PersonalEarningsState>('/pathways/personal-earnings'),
+  getPlanningAssumptions: () => req<PlanningAssumption>('/pathways/planning-assumptions'),
+  savePlanningAssumptions: (payload: { contract_billable_days_per_year: number | null; note?: string | null }) =>
+    req<PlanningAssumption>('/pathways/planning-assumptions', { method: 'PUT', body: JSON.stringify(payload) }),
   getRoleContext: (id: string) => req<RoleContextResponse>(`/roles/${id}/context`),
   generateRoleContext: (id: string) => req<RoleContextGenerateResult>(`/roles/${id}/context/generate`, { method: 'POST' }),
   regenerateRoleContext: (id: string) => req<RoleContextGenerateResult>(`/roles/${id}/context/regenerate`, { method: 'POST' }),

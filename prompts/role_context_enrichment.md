@@ -116,3 +116,19 @@ Role evidence follows below (title, organisation, location, seniority,
 description/requirements/responsibilities or captured source text, known
 skills, and — for a target role — typical tasks). Use only this material as
 your grounding source; anything else is inference.
+
+If — and only if — a section headed `GENERIC ARCHETYPE CONTEXT — SECONDARY
+GROUNDING ONLY` follows the role evidence, it describes what this *kind* of
+role is typically like across several postings. Treat it strictly as
+background:
+
+- The role's own material always wins. Where the two disagree, follow the
+  role's own material and ignore the archetype's version.
+- Anything you take from the archetype block is `inferred`, never
+  `advert_grounded` — the archetype did not state it about this role.
+- Use it to fill gaps the role's own material leaves open, not to pad the
+  answer with generic characteristics the role gives you no reason to
+  expect.
+- Keep the distinction visible: in `grounding_summary`, a point drawn from
+  the archetype belongs in `inferred_points`, phrased as typical for this
+  kind of role rather than as something this role says.

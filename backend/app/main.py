@@ -10,6 +10,7 @@ from . import config
 from .auth import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, require_auth
 from .db import reset_pool, run_migrations
 from .routes import (
+    archetype_context,
     archetypes,
     auth as auth_routes,
     capabilities,
@@ -22,10 +23,12 @@ from .routes import (
     evaluation,
     import_routes,
     market_data,
+    pathways,
     preferences,
     profile,
     profile360,
     role_context,
+    role_economics,
     role_instances,
     roles,
     space,
@@ -121,8 +124,11 @@ app.include_router(documents.router, dependencies=_protected)
 app.include_router(trends.router, dependencies=_protected)
 app.include_router(vocabulary.router, dependencies=_protected)
 app.include_router(archetypes.router, dependencies=_protected)
+app.include_router(archetype_context.router, dependencies=_protected)
 app.include_router(economics.router, dependencies=_protected)
 app.include_router(market_data.router, dependencies=_protected)
+app.include_router(role_economics.router, dependencies=_protected)
+app.include_router(pathways.router, dependencies=_protected)
 
 
 @app.get("/api/health")
