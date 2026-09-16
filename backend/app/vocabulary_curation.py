@@ -13,9 +13,13 @@ calculated efficiently"):
   `role_skill_observation`/`role_instance` tables in Python — the same
   pattern `routes/concepts.py::_group_proposals` already used for live
   occurrence counts, just extended to carry the fuller evidence this brief
-  asks for. At this corpus's scale (~1,525 proposals, ~4,700 unresolved
-  observations) this is comfortably sub-100ms; no caching, no materialised
-  view, no new index — see docs/19 for why none of those are justified yet.
+  asks for. `concept_proposal_occurrence` (migration 0021) joins in the same
+  way for source-aware roles, whose evidence role_skill_observation alone
+  can't see (that pipeline never writes one) — see
+  `build_pending_cluster_index`'s own docstring. At this corpus's scale
+  (~1,525 proposals, ~4,700 unresolved observations) this is comfortably
+  sub-100ms; no caching, no materialised view, no new index — see docs/19
+  for why none of those are justified yet.
 - **The browser never sees the whole queue.** `list_clusters` computes the
   full ranked/filtered set server-side and returns one page; the frontend
   only ever holds `limit` rows at a time (brief §3).
@@ -37,6 +41,7 @@ from fastapi import HTTPException
 import psycopg
 
 from .concept_linking import normalize_name
+from .role_requirements import resolve_occurrences_for_concept
 from .vocabulary_priority import (
     BAND_HIGH,
     ClusterSignals,
@@ -77,6 +82,16 @@ def resolve_surface_form_group(
     `reject_cluster`/`merge_cluster`. For a cluster with more than one
     member, exactly one concept is ever created/chosen — every *other*
     member surface form becomes an alias of it.
+
+    An `accept_new`/`accept_alias` resolution also closes the gap that would
+    otherwise leave every role that ever produced one of these proposals with
+    a requirement analysis silently never learns about (see
+    `role_requirements.resolve_occurrences_for_concept`, called below): the
+    proposal stops being "unresolved", but nothing else here created a
+    requirement_claim for it, so without that call the extracted requirement
+    would simply vanish from analysis instead of becoming a fresh unreviewed
+    claim awaiting the same human review any other extracted requirement
+    gets.
 
     Returns (status, resolved_concept_id). Raises HTTPException on the same
     conditions the original endpoint did (404 no pending proposals, 400 bad
@@ -161,6 +176,20 @@ def resolve_surface_form_group(
                     (resolved_concept_id, matching_ids),
                 )
 
+    if resolved_concept_id is not None:
+        # A pending concept_proposal's own document_id/evidence_span only
+        # ever remember the first role that hit it (§ role_requirements.py);
+        # a source-aware role's extracted-but-unresolved requirement would
+        # otherwise vanish from analysis the moment this resolution makes it
+        # stop counting as "unresolved" — resolving the *vocabulary term* is
+        # not the same decision as accepting it as *this role's* requirement,
+        # so this only ever proposes an unreviewed claim per role, never an
+        # accepted one. One call across every surface form in this
+        # resolution (not per surface_form, inside the loop above) so a role
+        # that produced more than one clustered surface form for the same
+        # concept still gets exactly one claim.
+        resolve_occurrences_for_concept(cur, all_proposal_ids, str(resolved_concept_id))
+
     return new_status, (str(resolved_concept_id) if resolved_concept_id is not None else None)
 
 
@@ -208,11 +237,42 @@ def _signals_for(ev: ClusterEvidence, current_year: int) -> ClusterSignals:
     )
 
 
+def _accumulate_role_evidence(ev: ClusterEvidence, *, role_id: str, posting_date, country, seniority_level, career_track, title, example_limit: int) -> None:
+    """One role's contribution to a cluster's evidence — shared by both
+    sources below (role_skill_observation and concept_proposal_occurrence)
+    so a role counts identically regardless of which pipeline captured it."""
+    ev.role_ids.add(role_id)
+    ev.observation_count += 1
+    if posting_date is not None:
+        ev.years.add(posting_date.year)
+        ev.first_observed = posting_date if ev.first_observed is None else min(ev.first_observed, posting_date)
+        ev.last_observed = posting_date if ev.last_observed is None else max(ev.last_observed, posting_date)
+    if country:
+        ev.countries.add(country)
+    if seniority_level:
+        ev.seniority_levels.add(seniority_level)
+    if career_track:
+        ev.career_tracks.add(career_track)
+    if role_id not in ev.example_roles and len(ev.example_roles) < example_limit:
+        ev.example_roles[role_id] = title
+
+
 def build_pending_cluster_index(cur, *, example_limit: int = LIST_EXAMPLE_ROLE_LIMIT) -> dict[str, ClusterEvidence]:
-    """The full pending-cluster evidence map, keyed by cluster_key. Two
-    queries, both over already-indexed/small tables (~1,525 pending
+    """The full pending-cluster evidence map, keyed by cluster_key. Three
+    queries, all over already-indexed/small tables (~1,525 pending
     proposals, ~4,700 unresolved observations in production) — see module
-    docstring for why this is computed live rather than persisted."""
+    docstring for why this is computed live rather than persisted.
+
+    Role/year/country/seniority/example evidence comes from *two* sources,
+    not one: legacy role_skill_observation (matched by normalized surface
+    form text, the only link it has) and concept_proposal_occurrence
+    (migration 0021, matched directly by concept_proposal_id — a role
+    captured via source-aware ingest + extract-requirements always has an
+    *empty* role_skill_observation, docs/29 §1, so without this second
+    source every cluster made up entirely of source-aware occurrences would
+    show zero role_count/examples/countries/seniority despite having real
+    evidence, undermining the priority score and evidence flags this
+    evidence otherwise drives (vocabulary_priority.py)."""
     cur.execute(
         """
         SELECT id, surface_form, cluster_key, suggested_type, nearest_concept_id, nearest_similarity
@@ -223,6 +283,7 @@ def build_pending_cluster_index(cur, *, example_limit: int = LIST_EXAMPLE_ROLE_L
     )
     evidence: dict[str, ClusterEvidence] = {}
     surface_form_to_cluster: dict[str, str] = {}
+    proposal_id_to_cluster: dict[str, str] = {}
     for row in cur.fetchall():
         key = row["cluster_key"] or row["surface_form"]
         ev = evidence.setdefault(key, ClusterEvidence(cluster_key=key))
@@ -234,6 +295,7 @@ def build_pending_cluster_index(cur, *, example_limit: int = LIST_EXAMPLE_ROLE_L
             ev.nearest_concept_id = str(row["nearest_concept_id"])
             ev.nearest_similarity = row["nearest_similarity"]
         surface_form_to_cluster[row["surface_form"]] = key
+        proposal_id_to_cluster[str(row["id"])] = key
 
     # Most-recent-first so the capped example_roles list is "recent postings
     # that used this term" rather than an arbitrary/incidental row order.
@@ -257,22 +319,35 @@ def build_pending_cluster_index(cur, *, example_limit: int = LIST_EXAMPLE_ROLE_L
             # cluster evidence yet, same tolerance `_group_proposals` (the
             # legacy queue) already has for live-count mismatches.
             continue
-        role_id = str(row["role_instance_id"])
-        ev.role_ids.add(role_id)
-        ev.observation_count += 1
-        posting_date = row["posting_date"]
-        if posting_date is not None:
-            ev.years.add(posting_date.year)
-            ev.first_observed = posting_date if ev.first_observed is None else min(ev.first_observed, posting_date)
-            ev.last_observed = posting_date if ev.last_observed is None else max(ev.last_observed, posting_date)
-        if row["country"]:
-            ev.countries.add(row["country"])
-        if row["seniority_level"]:
-            ev.seniority_levels.add(row["seniority_level"])
-        if row["career_track"]:
-            ev.career_tracks.add(row["career_track"])
-        if role_id not in ev.example_roles and len(ev.example_roles) < example_limit:
-            ev.example_roles[role_id] = row["title"]
+        _accumulate_role_evidence(
+            ev, role_id=str(row["role_instance_id"]), posting_date=row["posting_date"], country=row["country"],
+            seniority_level=row["seniority_level"], career_track=row["career_track"], title=row["title"],
+            example_limit=example_limit,
+        )
+
+    # Source-aware extraction's counterpart to the query above — joined
+    # directly on concept_proposal_id rather than surface-form text, since
+    # the occurrence already carries the exact link.
+    cur.execute(
+        """
+        SELECT o.concept_proposal_id, o.role_instance_id,
+               ri.posting_date, ri.country, ri.seniority_level, ri.career_track, ri.title
+        FROM jobber.concept_proposal_occurrence o
+        JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id AND cp.status = 'pending'
+        JOIN jobber.role_instance ri ON ri.id = o.role_instance_id
+        ORDER BY ri.posting_date DESC NULLS LAST, o.role_instance_id
+        """
+    )
+    for row in cur.fetchall():
+        key = proposal_id_to_cluster.get(str(row["concept_proposal_id"]))
+        ev = evidence.get(key) if key else None
+        if ev is None:
+            continue
+        _accumulate_role_evidence(
+            ev, role_id=str(row["role_instance_id"]), posting_date=row["posting_date"], country=row["country"],
+            seniority_level=row["seniority_level"], career_track=row["career_track"], title=row["title"],
+            example_limit=example_limit,
+        )
 
     return evidence
 
@@ -765,15 +840,21 @@ def _deterministic_split_keys(cur, *, cluster_key: str, groups: list[list[str]])
 
 
 def _group_evidence_map(cur, groups: list[list[str]]) -> list[dict]:
-    """role_count/observation_count for each proposed group, in one query
-    over the (small, already-fetched-elsewhere-at-this-scale) unresolved
-    role_skill_observation set — same live-aggregation posture as
-    build_pending_cluster_index (docs/19 §1), just bucketed by proposed group
-    membership instead of by persisted cluster_key, since these groups don't
-    exist as a persisted cluster_key yet at preview time."""
+    """role_count/observation_count for each proposed group, over both
+    unresolved-evidence sources (role_skill_observation and, for
+    source-aware roles, concept_proposal_occurrence — same reason
+    build_pending_cluster_index reads both, docs/19 §1) — bucketed by
+    proposed group membership instead of by persisted cluster_key, since
+    these groups don't exist as a persisted cluster_key yet at preview
+    time."""
     cur.execute("SELECT surface_form, role_instance_id FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
-    rows = cur.fetchall()
-    normalized_rows = [(normalize_name(r["surface_form"]), str(r["role_instance_id"])) for r in rows]
+    normalized_rows = [(normalize_name(r["surface_form"]), str(r["role_instance_id"])) for r in cur.fetchall()]
+
+    cur.execute(
+        "SELECT cp.surface_form, o.role_instance_id FROM jobber.concept_proposal_occurrence o "
+        "JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id AND cp.status = 'pending'"
+    )
+    normalized_rows += [(normalize_name(r["surface_form"]), str(r["role_instance_id"])) for r in cur.fetchall()]
 
     result = []
     for group in groups:

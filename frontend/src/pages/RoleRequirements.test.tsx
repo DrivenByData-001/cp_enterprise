@@ -23,7 +23,7 @@ function claim(overrides: Partial<RequirementClaim> = {}): RequirementClaim {
 }
 
 function reviewSummary(overrides: Partial<RequirementReviewSummary> = {}): RequirementReviewSummary {
-  return { accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, complete: true, ...overrides }
+  return { accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, needs_reextraction: 0, complete: true, ...overrides }
 }
 
 function renderPage(roleId = 'role-1') {

@@ -536,7 +536,7 @@ def test_default_listing_excludes_superseded_history_but_history_flag_shows_it(c
     assert default_ids == {new_id}  # the superseded original is not a duplicate current card
     assert default["review_summary"] == {
         "accepted": 1, "unreviewed": 0, "rejected": 0,
-        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+        "unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0, "complete": True,
     }
 
     history = client.get(f"/api/role-instances/{role_id}/requirements", params={"history": "true"}).json()

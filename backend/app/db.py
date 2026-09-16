@@ -483,81 +483,84 @@ def upsert_role_instance(cur, role_id: str | None, columns: dict, skills: list[d
     return role_id
 
 
-def role_skills_with_fallback(cur, role_instance_id: str) -> list[dict]:
-    """Skills evidence for one role, preferring `role_skill_observation` (the
-    JobPostingImport-shaped pipeline every historical role and every
-    /api/import* path uses) and falling back to `requirement_claim` (the
-    source-aware ingest + extract-requirements pipeline,
-    routes/role_instances.py) only when the first is completely empty.
+def role_skills_display(cur, role_instance_id: str) -> dict:
+    """Skills/requirements evidence for one role, split into two clearly
+    separate lists rather than one merged one — Role Detail's own consumer of
+    the same requirement_claim/role_skill_observation duality
+    `role_requirements.py` solves for analysis, but with a different job: a
+    *display* must never let a stale or unreviewed legacy signal outrank (or
+    silently substitute for) a human-reviewed decision, and must never hide
+    that a shown item was never reviewed at all.
 
-    This is the 2026 Role Detail regression fix (docs/21): a role captured
-    via the second pipeline never gets role_skill_observation rows at all —
-    its evidence lives in requirement_claim instead — so without this
-    fallback, both `GET /api/roles/{id}` and Day-in-the-Life generation would
-    see empty skills for such a role despite real captured evidence existing.
-    Never merges the two sources: a role with real role_skill_observation
-    evidence always uses that alone, unchanged.
+    - `"skills"`: exactly `role_requirements.load_role_requirements`'s
+      *claim*-sourced items (never its own role_skill_observation-fallback
+      items — see below for why those move to `legacy_skills` instead). This
+      is the same accepted-current-claim authority analysis already uses, so
+      a grading (required -> preferred, same concept) or a remap (Python ->
+      SQL) shows up here exactly as accepted, never as whatever a stale
+      `role_skill_observation` row still says — that row is either superseded
+      display-wise (the concept now has a reviewed claim) or, if remapped
+      away, excluded by `vetoed_concept_ids` below like any other curator
+      rejection.
+    - `"legacy_skills"`: every role_skill_observation NOT already represented
+      in `"skills"` (by resolved_concept_id) and not vetoed. A pre-curation-
+      gate role with no claim history at all therefore shows *everything*
+      here, clearly labelled as legacy/unreviewed rather than mixed into a
+      list implying human review — a real change from this function's
+      previous "observations flow straight into the one skills list"
+      behaviour, and the point of this fix: legacy extraction is real
+      evidence worth showing, but showing it as if it had been reviewed
+      overstated it.
 
-    The requirement_claim branch below is filtered to *current, accepted*
-    claims only (`superseded_by IS NULL AND review_status = 'accepted'`) —
-    the same curation-gate rule `role_requirements.py` enforces for
-    analytical consumers. A role captured via source-aware ingest always has
-    empty role_skill_observation (its skills=[] at ingest time), so this
-    branch is the *only* skills source such a role has: showing an
-    unreviewed AI proposal here as if it were an established "skill" would
-    be exactly the silent-authority problem the curation gate exists to
-    prevent, right on the page carrying the "Requirements review pending"
-    indicator that says otherwise. Superseded/corrected history is excluded
-    the same way the Requirements review list excludes it, so a correction
-    never shows as a duplicate skill alongside its replacement.
+    Never merged at the item level — a concept with a current accepted claim
+    never also appears (stale) in `legacy_skills`, and `vetoed_concept_ids`
+    (rejected, or corrected away with nothing current left behind — see that
+    function's own docstring) is applied to `legacy_skills` for the same
+    reason `role_requirements.py`'s own fallback branch applies it: curator
+    authority must never be contradicted by a legacy chip that read the
+    rejection/remap never happened."""
+    # Lazy import: keeps db.py free of a module-load-time dependency on
+    # role_requirements.py (same reasoning as concept_linking elsewhere in
+    # this module).
+    from .role_requirements import load_role_requirements, vetoed_concept_ids
 
-    The role_skill_observation branch also respects curator authority, even
-    though it is the *preferred* branch and does not otherwise consult
-    requirement_claim at all: a concept the curator has explicitly rejected
-    or corrected away via a claim on this same role (`role_requirements.
-    vetoed_concept_ids` — the same veto `role_requirements.py`'s analytical
-    fallback applies) is excluded here too. Without this, an old
-    role_skill_observation-shaped role could keep showing "Python" as a
-    skill chip after a human explicitly reviewed and rejected Python as a
-    requirement for that role — display would then contradict analysis,
-    which already excludes it."""
+    canonical = load_role_requirements(cur, role_instance_id)
+    skills = [
+        {
+            "name": item["canonical_name"],
+            "category": item["type_code"],
+            "importance": item["importance"],
+            "requirement_type": item["requirement_type"],
+            "resolved_concept_id": item["concept_id"],
+        }
+        for item in canonical
+        if item["source"] == "claim"
+    ]
+    reviewed_concept_ids = {s["resolved_concept_id"] for s in skills}
+    vetoed = vetoed_concept_ids(cur, role_instance_id)
+
     cur.execute(
         "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
-        "FROM jobber.role_skill_observation WHERE role_instance_id = %s",
+        "FROM jobber.role_skill_observation WHERE role_instance_id = %s ORDER BY surface_form",
         (role_instance_id,),
     )
-    skills = [
+    legacy_skills = [
         {**s, "resolved_concept_id": str(s["resolved_concept_id"]) if s["resolved_concept_id"] else None}
         for s in cur.fetchall()
     ]
-    if skills:
-        # Lazy import: same reasoning as concept_linking/role_requirements
-        # elsewhere in this module — keeps db.py free of a module-load-time
-        # dependency on role_requirements.py.
-        from .role_requirements import vetoed_concept_ids
-
-        vetoed = vetoed_concept_ids(cur, role_instance_id)
-        return [s for s in skills if s["resolved_concept_id"] not in vetoed]
-
-    cur.execute(
-        """
-        SELECT c.canonical_name AS name, c.type_code AS category, rc.importance,
-               rc.requirement_type, rc.concept_id AS resolved_concept_id
-        FROM jobber.requirement_claim rc
-        JOIN jobber.concept c ON c.id = rc.concept_id
-        WHERE rc.role_instance_id = %s AND rc.review_status = 'accepted' AND rc.superseded_by IS NULL
-        ORDER BY c.canonical_name
-        """,
-        (role_instance_id,),
-    )
-    return [{**s, "resolved_concept_id": str(s["resolved_concept_id"])} for s in cur.fetchall()]
+    legacy_skills = [
+        s for s in legacy_skills
+        if s["resolved_concept_id"] not in reviewed_concept_ids and s["resolved_concept_id"] not in vetoed
+    ]
+    return {"skills": skills, "legacy_skills": legacy_skills}
 
 
 def build_role_view(cur, role_id: str) -> dict | None:
     """The full role_instance projection `GET /api/roles/{id}` returns, and
     what Day-in-the-Life generation (app/role_context.py) reads its evidence
-    from: the flattened row, plus skills (with the requirement_claim
-    fallback — role_skills_with_fallback), plus `source_document_text` (with
+    from: the flattened row, plus `skills`/`legacy_skills` (role_skills_display
+    — reviewed requirements and legacy extracted skills, kept separate rather
+    than one merged fallback list), plus `source_document_text` (with
     a fallback to the linked document's own verbatim text whenever
     description/requirements/responsibilities are all empty — the other half
     of the 2026 Role Detail regression fix). `_source_document_id` is an
@@ -579,7 +582,9 @@ def build_role_view(cur, role_id: str) -> dict | None:
     role = flatten_role_instance(
         {k: v for k, v in dict(row).items() if k not in ("document_content_text", "document_row_id")}
     )
-    role["skills"] = role_skills_with_fallback(cur, role_id)
+    skills_display = role_skills_display(cur, role_id)
+    role["skills"] = skills_display["skills"]
+    role["legacy_skills"] = skills_display["legacy_skills"]
     role["source_document_text"] = (
         document_content_text
         if document_content_text and not (role.get("description") or role.get("requirements") or role.get("responsibilities"))

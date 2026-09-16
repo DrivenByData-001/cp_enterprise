@@ -414,3 +414,67 @@ def test_migration_0020_preflight_rejects_existing_duplicate_current_claims(clie
         db_module.reset_pool()
         with psycopg.connect(admin_url, autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+
+
+def test_migration_0022_backfill_creates_claims_for_already_resolved_proposals(client):
+    """Migration 0022's backfill only matters for a database where some
+    concept_proposal_occurrence row already carries requirement_type/basis/
+    evidence_span (impossible on a database seeing this migration for the
+    first time — those columns don't exist until it runs) AND its proposal
+    was already resolved before that. Since that combination can't be
+    constructed by replaying earlier migrations, this proves the backfill
+    SQL itself is correct by re-running migration 0022's file text directly
+    against this session's already-fully-migrated test database (`ADD
+    COLUMN IF NOT EXISTS` and the backfill's own `NOT EXISTS` guard make
+    this a safe, idempotent replay) after seeding exactly that scenario by
+    hand."""
+    migrations_dir = db_module.MIGRATIONS_DIR
+    target_path = next(p for p in migrations_dir.glob("*.sql") if p.name.startswith("0022_"))
+
+    with db_module.db_cursor() as cur:
+        document_id, _ = db_module.create_document(
+            cur, kind="job_posting", content_text="Requires Zap Modelling.", provenance_quality="original"
+        )
+        role_id = db_module.upsert_role_instance(
+            cur, None, {"instance_type": "observed_posting", "title": "T", "document_id": document_id}, skills=[]
+        )
+        cur.execute(
+            "INSERT INTO jobber.concept (type_code, canonical_name, status, origin, created_at) "
+            "VALUES ('domain', 'Zap Modelling', 'active', 'curator', now()) RETURNING id"
+        )
+        concept_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal (surface_form, occurrence_count, document_id, status, resolved_concept_id, resolved_at) "
+            "VALUES ('zap modelling', 1, %s, 'accepted_new', %s, now()) RETURNING id",
+            (document_id, concept_id),
+        )
+        proposal_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.concept_proposal_occurrence "
+            "(concept_proposal_id, role_instance_id, document_id, requirement_type, basis, evidence_span) "
+            "VALUES (%s, %s, %s, 'required', 'stated', 'Zap Modelling')",
+            (proposal_id, role_id, document_id),
+        )
+
+        cur.execute(target_path.read_text(encoding="utf-8"))
+
+        cur.execute(
+            "SELECT requirement_type, basis, evidence_span, review_status, document_id "
+            "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        claim = cur.fetchone()
+        assert claim is not None
+        assert claim["requirement_type"] == "required"
+        assert claim["basis"] == "stated"
+        assert claim["evidence_span"] == "Zap Modelling"
+        assert claim["review_status"] == "unreviewed"
+        assert str(claim["document_id"]) == document_id
+
+        # Idempotent replay: running it again must not create a second claim.
+        cur.execute(target_path.read_text(encoding="utf-8"))
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s",
+            (role_id, concept_id),
+        )
+        assert cur.fetchone()["n"] == 1

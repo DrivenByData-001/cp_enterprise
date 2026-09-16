@@ -91,7 +91,12 @@ def _build_input_text(role: dict) -> str:
     if not has_flat_text and role.get("source_document_text"):
         body.append(f"Captured source text (verbatim):\n{role['source_document_text']}")
 
-    skills = role.get("skills") or []
+    # Both reviewed requirements and legacy extracted skills are real
+    # evidence about the role and belong in this prompt's context — the
+    # reviewed/legacy split (db.role_skills_display) exists to keep Role
+    # Detail's *display* honest about what a human has actually reviewed,
+    # not to narrow what this generation step is allowed to read.
+    skills = (role.get("skills") or []) + (role.get("legacy_skills") or [])
     if skills:
         body.append("Known skills/requirements: " + ", ".join(s["name"] for s in skills if s.get("name")))
 

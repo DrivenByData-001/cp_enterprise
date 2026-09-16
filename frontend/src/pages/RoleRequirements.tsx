@@ -444,16 +444,22 @@ export default function RoleRequirements() {
   const [extracting, setExtracting] = useState(false)
   const [lastRun, setLastRun] = useState<ExtractionSummary | null>(null)
   const [addingRequirement, setAddingRequirement] = useState(false)
-  // Unlike accepted/unreviewed/rejected counts, this can't be derived from
-  // `claims` — a surface form extraction couldn't resolve to any concept
-  // becomes a concept_proposal, never a requirement_claim at all, so it
-  // only ever comes from the server's review_summary (refreshed on load and
-  // after every extraction run, the only actions that can change it).
+  // Unlike accepted/unreviewed/rejected counts, these can't be derived from
+  // `claims`. unresolvedProposals: a surface form extraction couldn't
+  // resolve to any concept becomes a concept_proposal, never a
+  // requirement_claim at all. needsReextraction: a proposal this role
+  // contributed to was later accepted/merged in Vocabulary but couldn't be
+  // turned into a claim (not enough occurrence data) and still has no
+  // current claim for that concept. Both only ever come from the server's
+  // review_summary (refreshed on load and after every extraction run, the
+  // only actions that can change either).
   const [unresolvedProposals, setUnresolvedProposals] = useState(0)
+  const [needsReextraction, setNeedsReextraction] = useState(0)
 
   const reload = () => api.listRequirements(roleId).then(res => {
     setClaims(res.items)
     setUnresolvedProposals(res.review_summary.unresolved_proposals)
+    setNeedsReextraction(res.review_summary.needs_reextraction)
   })
 
   useEffect(() => {
@@ -463,6 +469,7 @@ export default function RoleRequirements() {
       if (!current) return
       setClaims(res.items)
       setUnresolvedProposals(res.review_summary.unresolved_proposals)
+      setNeedsReextraction(res.review_summary.needs_reextraction)
     })
       .catch(e => { if (current) setError(String(e)) })
       .finally(() => { if (current) setLoading(false) })
@@ -473,14 +480,15 @@ export default function RoleRequirements() {
   // the review cards render, rather than tracked separately — they can
   // never drift out of sync with what's on screen, and every action already
   // updates `claims` locally. `complete` also requires zero unresolved
-  // vocabulary proposals — those are just as excluded from analysis as an
-  // unreviewed claim, even though they never became a claim to review here.
+  // vocabulary proposals and zero pending re-extraction need — both are
+  // just as excluded from analysis as an unreviewed claim, even though
+  // neither ever became a claim to review here.
   const summary = useMemo(() => {
     const accepted = claims.filter(c => c.review_status === 'accepted').length
     const unreviewed = claims.filter(c => c.review_status === 'unreviewed').length
     const rejected = claims.filter(c => c.review_status === 'rejected').length
-    return { accepted, unreviewed, rejected, complete: unreviewed === 0 && unresolvedProposals === 0 }
-  }, [claims, unresolvedProposals])
+    return { accepted, unreviewed, rejected, complete: unreviewed === 0 && unresolvedProposals === 0 && needsReextraction === 0 }
+  }, [claims, unresolvedProposals, needsReextraction])
 
   const runExtraction = async () => {
     setExtracting(true)
@@ -579,9 +587,16 @@ export default function RoleRequirements() {
           {unresolvedProposals === 1 ? 'is' : 'are'} excluded here too. <Link to="/vocabulary">Review in Vocabulary</Link>.
         </p>
       )}
+      {needsReextraction > 0 && (
+        <p className="secondary">
+          {needsReextraction} extracted term{needsReextraction === 1 ? '' : 's'} {needsReextraction === 1 ? 'was' : 'were'} since added to
+          the vocabulary but {needsReextraction === 1 ? 'has' : 'have'} no requirement claim yet for this role — re-run extraction above to
+          pick {needsReextraction === 1 ? 'it' : 'them'} up.
+        </p>
+      )}
       {!summary.complete && (
         <p role="alert" style={{ color: 'var(--warning)' }}>
-          Requirement review is incomplete — {summary.unreviewed + unresolvedProposals} pending item{summary.unreviewed + unresolvedProposals === 1 ? '' : 's'} excluded
+          Requirement review is incomplete — {summary.unreviewed + unresolvedProposals + needsReextraction} pending item{summary.unreviewed + unresolvedProposals + needsReextraction === 1 ? '' : 's'} excluded
           from comparison and analysis until reviewed.
         </p>
       )}

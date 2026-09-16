@@ -105,7 +105,14 @@ export type Role = {
   extraction_notes: string | null
   extraction_quality?: ExtractionQuality | null
   similarity: number | null
+  // Reviewed requirements only (claim-sourced — role_requirements.
+  // load_role_requirements's claim items) — never a stale/unreviewed legacy
+  // signal. `legacy_skills` below is every role_skill_observation not
+  // already covered by one of these and not curator-rejected; shown
+  // separately so a human never mistakes unreviewed legacy extraction for a
+  // reviewed decision.
   skills?: RoleSkill[]
+  legacy_skills?: RoleSkill[]
   // 2026 Role Detail regression fallback (docs/21): populated only when
   // description/requirements/responsibilities are all empty AND a linked
   // document has real captured text — the source-aware ingest pipeline
@@ -688,6 +695,12 @@ export type RequirementReviewSummary = {
   // — distinguishes "never extracted" from "reviewed and complete" even
   // though both currently have zero current claims.
   extraction_attempted: boolean
+  // Count of distinct concepts a now-accepted/merged vocabulary proposal
+  // this role contributed to never turned into a requirement_claim for (not
+  // enough occurrence data to build one faithfully) and that still has no
+  // current claim from any other route. Drops to 0 once one does — most
+  // commonly by running requirement extraction again for this role.
+  needs_reextraction: number
   complete: boolean
 }
 

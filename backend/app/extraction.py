@@ -370,13 +370,22 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
             proposal_id = cur.fetchone()["id"]
             proposals_created += 1
 
+        # requirement_type/basis/span (migration 0022) preserve *this* item's
+        # own shape, not concept_proposal's shared/global columns above — if
+        # the term's vocabulary proposal is later accepted, role_requirements.
+        # resolve_occurrences_for_concept needs this to create a faithful
+        # requirement_claim for this role without inventing anything: a claim
+        # cannot exist without a requirement_type, so an occurrence with none
+        # correctly leaves that role's review incomplete (needs
+        # re-extraction) rather than guessing one at resolution time.
         cur.execute(
             """
-            INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id, role_instance_id, document_id, extraction_run_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO jobber.concept_proposal_occurrence
+                (concept_proposal_id, role_instance_id, document_id, extraction_run_id, requirement_type, basis, evidence_span)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (concept_proposal_id, role_instance_id) DO NOTHING
             """,
-            (proposal_id, role_instance_id, document["id"], main_run_id),
+            (proposal_id, role_instance_id, document["id"], main_run_id, requirement_type, basis, span),
         )
 
     return {

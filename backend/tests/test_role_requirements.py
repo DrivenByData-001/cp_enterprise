@@ -2,8 +2,9 @@
 curation gate (unreviewed AI claims are visible proposals only — never
 analytically authoritative). Runs `app.role_requirements` directly against
 the real Postgres test database, plus integration checks through
-`capability_engine.derive_role_fit` and `db.role_skills_with_fallback`
-(Role Detail's own, separately-precedenced consumer of the same table)."""
+`capability_engine.derive_role_fit` and `db.role_skills_display` (Role
+Detail's own consumer of the same evidence, split into reviewed-requirements
+and legacy-skills lists rather than a single merged/fallback one)."""
 
 import uuid
 
@@ -384,7 +385,7 @@ def test_accepted_claims_used_alone_when_unreviewed_claims_also_exist(client):
     assert items[0]["concept_id"] == accepted_concept_id
     assert summary == {
         "accepted": 1, "unreviewed": 1, "rejected": 0,
-        "unresolved_proposals": 0, "extraction_attempted": False, "complete": False,
+        "unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0, "complete": False,
     }
 
 
@@ -401,7 +402,7 @@ def test_review_summary_counts_current_claims_by_status(client):
         summary = load_requirement_review_summary(cur, role_id)
     assert summary == {
         "accepted": 2, "unreviewed": 1, "rejected": 1,
-        "unresolved_proposals": 0, "extraction_attempted": False, "complete": False,
+        "unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0, "complete": False,
     }
 
 
@@ -424,7 +425,7 @@ def test_review_summary_vacuously_complete_for_a_role_with_no_claims(client):
         summary = load_requirement_review_summary(cur, role_id)
     assert summary == {
         "accepted": 0, "unreviewed": 0, "rejected": 0,
-        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+        "unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0, "complete": True,
     }
 
 
@@ -539,7 +540,7 @@ def test_review_summary_excludes_superseded_and_corrected_history(client):
         summary = load_requirement_review_summary(cur, role_id)
     assert summary == {
         "accepted": 1, "unreviewed": 0, "rejected": 0,
-        "unresolved_proposals": 0, "extraction_attempted": False, "complete": True,
+        "unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0, "complete": True,
     }
 
 
@@ -558,15 +559,17 @@ def test_review_summary_bulk_handles_multiple_roles_and_empty_input(client):
     assert summary[role_b]["complete"] is True
 
 
-# --- db.role_skills_with_fallback: Role Detail's own consumer ---------------
+# --- db.role_skills_display: Role Detail's own consumer ---------------------
 #
-# Opposite precedence from the canonical loader above (prefers
-# role_skill_observation, falls back to requirement_claim only when that's
-# completely empty — db.py's own docstring explains why), but the same
-# curation-gate rule applies within its requirement_claim branch: only
-# accepted, current claims are ever shown as a role's "skills".
+# Two clearly separate lists rather than one fallback-merged list: "skills"
+# is exactly the canonical loader's claim-sourced items (never its own
+# role_skill_observation-fallback items), so a reviewed decision always shows
+# fresh, current data. "legacy_skills" is every role_skill_observation not
+# already covered by one of those and not curator-vetoed — a pre-curation-
+# gate role with no claim history shows *everything* there, honestly
+# labelled as legacy/unreviewed rather than mixed into a reviewed list.
 
-def test_role_skills_with_fallback_shows_only_accepted_current_claims(client):
+def test_role_skills_display_reviewed_shows_only_accepted_current_claims(client):
     with db.db_cursor() as cur:
         role_id = _role(cur)
         accepted_id = _concept(cur, "Python")
@@ -574,11 +577,12 @@ def test_role_skills_with_fallback_shows_only_accepted_current_claims(client):
         _claim_requirement(cur, role_id, _concept(cur, "SQL"), review_status="unreviewed")
         _claim_requirement(cur, role_id, _concept(cur, "Rust"), review_status="rejected")
 
-        skills = db.role_skills_with_fallback(cur, role_id)
-    assert [s["resolved_concept_id"] for s in skills] == [accepted_id]
+        display = db.role_skills_display(cur, role_id)
+    assert [s["resolved_concept_id"] for s in display["skills"]] == [accepted_id]
+    assert display["legacy_skills"] == []
 
 
-def test_role_skills_with_fallback_excludes_superseded_history(client):
+def test_role_skills_display_reviewed_excludes_superseded_history(client):
     """A corrected claim's superseded predecessor must not render as a
     duplicate skill alongside its replacement."""
     with db.db_cursor() as cur:
@@ -587,32 +591,90 @@ def test_role_skills_with_fallback_excludes_superseded_history(client):
         old_claim_id = _claim_requirement(cur, role_id, concept_id, review_status="accepted")
         _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id,
                    requirement_type="preferred", old_review_status="corrected")
-        skills = db.role_skills_with_fallback(cur, role_id)
+        skills = db.role_skills_display(cur, role_id)["skills"]
     assert len(skills) == 1
     assert skills[0]["requirement_type"] == "preferred"
 
 
-def test_role_skills_with_fallback_never_touched_when_observations_exist(client):
-    """Unchanged precedence: a role with real role_skill_observation rows
-    uses those alone (never merged with claim-sourced skills), regardless of
-    what requirement_claim holds — an accepted claim for an unrelated
-    concept does not get added alongside the observations."""
+def test_role_skills_display_reviewed_claim_wins_over_legacy_grading(client):
+    """The task-2 scenario, verbatim: legacy Python = required (an old
+    role_skill_observation), a curator grades the reviewed claim down to
+    preferred (same concept — the edit endpoint marks the old claim row
+    'corrected' but leaves a live accepted successor for the same concept).
+    Role Detail must show 'Python · preferred' from the reviewed claim — not
+    the stale 'required' the legacy observation still carries — and must not
+    show Python twice."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        concept_id = _concept(cur, "Python")
+        _observation(cur, role_id, surface_form="Python", canonical_concept_id=concept_id, requirement_type="required")
+        old_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="required", review_status="accepted")
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id,
+                   requirement_type="preferred", old_review_status="corrected")
+
+        display = db.role_skills_display(cur, role_id)
+    assert [(s["resolved_concept_id"], s["requirement_type"]) for s in display["skills"]] == [(concept_id, "preferred")]
+    assert display["legacy_skills"] == []
+
+
+def test_role_skills_display_reviewed_remap_shows_new_concept_not_nothing(client):
+    """The task-2 scenario, verbatim: Python is remapped to SQL (a curator
+    edit that corrects the old Python claim away and creates a new current
+    accepted SQL claim). Role Detail must show the accepted SQL requirement
+    — not silently drop Python and show nothing. A legacy Python observation
+    that also exists must not reappear either (Python is genuinely vetoed:
+    corrected away with nothing current left behind for *that* concept)."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        python_id = _concept(cur, "Python")
+        sql_id = _concept(cur, "SQL")
+        _observation(cur, role_id, surface_form="Python", canonical_concept_id=python_id, requirement_type="required")
+        old_claim_id = _claim_requirement(cur, role_id, python_id, requirement_type="required", review_status="accepted")
+        _supersede(cur, old_claim_id, role_id=role_id, concept_id=sql_id,
+                   requirement_type="required", old_review_status="corrected")
+
+        display = db.role_skills_display(cur, role_id)
+    assert [s["resolved_concept_id"] for s in display["skills"]] == [sql_id]
+    assert display["legacy_skills"] == []
+
+
+def test_role_skills_display_legacy_covers_a_role_with_no_claim_history_at_all(client):
+    """A pre-curation-gate role relying entirely on role_skill_observation
+    (no requirement_claim rows at all) shows *everything* as legacy/
+    unreviewed — never silently presented as if it had been reviewed."""
     with db.db_cursor() as cur:
         role_id = _role(cur)
         obs_concept_id = _concept(cur, "Pricing")
         _observation(cur, role_id, surface_form="Pricing", canonical_concept_id=obs_concept_id, requirement_type="required")
-        _claim_requirement(cur, role_id, _concept(cur, "Python"), review_status="accepted")
 
-        skills = db.role_skills_with_fallback(cur, role_id)
-    assert [s["name"] for s in skills] == ["Pricing"]
+        display = db.role_skills_display(cur, role_id)
+    assert display["skills"] == []
+    assert [s["name"] for s in display["legacy_skills"]] == ["Pricing"]
 
 
-def test_role_skills_with_fallback_still_applies_curator_veto_when_observations_exist(client):
-    """The observation-preferred branch is not exempt from curator authority:
-    a concept a human has explicitly rejected (or corrected away) as a
-    requirement for this role must not keep showing as a "skill" chip just
-    because a legacy role_skill_observation also mentions it — display must
-    not contradict what analysis already excludes."""
+def test_role_skills_display_reviewed_and_legacy_coexist_for_a_mixed_role(client):
+    """A role with *some* reviewed claim history and *other* concepts only
+    ever captured as legacy observations shows both, separated — the
+    reviewed claim never merges with, and the legacy item never masquerades
+    as, the other."""
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        reviewed_id = _concept(cur, "Python")
+        _claim_requirement(cur, role_id, reviewed_id, review_status="accepted")
+        legacy_id = _concept(cur, "Pricing")
+        _observation(cur, role_id, surface_form="Pricing", canonical_concept_id=legacy_id, requirement_type="required")
+
+        display = db.role_skills_display(cur, role_id)
+    assert [s["resolved_concept_id"] for s in display["skills"]] == [reviewed_id]
+    assert [s["resolved_concept_id"] for s in display["legacy_skills"]] == [legacy_id]
+
+
+def test_role_skills_display_legacy_still_applies_curator_veto(client):
+    """The legacy list is not exempt from curator authority: a concept a
+    human has explicitly rejected (or corrected away) as a requirement for
+    this role must not keep showing as a legacy skill chip just because a
+    legacy role_skill_observation also mentions it — display must not
+    contradict what analysis already excludes."""
     with db.db_cursor() as cur:
         role_id = _role(cur)
         rejected_concept_id = _concept(cur, "Python")
@@ -621,11 +683,12 @@ def test_role_skills_with_fallback_still_applies_curator_veto_when_observations_
         _observation(cur, role_id, surface_form="SQL", canonical_concept_id=kept_concept_id, requirement_type="preferred")
         _claim_requirement(cur, role_id, rejected_concept_id, review_status="rejected")
 
-        skills = db.role_skills_with_fallback(cur, role_id)
-    resolved_ids = {s["resolved_concept_id"] for s in skills}
+        display = db.role_skills_display(cur, role_id)
+    resolved_ids = {s["resolved_concept_id"] for s in display["legacy_skills"]}
     assert rejected_concept_id not in resolved_ids
     assert kept_concept_id in resolved_ids
-    assert len(skills) == 1
+    assert len(display["legacy_skills"]) == 1
+    assert display["skills"] == []
 
 
 def test_vetoed_concept_ids_excludes_a_concept_with_a_current_accepted_successor(client):
@@ -647,20 +710,3 @@ def test_vetoed_concept_ids_excludes_a_concept_with_a_current_accepted_successor
         vetoed = vetoed_concept_ids(cur, role_id)
     assert graded_concept_id not in vetoed
     assert rejected_concept_id in vetoed
-
-
-def test_role_skills_with_fallback_does_not_drop_a_concept_graded_not_removed(client):
-    """Same scenario as above, exercised through Role Detail's own consumer:
-    the concept's legacy observation must stay visible rather than vanishing
-    entirely, since there is a live accepted claim for it right now."""
-    with db.db_cursor() as cur:
-        role_id = _role(cur)
-        concept_id = _concept(cur, "Python")
-        _observation(cur, role_id, surface_form="Python", canonical_concept_id=concept_id, requirement_type="required")
-        old_claim_id = _claim_requirement(cur, role_id, concept_id, requirement_type="required", review_status="accepted")
-        _supersede(cur, old_claim_id, role_id=role_id, concept_id=concept_id,
-                   requirement_type="preferred", old_review_status="corrected")
-
-        skills = db.role_skills_with_fallback(cur, role_id)
-    resolved_ids = {s["resolved_concept_id"] for s in skills}
-    assert concept_id in resolved_ids

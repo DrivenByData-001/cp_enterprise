@@ -18,12 +18,13 @@ analysis) read requirement evidence identically rather than duplicating this
 decision.
 
 Semantics (prompt §2, "consistent with the existing Role Detail fallback
-philosophy" — see `db.role_skills_with_fallback`, which solves the same
-two-source problem for display purposes, though with the opposite
-precedence: that function prefers role_skill_observation and falls back to
-requirement_claim only when it is empty. Here the priority is reversed
-because requirement_claim is the more evidence-rich, review-gated, span-
-validated pipeline and should win whenever it has anything usable to say):
+philosophy" — see `db.role_skills_display`, which solves the same two-source
+problem for *display* purposes by reusing this loader's own output directly:
+its claim-sourced items become Role Detail's "reviewed requirements", and
+every role_skill_observation not already covered by one of those (and not
+vetoed) becomes its separately-labelled "legacy skills" — never a stale
+observation outranking, or silently standing in for, a human-reviewed claim
+for the same concept):
 
 1. If a role has *usable* requirement_claim rows — current (`superseded_by
    IS NULL`) and **accepted** (`review_status = 'accepted'`) — those are
@@ -135,16 +136,16 @@ def vetoed_concept_ids(cur, role_instance_id: str) -> set[str]:
     role *and never re-accepted since* — real curator authority that must
     prevent a legacy `role_skill_observation` for the same concept from
     reappearing wherever it might otherwise resurface, not only in this
-    module's own fallback branch. `db.role_skills_with_fallback` uses this
-    too: its observation-preferred branch would otherwise keep showing a
-    concept as a "skill" even after a curator explicitly rejected it as a
+    module's own fallback branch. `db.role_skills_display` uses this too:
+    its `legacy_skills` list would otherwise keep showing a concept as a
+    legacy skill even after a curator explicitly rejected it as a
     requirement.
 
     The "never re-accepted since" half matters and is not redundant: unlike
     this module's own SQL-embedded veto (which only ever runs once a role
     has *zero* current accepted claims at all, so a concept with a live
-    accepted claim can never reach it), `role_skills_with_fallback` calls
-    this standalone helper regardless of what else the role has accepted.
+    accepted claim can never reach it), `role_skills_display` calls this
+    standalone helper regardless of what else the role has accepted.
     A claim corrected from "Python, required" to "Python, preferred" (same
     concept, still current and accepted — routes/role_instances.py's edit
     endpoint marks the *old* row 'corrected' even when the concept itself
@@ -200,6 +201,15 @@ def vetoed_concept_ids(cur, role_instance_id: str) -> set[str]:
 # proposal it contributed to — that requirement is just as excluded from
 # analysis as an unreviewed claim would be (it never became a claim to begin
 # with), so `complete` must not be true while any remain.
+#
+# A proposal being *resolved* (accepted into the vocabulary, or merged into
+# an existing concept) doesn't finish the story either — see "Closing the
+# vocabulary-acceptance gap" below. `needs_reextraction` covers the residual
+# case that fix can't always close on its own: an occurrence predating
+# migration 0022 (or one migration 0021's own backfill created) has no
+# requirement_type to build a faithful claim from, so nothing is fabricated
+# and this role's review stays reported incomplete until requirement
+# extraction actually runs again for it.
 
 _REVIEW_STATUSES = ("accepted", "unreviewed", "rejected")
 
@@ -212,13 +222,19 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
     (whether a requirement_extract run has ever been recorded for this role,
     so a consumer can distinguish "never extracted" from "reviewed and
     genuinely complete" even though both currently have zero current claims);
-    and `complete` (True iff there are zero current unreviewed claims AND
-    zero unresolved proposals — vacuously true for a role with neither, e.g.
-    one relying entirely on the legacy observation fallback). Superseded/
-    corrected history is deliberately excluded from every claim count here —
-    it is neither pending nor a current decision."""
+    `needs_reextraction` (count of distinct concepts this role produced a
+    now-resolved-proposal occurrence for that resolve_occurrences_for_concept
+    could not turn into a claim — see "Closing the vocabulary-acceptance gap"
+    below — and no current claim has appeared for since, by any other
+    route); and `complete` (True iff there are zero current unreviewed
+    claims, zero unresolved proposals, AND zero pending re-extraction need —
+    vacuously true for a role with none of the three, e.g. one relying
+    entirely on the legacy observation fallback). Superseded/corrected
+    history is deliberately excluded from every claim count here — it is
+    neither pending nor a current decision."""
     summary = {
-        str(rid): {status: 0 for status in _REVIEW_STATUSES} | {"unresolved_proposals": 0, "extraction_attempted": False}
+        str(rid): {status: 0 for status in _REVIEW_STATUSES}
+        | {"unresolved_proposals": 0, "extraction_attempted": False, "needs_reextraction": 0}
         for rid in role_ids
     }
     if not role_ids:
@@ -260,10 +276,135 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
     for row in cur.fetchall():
         summary[str(row["role_instance_id"])]["extraction_attempted"] = True
 
+    cur.execute(_ROLES_NEEDING_REEXTRACTION_SQL, (list(_RESOLVED_PROPOSAL_STATUSES), role_ids))
+    for row in cur.fetchall():
+        summary[str(row["role_instance_id"])]["needs_reextraction"] = row["n"]
+
     for entry in summary.values():
-        entry["complete"] = entry["unreviewed"] == 0 and entry["unresolved_proposals"] == 0
+        entry["complete"] = (
+            entry["unreviewed"] == 0 and entry["unresolved_proposals"] == 0 and entry["needs_reextraction"] == 0
+        )
     return summary
 
 
 def load_requirement_review_summary(cur, role_instance_id: str) -> dict:
     return load_requirement_review_summary_bulk(cur, [role_instance_id])[str(role_instance_id)]
+
+
+# --- Closing the vocabulary-acceptance gap ----------------------------------
+#
+# A concept_proposal being pending is not the only way a role's extracted
+# requirement can be missing from analysis. Once a curator *resolves* a
+# proposal in Vocabulary (accepts it as a new concept, or merges it into an
+# existing one — vocabulary_curation.resolve_surface_form_group, statuses
+# 'accepted_new'/'accepted_alias'), unresolved_proposals above correctly
+# stops counting it — but unless something creates a requirement_claim for
+# every role that produced it, the requirement itself never enters analysis
+# at all: resolving the *vocabulary term* is not the same decision as
+# accepting it as *this role's* requirement, and nothing did that automatically
+# before this fix. `resolve_occurrences_for_concept` is that "something" —
+# called by resolve_surface_form_group the moment a proposal resolves — and
+# `_ROLES_NEEDING_REEXTRACTION_SQL` below is how a role whose occurrence
+# lacked enough data to act on (see migration 0022) stays reported incomplete
+# rather than silently dropping the gap. See docs/29 §12.
+
+_RESOLVED_PROPOSAL_STATUSES = ("accepted_new", "accepted_alias")
+
+
+def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_concept_id: str) -> dict:
+    """Called immediately after concept_proposal rows (`proposal_ids`) resolve
+    to `resolved_concept_id`. For every role that ever produced one of these
+    proposals (concept_proposal_occurrence, migration 0021), exactly one of
+    three things happens, never inventing evidence that was never captured:
+
+    1. A current claim already exists for (role, resolved_concept_id) — from
+       any source (a prior manual add, a prior extraction, a prior
+       resolution). Nothing to do; already covered.
+    2. No current claim exists, but the occurrence carries requirement_type
+       (migration 0022 — only possible for an occurrence extraction.py wrote
+       after that migration; never fabricated retroactively) — a fresh
+       *unreviewed* requirement_claim is created, preserving whatever
+       basis/evidence_span/document/extraction_run provenance the original
+       extraction captured. Still requires human review: accepting a
+       vocabulary term is a curation decision about the *concept*, not a
+       verdict on whether it is actually a requirement for this particular
+       role.
+    3. No current claim exists and the occurrence has no requirement_type
+       (an occurrence from before migration 0022, or from migration 0021's
+       own backfill, neither of which could carry it) — nothing faithful can
+       be built, so nothing is created. This role is picked up by
+       `_ROLES_NEEDING_REEXTRACTION_SQL` below (derived live, not a stored
+       flag — self-healing the moment a fresh extraction run, or a manual
+       add, gives that concept a current claim) until requirement extraction
+       runs again for it.
+
+    One claim per role even when several occurrences of this same resolved
+    concept exist for it (e.g. two clustered surface forms both extracted
+    from the same posting) — migration 0020's unique index allows at most
+    one current claim per (role, concept) regardless."""
+    if not proposal_ids:
+        return {"claims_created": 0, "already_covered": 0, "needs_reextraction": 0}
+    cur.execute(
+        """
+        SELECT DISTINCT ON (o.role_instance_id)
+               o.role_instance_id, o.document_id, o.extraction_run_id,
+               o.requirement_type, o.basis, o.evidence_span
+        FROM jobber.concept_proposal_occurrence o
+        WHERE o.concept_proposal_id = ANY(%s::uuid[])
+        ORDER BY o.role_instance_id, o.created_at
+        """,
+        (proposal_ids,),
+    )
+    occurrences = cur.fetchall()
+    claims_created = already_covered = needs_reextraction = 0
+    for occ in occurrences:
+        role_id = str(occ["role_instance_id"])
+        cur.execute(
+            "SELECT 1 FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_id, resolved_concept_id),
+        )
+        if cur.fetchone():
+            already_covered += 1
+            continue
+        # requirement_claim's own CHECK constraint (migration 0003) requires
+        # a non-null evidence_span whenever basis is 'stated'/'implied' — a
+        # real extraction run never produces that combination without one
+        # (span_validation.validate_span already rejected the item
+        # otherwise), but an occurrence is still just data: treat a
+        # combination that wouldn't satisfy the constraint the same as
+        # missing requirement_type, rather than letting a raw
+        # CheckViolation surface from what should be a graceful "not enough
+        # to build a faithful claim" case.
+        if not occ["requirement_type"] or (occ["basis"] in ("stated", "implied") and not occ["evidence_span"]):
+            needs_reextraction += 1
+            continue
+        cur.execute(
+            """
+            INSERT INTO jobber.requirement_claim
+                (role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span, extraction_run_id, review_status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+            """,
+            (role_id, resolved_concept_id, occ["requirement_type"], occ["basis"], occ["document_id"], occ["evidence_span"], occ["extraction_run_id"]),
+        )
+        claims_created += 1
+    return {"claims_created": claims_created, "already_covered": already_covered, "needs_reextraction": needs_reextraction}
+
+
+# Live-derived, not a stored flag (see resolve_occurrences_for_concept's own
+# docstring, case 3): a role whose resolved-proposal occurrence still has no
+# current claim for that concept. Self-healing — the moment any current claim
+# appears for that (role, concept) pair, from any source, this stops matching.
+_ROLES_NEEDING_REEXTRACTION_SQL = """
+    SELECT o.role_instance_id, COUNT(DISTINCT cp.resolved_concept_id) AS n
+    FROM jobber.concept_proposal_occurrence o
+    JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id
+    WHERE cp.status = ANY(%s) AND cp.resolved_concept_id IS NOT NULL
+      AND o.role_instance_id = ANY(%s::uuid[])
+      AND NOT EXISTS (
+          SELECT 1 FROM jobber.requirement_claim rc
+          WHERE rc.role_instance_id = o.role_instance_id
+            AND rc.concept_id = cp.resolved_concept_id
+            AND rc.superseded_by IS NULL
+      )
+    GROUP BY o.role_instance_id
+"""

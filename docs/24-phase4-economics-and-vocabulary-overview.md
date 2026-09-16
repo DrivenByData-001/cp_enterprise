@@ -152,12 +152,12 @@ one canonical loader, shared by `capability_engine.derive_role_fit` and
    `None` (never fabricated as `required`), so it contributes to neither
    `blocking_gaps` nor `unverified_required`.
 
-This mirrors, in spirit, `db.role_skills_with_fallback`'s existing "prefer
-one source, fall back to the other, never merge" pattern for Role Detail
-display — with the opposite precedence, because Phase 4's derivations need
+This mirrors, in spirit, `db.role_skills_display`'s "prefer one source,
+fall back to the other, never merge" pattern for Role Detail's *legacy*
+list — with the opposite precedence, because Phase 4's derivations need
 `requirement_claim`'s review/basis/span provenance to win whenever it
-exists. `role_skills_with_fallback`'s own `requirement_claim` branch is
-held to the same accepted-only rule (docs/29 §2).
+exists. `role_skills_display`'s own reviewed list is held to the same
+accepted-only rule (docs/29 §1/§2).
 
 One deliberate behaviour refinement, not just a passthrough: previously
 `capability_engine.derive_role_fit`'s inline query did **not** filter out
