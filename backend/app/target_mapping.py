@@ -5,16 +5,36 @@ from .concept_linking import exact_match_concept_id, normalize_name
 
 
 def resolve_requirements(cur, skills):
-    result = []
-    for skill in skills:
-        item = dict(skill)
+    items = [dict(skill) for skill in skills]
+    # Per-item candidate resolution (explicit concept_id, or an exact-match
+    # lookup against the vocabulary) stays one call per item — that lookup
+    # is name/alias text matching, not a batchable id fetch, and
+    # concept_linking.exact_match_concept_id is deliberately the same
+    # "cheap enough to call inline" helper every other extraction path uses.
+    # The one check genuinely worth batching is the *candidate id ->
+    # still-active concept* verification below: with N skills that was N
+    # single-row SELECTs; a target's requirement list is edited and
+    # re-previewed live as the user types, so this runs often.
+    candidate_ids: list[str] = []
+    for item in items:
         explicit = item.get("concept_id")
         cid = explicit or (None if item.get("mapping_reviewed") else
                            exact_match_concept_id(cur, normalize_name(item["name"])))
-        concept = None
-        if cid:
-            cur.execute("SELECT id, canonical_name FROM jobber.concept WHERE id = %s AND status = 'active'", (cid,))
-            concept = cur.fetchone()
+        candidate_ids.append(cid)
+
+    concepts_by_id: dict[str, dict] = {}
+    unique_ids = list({cid for cid in candidate_ids if cid})
+    if unique_ids:
+        cur.execute(
+            "SELECT id, canonical_name FROM jobber.concept WHERE id = ANY(%s::uuid[]) AND status = 'active'",
+            (unique_ids,),
+        )
+        concepts_by_id = {str(row["id"]): row for row in cur.fetchall()}
+
+    result = []
+    for item, cid in zip(items, candidate_ids):
+        explicit = item.get("concept_id")
+        concept = concepts_by_id.get(cid) if cid else None
         if explicit and (not item.get("mapping_reviewed") or not concept):
             raise HTTPException(422, "Select an active vocabulary concept and confirm the requirement mapping.")
         result.append({**item, "concept_id": str(concept["id"]) if concept else None,

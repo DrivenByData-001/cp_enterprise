@@ -34,7 +34,7 @@ Requirement review, assertion and deletion failures are visible and recoverable.
 Navigation groups Explore roles, My evidence and Manage vocabulary, with Add posting directly available. Forms use persistent labels and stack on narrow screens. Workflow steps expose the current step; keyboard focus, a skip link, error/status announcements and a not-found route improve navigation.
 
 ## Database and rollout
-Migration 0018 adds development_action and its role index, adds a role/concept requirement index, and permits audited target_decompose runs without a vocabulary version. It preserves the existing task allowlist. Normal backend startup applies pending migrations. No production migration or deployment was performed during implementation.
+Migrations 0018 + 0019. 0018 adds development_action and its role index, adds a role/concept requirement index, and permits audited target_decompose runs without a vocabulary version; it preserves the existing task allowlist. 0019 adds the target-analysis revision counters (target_analysis_revision) and the d_target_evidence/d_target_path cache tables behind the stepping-stone ranking above, with statement-level triggers on the underlying evidence/role/requirement tables that invalidate them automatically on any change. Normal backend startup applies pending migrations. No production migration or deployment was performed during implementation.
 
 ## Validation
 - Backend integration suite uses disposable Postgres with pgvector, never production.
