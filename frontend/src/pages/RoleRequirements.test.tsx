@@ -18,6 +18,7 @@ function claim(overrides: Partial<RequirementClaim> = {}): RequirementClaim {
     evidence_span: 'strong Python skills', review_status: 'unreviewed', created_at: '2026-01-01T00:00:00Z',
     extraction_run_id: 'run-1', superseded_by: null, concept_id: 'python', canonical_name: 'Python',
     type_code: 'tool', document_id: 'doc-1', document_title: 'Posting', document_provenance: 'original',
+    evidence: [],
     ...overrides,
   }
 }
@@ -185,6 +186,33 @@ describe('add requirement', () => {
       concept_id: 'sql', requirement_type: 'required', importance: null, evidence_span: 'proficiency in SQL',
     }))
     await screen.findAllByText('SQL')
+  })
+})
+
+describe('requirement evidence', () => {
+  it('renders one requirement card with all supporting passages, collapsed by default', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({
+      items: [claim({
+        evidence: [
+          { id: 'ev-1', document_id: 'doc-1', document_title: 'Posting', document_provenance: 'original', evidence_span: 'effective communicator', evidence_offset_start: null, evidence_offset_end: null, basis: 'stated', surface_form: 'effective communicator', extraction_run_id: 'run-1', created_at: '2026-01-01T00:00:00Z' },
+          { id: 'ev-2', document_id: 'doc-1', document_title: 'Posting', document_provenance: 'original', evidence_span: 'communicate with colleagues', evidence_offset_start: null, evidence_offset_end: null, basis: 'stated', surface_form: 'communicate with colleagues', extraction_run_id: 'run-1', created_at: '2026-01-01T00:00:01Z' },
+          { id: 'ev-3', document_id: 'doc-1', document_title: 'Posting', document_provenance: 'original', evidence_span: 'strong communication skills', evidence_offset_start: null, evidence_offset_end: null, basis: 'stated', surface_form: 'strong communication skills', extraction_run_id: 'run-1', created_at: '2026-01-01T00:00:02Z' },
+        ],
+      })],
+      review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }),
+    })
+    renderPage()
+    await screen.findByText('Python')
+
+    // Only one card for this one requirement — never a second row per passage.
+    expect(screen.getAllByText('Python')).toHaveLength(1)
+    expect(screen.getByText('3 supporting passages (show all)')).toBeTruthy()
+    expect(screen.getByText('“effective communicator”')).toBeTruthy()
+    expect(screen.queryByText('“communicate with colleagues”')).toBeNull()
+
+    fireEvent.click(screen.getByText('3 supporting passages (show all)'))
+    expect(screen.getByText('“communicate with colleagues”')).toBeTruthy()
+    expect(screen.getByText('“strong communication skills”')).toBeTruthy()
   })
 })
 

@@ -675,6 +675,23 @@ export type SurfaceFormDetail = {
   alias_origin?: string | null
 }
 
+// One supporting source occurrence for a requirement_claim (migration
+// 0026, jobber.requirement_evidence) — "one current requirement per
+// (role_instance_id, concept_id), many supporting evidence occurrences".
+export type RequirementEvidence = {
+  id: string
+  document_id: string | null
+  document_title: string | null
+  document_provenance: string | null
+  evidence_span: string | null
+  evidence_offset_start: number | null
+  evidence_offset_end: number | null
+  basis: 'stated' | 'implied' | 'inferred' | 'user_asserted' | null
+  surface_form: string | null
+  extraction_run_id: string | null
+  created_at: string
+}
+
 export type RequirementClaim = {
   id: string
   requirement_type: 'required' | 'preferred' | 'contextual'
@@ -691,6 +708,13 @@ export type RequirementClaim = {
   document_id: string | null
   document_title: string | null
   document_provenance: string | null
+  // All supporting source occurrences for this one requirement — every
+  // distinct passage that stated it, not only the one quoted in
+  // evidence_span above. Always present on API responses (possibly empty
+  // for a manually-added requirement with no linked document, or history
+  // rows fetched via ?history=true whose evidence moved to the current
+  // survivor).
+  evidence: RequirementEvidence[]
 }
 
 export type RequirementReviewSummary = {
@@ -743,6 +767,8 @@ export type ExtractionSummary = {
   claims_created?: number
   claims_superseded?: number
   claims_deduplicated?: number
+  evidence_created?: number
+  evidence_deduplicated?: number
   proposals_created?: number
   proposals_updated?: number
   rejected_span_count?: number

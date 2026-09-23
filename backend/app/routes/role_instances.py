@@ -17,7 +17,7 @@ from ..embeddings import embed_text, set_embedding
 from ..extraction import ExtractionSubjectError, extract_role_requirements
 from ..metadata_enrichment import MetadataEnrichmentSubjectError, propose_role_metadata
 from ..models import RoleMetadataUpdate
-from ..role_requirements import load_requirement_review_summary
+from ..role_requirements import load_requirement_evidence, load_requirement_evidence_bulk, load_requirement_review_summary
 from ..span_validation import validate_span
 
 router = APIRouter(prefix="/api/role-instances", tags=["role-instances"])
@@ -274,7 +274,14 @@ def list_requirements(role_id: str, history: bool = False):
             query += " AND rc.superseded_by IS NULL"
         query += " ORDER BY rc.requirement_type, c.canonical_name, rc.created_at"
         cur.execute(query, (role_id,))
-        items = cur.fetchall()
+        items = [dict(row) for row in cur.fetchall()]
+        # One current requirement per (role, concept), many supporting
+        # requirement_evidence occurrences (migration 0026) — attached in
+        # one bulk query for every claim on this page, never one query per
+        # card (N+1).
+        evidence_by_claim = load_requirement_evidence_bulk(cur, [str(item["id"]) for item in items])
+        for item in items:
+            item["evidence"] = evidence_by_claim.get(str(item["id"]), [])
         review_summary = load_requirement_review_summary(cur, role_id)
     return {"items": items, "review_summary": review_summary}
 
@@ -298,7 +305,9 @@ def _fetch_claim_view(cur, claim_id: str) -> dict:
         "WHERE rc.id = %s",
         (claim_id,),
     )
-    return cur.fetchone()
+    row = dict(cur.fetchone())
+    row["evidence"] = load_requirement_evidence(cur, claim_id)
+    return row
 
 
 @router.post("/{role_id}/requirements/{claim_id}/accept")
@@ -463,6 +472,28 @@ def _supersede_with_new_claim(cur, *, role_id, old_claim_id, concept_id, require
         """,
         (new_id, role_id, concept_id, requirement_type, importance, basis, document_id, evidence_span, new_review_status),
     )
+    # The old row's already-attached evidence (migration 0026) belongs to
+    # this same role/concept requirement still — a correction changes what
+    # the requirement *is*, not which occurrences support it — so it moves
+    # to the new current row, same as extraction.py's own rerun-supersession
+    # and migration 0026's backfill do for older history.
+    cur.execute(
+        "UPDATE jobber.requirement_evidence SET requirement_claim_id = %s WHERE requirement_claim_id = %s",
+        (new_id, old_claim_id),
+    )
+    # A human correction that supplies its own evidence_span is itself a new
+    # occurrence worth recording — never silently dropped just because the
+    # claim's own evidence_span column already carries it too.
+    if basis in ("stated", "implied") and evidence_span:
+        cur.execute(
+            """
+            INSERT INTO jobber.requirement_evidence
+                (requirement_claim_id, document_id, evidence_span, basis, extraction_run_id)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT DO NOTHING
+            """,
+            (new_id, document_id, evidence_span, basis),
+        )
     return new_id
 
 
@@ -595,4 +626,13 @@ def add_requirement(role_id: str, payload: RequirementClaimCreate):
              document_id, payload.evidence_span),
         )
         new_id = str(cur.fetchone()["id"])
+        cur.execute(
+            """
+            INSERT INTO jobber.requirement_evidence
+                (requirement_claim_id, document_id, evidence_span, basis, extraction_run_id)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT DO NOTHING
+            """,
+            (new_id, document_id, payload.evidence_span, payload.basis),
+        )
         return _fetch_claim_view(cur, new_id)
