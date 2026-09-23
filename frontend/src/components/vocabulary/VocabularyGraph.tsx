@@ -157,6 +157,18 @@ function ClusterNodeView({ data }: NodeProps<Node<NodeData>>) {
   if (n.kind !== 'pending_cluster') return null
   const color = n.priority_band ? BAND_COLOR[n.priority_band] : 'var(--text-muted)'
   const size = Math.max(24, Math.min(44, 24 + Math.log1p(n.observation_count ?? 0) * 4))
+  const far = data.zoomBand === 'far'
+  const close = data.zoomBand === 'close'
+  // Real close-zoom detail only — every field here comes straight from the
+  // graph API response (backend/app/vocabulary_graph.py's pending-cluster
+  // node payload), never fabricated. role_count/observation_count/
+  // surface_count are each independently optional on a cluster node, so
+  // each is only rendered when actually present.
+  const closeDetail = [
+    n.role_count != null ? `${n.role_count} role${n.role_count === 1 ? '' : 's'}` : null,
+    n.observation_count != null ? `${n.observation_count} obs` : null,
+    n.surface_count != null ? `${n.surface_count} form${n.surface_count === 1 ? '' : 's'}` : null,
+  ].filter((s): s is string => s !== null)
   return (
     <div style={{ position: 'relative', width: size, height: size }}>
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -166,7 +178,18 @@ function ClusterNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `2.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel wide={data.zoomBand === 'close'}>{n.label}</NodeLabel>
+      {/* Far zoom prioritises topology over detail (docs/25 §15): the
+          cluster's own colour/size already carries priority + rough volume,
+          so its text label is dropped entirely rather than cluttering an
+          overview the same way medium/close zoom do. */}
+      <NodeLabel hidden={far} wide={close}>
+        <span>{n.label}</span>
+        {close && closeDetail.length > 0 && (
+          <span data-testid="cluster-close-detail" style={{ display: 'block', marginTop: 2, fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>
+            {n.priority_band ? `${BAND_LABEL[n.priority_band]} · ` : ''}{closeDetail.join(' · ')}
+          </span>
+        )}
+      </NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
@@ -176,6 +199,7 @@ function ConceptNodeView({ data }: NodeProps<Node<NodeData>>) {
   const n = data.vocabNode
   if (n.kind !== 'concept') return null
   const size = 30
+  const far = data.zoomBand === 'far'
   const close = data.zoomBand === 'close'
   return (
     <div style={{ position: 'relative', width: size, height: size }}>
@@ -187,7 +211,10 @@ function ConceptNodeView({ data }: NodeProps<Node<NodeData>>) {
           opacity: n.status === 'active' ? 1 : 0.55, ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel wide={close}>
+      {/* Far zoom prioritises topology over detail (docs/25 §15): the
+          diamond shape + colour already say "this is a concept"; its label
+          is dropped entirely rather than cluttering an overview. */}
+      <NodeLabel hidden={far} wide={close}>
         <span>{n.label}</span>
         {close && (
           <span data-testid="concept-close-detail" style={{ display: 'block', marginTop: 2, fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>
@@ -204,6 +231,7 @@ function SurfaceFormNodeView({ data }: NodeProps<Node<NodeData>>) {
   const n = data.vocabNode
   if (n.kind !== 'surface_form') return null
   const size = 14
+  const close = data.zoomBand === 'close'
   const color = n.status === 'accepted' ? CONCEPT_COLOR : 'var(--baseline)'
   return (
     <div style={{ position: 'relative', width: size, height: size }}>
@@ -214,8 +242,13 @@ function SurfaceFormNodeView({ data }: NodeProps<Node<NodeData>>) {
           border: `1.5px solid ${color}`, cursor: 'pointer', ...selectionStyle(data.selected),
         }}
       />
-      <NodeLabel hidden={data.zoomBand === 'far'} wide={data.zoomBand === 'close'}>
-        {n.label}
+      <NodeLabel hidden={data.zoomBand === 'far'} wide={close}>
+        <span>{n.label}</span>
+        {close && (
+          <span data-testid="surface-form-close-detail" style={{ display: 'block', marginTop: 2, fontSize: 9, color: 'var(--text-muted)', fontWeight: 400 }}>
+            {n.status}{n.observation_count != null ? ` · ${n.observation_count} obs` : ''}
+          </span>
+        )}
       </NodeLabel>
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>

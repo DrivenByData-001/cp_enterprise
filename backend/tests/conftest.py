@@ -96,6 +96,7 @@ _RESETTABLE_JOBBER_TABLES = [
     "preference_observation",
     "profile360_capability_mapping",
     "profile360_claim_mapping",
+    "requirement_evidence",
     "requirement_claim",
     "extraction_run",
     "vocabulary_version",

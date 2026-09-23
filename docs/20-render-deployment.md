@@ -341,3 +341,75 @@ independently of the API):
   as a failed deploy), rather than being silently swallowed. See the
   delivery report §16 for the full analysis of why this is safe under
   Render's redeploy behaviour.
+
+## 15. Migration 0020 production blocker — status and the requirement-evidence migration behind it
+
+Migration `0020_requirement_claim_current_uniqueness.sql` (already merged)
+adds a partial unique index enforcing "at most one *current*
+(`superseded_by IS NULL`) `jobber.requirement_claim` row per
+`(role_instance_id, concept_id)`." Its own preflight `DO` block refuses to
+run — loudly, with a diagnostic query, never silently — if production
+already has duplicate-current rows for some pair, which older application
+code (before this repo's conservative rerun-dedup handling existed) could
+produce. Production had reportedly been kept on a release/backport that
+predates `main`'s attempt to apply `0020`, specifically to avoid a crashed
+startup (per §14 above: a failing migration crashes startup).
+
+**As of this build (verified directly against the live Supabase project via
+read-only queries — `jobber.migration_history` and the preflight's own
+duplicate-count query, nothing written): that blocker no longer exists.**
+`jobber.migration_history` already lists every migration through
+`0025_planning_assumption_not_an_economics_input.sql`, including `0020`
+itself, and the duplicate-current preflight query below currently returns
+zero groups — so whatever backport/rollback state prompted the note above
+has since been resolved, independently of this build. The one-time cleanup
+script and the ordered checklist below are kept here as the correct
+procedure *if* a duplicate-current state is ever hit again on a future
+deploy (e.g. a rollback to pre-dedup application code followed by a forward
+deploy) — they were not needed for this build's own `0026` migration, whose
+only production prerequisite (zero duplicate-current rows) already held.
+
+**Resolution, in order, if this ever needs re-running:**
+
+1. Take a database snapshot/backup first (Supabase's own point-in-time
+   recovery or a manual `pg_dump` — whichever your project already relies
+   on for this).
+2. Run the one-time, non-destructive cleanup script against production:
+   ```
+   psql "$DATABASE_URL" -f backend/migrations/manual/9002_resolve_duplicate_current_requirement_claims.sql
+   ```
+   It only ever sets `superseded_by` on the losing side of a duplicate-current
+   group (never deletes a row, never touches `review_status`) — every
+   existing row's own evidence (`evidence_span`/`document_id`/etc.) stays
+   fully intact on it. See that file's own header for the exact survivor-
+   selection rule.
+3. Confirm the preflight condition now returns zero rows (the same query
+   migration `0020`'s own preflight runs, and the script's header repeats):
+   ```sql
+   SELECT role_instance_id, concept_id, COUNT(*), array_agg(id ORDER BY created_at)
+   FROM jobber.requirement_claim WHERE superseded_by IS NULL
+   GROUP BY role_instance_id, concept_id HAVING COUNT(*) > 1;
+   ```
+4. Deploy the intended latest `main`. `run_migrations()` then applies every
+   pending migration in filename order, starting from whatever production's
+   `jobber.migration_history` currently ends at (as of this build, already
+   `0025` — `0020` itself needs no re-run) through `0026_requirement_evidence.sql`
+   (adds `jobber.requirement_evidence` and backfills every existing claim's own
+   evidence into it, following each superseded chain to its current
+   survivor — idempotent, safe to re-run, and itself covered by
+   `backend/tests/test_requirement_evidence.py`'s migration-replay test).
+   Watch the Render deploy log for a clean startup; a genuinely failing
+   migration still crashes startup rather than deploying partially.
+5. Check whether Render's **auto-deploy** is still disabled on the live
+   service from having run the backport (`render.yaml`'s own `autoDeploy: true`
+   is only the *blueprint* default — a per-service dashboard override can
+   diverge from it until the blueprint is re-synced). Re-enable it in the
+   Render dashboard once you're satisfied `main` is the branch you want
+   tracked again.
+6. Spot-check after deploy: the Capability Catalogue still lists the
+   existing Vocabulary capabilities (PRs #29/#30 — unrelated to this
+   migration, should be unaffected), Vocabulary Map semantic zoom works in
+   Pending/Accepted/Combined (§15-17 above), and a representative role's
+   `GET /api/role-instances/{id}/requirements` now returns one requirement
+   card per canonical concept with its full `evidence` collection rather
+   than one row per source passage.

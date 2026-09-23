@@ -291,6 +291,49 @@ def load_requirement_review_summary(cur, role_instance_id: str) -> dict:
     return load_requirement_review_summary_bulk(cur, [role_instance_id])[str(role_instance_id)]
 
 
+# --- Requirement evidence (migration 0026) -----------------------------
+#
+# "one current requirement per (role_instance_id, concept_id), many
+# supporting requirement_evidence occurrences" — the requirement-review API
+# (routes/role_instances.py) reads this alongside requirement_claim so the
+# default requirement response is one requirement with an `evidence`
+# collection, never an N+1 query per claim.
+
+
+def load_requirement_evidence_bulk(cur, claim_ids: list[str]) -> dict[str, list[dict]]:
+    """All jobber.requirement_evidence rows for the given (current)
+    requirement_claim ids, grouped by claim id and ordered oldest-first —
+    the order the occurrences were actually captured in."""
+    grouped: dict[str, list[dict]] = {str(cid): [] for cid in claim_ids}
+    if not claim_ids:
+        return grouped
+    cur.execute(
+        """
+        SELECT re.id, re.requirement_claim_id, re.document_id, re.evidence_span,
+               re.evidence_offset_start, re.evidence_offset_end, re.basis,
+               re.surface_form, re.extraction_run_id, re.created_at,
+               d.title AS document_title, d.provenance_quality AS document_provenance
+        FROM jobber.requirement_evidence re
+        LEFT JOIN jobber.document d ON d.id = re.document_id
+        WHERE re.requirement_claim_id = ANY(%s::uuid[])
+        ORDER BY re.created_at
+        """,
+        (claim_ids,),
+    )
+    for row in cur.fetchall():
+        item = dict(row)
+        claim_id = str(item.pop("requirement_claim_id"))
+        item["id"] = str(item["id"])
+        item["document_id"] = str(item["document_id"]) if item["document_id"] else None
+        item["extraction_run_id"] = str(item["extraction_run_id"]) if item["extraction_run_id"] else None
+        grouped.setdefault(claim_id, []).append(item)
+    return grouped
+
+
+def load_requirement_evidence(cur, claim_id: str) -> list[dict]:
+    return load_requirement_evidence_bulk(cur, [claim_id]).get(str(claim_id), [])
+
+
 # --- Closing the vocabulary-acceptance gap ----------------------------------
 #
 # A concept_proposal being pending is not the only way a role's extracted
@@ -402,8 +445,24 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
             INSERT INTO jobber.requirement_claim
                 (role_instance_id, concept_id, requirement_type, basis, document_id, evidence_span, extraction_run_id, review_status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+            RETURNING id
             """,
             (role_id, resolved_concept_id, occ["requirement_type"], occ["basis"], occ["document_id"], occ["evidence_span"], occ["extraction_run_id"]),
+        )
+        new_claim_id = cur.fetchone()["id"]
+        # One requirement_evidence row (migration 0026) for the occurrence
+        # this claim was built from — the same "one requirement, many
+        # evidence occurrences" model extraction.py's own claim creation
+        # follows. ON CONFLICT DO NOTHING purely for defensive idempotency;
+        # this insert only ever runs once per new claim above.
+        cur.execute(
+            """
+            INSERT INTO jobber.requirement_evidence
+                (requirement_claim_id, document_id, evidence_span, basis, extraction_run_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (new_claim_id, occ["document_id"], occ["evidence_span"], occ["basis"], occ["extraction_run_id"]),
         )
         claims_created += 1
     return {"claims_created": claims_created, "already_covered": already_covered, "needs_reextraction": needs_reextraction}

@@ -243,46 +243,80 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     )
 
     claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
-    for idx, (surface_form, requirement_type, basis, span, importance, _context) in enumerate(validated):
-        concept_id = item_concept.get(idx)
-        if concept_id is not None:
-            # Conservative rerun/supersession handling (brief §7): a rerun
-            # against the same source must not accumulate indistinguishable
-            # current unreviewed proposals, but it must also never silently
-            # touch a decision a human already made. This is a small, exact
-            # match on (role, concept) — not a fuzzy claim-merging pass.
-            cur.execute(
-                "SELECT id, requirement_type, basis, evidence_span, review_status "
-                "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
-                (role_instance_id, concept_id),
+    evidence_created = evidence_deduplicated = 0
+
+    def _requirement_type_rank(requirement_type: str) -> int:
+        # Lower is stronger — mirrors role_requirements.requirement_type_rank_sql
+        # (the same ranking resolve_occurrences_for_concept uses), kept as a
+        # small local Python copy rather than importing SQL-string-building
+        # code into a plain comparison.
+        return {"required": 0, "preferred": 1, "contextual": 2}.get(requirement_type, 3)
+
+    # Phase C (this build): a role can state the same canonical requirement
+    # several times in different wording — "effective communicator" and
+    # "communicate with colleagues" both resolving to Communication. Those
+    # are not separate analytical requirements; group every item that
+    # resolved to a concept by that concept_id first, so at most one current
+    # requirement_claim is ever created/reused per (role, concept), with
+    # every distinct occurrence attached as its own jobber.requirement_evidence
+    # row (migration 0026) rather than silently dropped or turned into a
+    # second claim.
+    concept_groups: dict[str, list[int]] = {}
+    for idx, concept_id in item_concept.items():
+        concept_groups.setdefault(concept_id, []).append(idx)
+
+    for concept_id, indices in concept_groups.items():
+        occurrences = [(i, validated[i]) for i in indices]
+        # Requirement-type resolution when several occurrences disagree:
+        # required > preferred > contextual (docs/29, this build) — same
+        # ranking role_requirements.requirement_type_rank_sql already uses
+        # for the vocabulary-acceptance resolution path. Ties (including two
+        # occurrences of equal strength) keep extraction order, which is
+        # deterministic given `validated`'s own stable ordering.
+        winner_idx, winner = min(occurrences, key=lambda pair: (_requirement_type_rank(pair[1][1]), pair[0]))
+        _w_surface, w_type, w_basis, w_span, w_importance, _w_context = winner
+
+        # Conservative rerun/supersession handling (brief §7): a rerun
+        # against the same source must not accumulate indistinguishable
+        # current unreviewed proposals, but it must also never silently
+        # touch a decision a human already made. This is a small, exact
+        # match on (role, concept) — not a fuzzy claim-merging pass.
+        cur.execute(
+            "SELECT id, requirement_type, basis, evidence_span, review_status "
+            "FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
+            (role_instance_id, concept_id),
+        )
+        existing = cur.fetchone()
+
+        if existing is not None and existing["review_status"] in ("accepted", "rejected"):
+            # A human has already decided this concept's requirement for
+            # this role — extraction running again never revisits that
+            # decision. The occurrence(s) found this run are still real
+            # provenance, though, and are attached as evidence below (never
+            # discarded merely because the claim itself is untouchable).
+            claim_id = str(existing["id"])
+        elif existing is not None:
+            # Unreviewed: still AI-owned. Deliberately excludes `importance`
+            # from "same interpretation": it isn't part of what a
+            # requirement *is* the way requirement_type/basis/evidence_span
+            # are, and plays no role in capability_engine's fit calculation
+            # today. superseded_by is reserved for an actual revision of
+            # what the requirement *is* — a same-or-equivalent occurrence
+            # reproducing the stored reading is evidence deduplication, not
+            # a reason to churn the review queue.
+            same_interpretation = (
+                existing["requirement_type"] == w_type
+                and existing["basis"] == w_basis
+                and (existing["evidence_span"] or None) == (w_span or None)
             )
-            existing = cur.fetchone()
-            if existing is not None:
-                if existing["review_status"] in ("accepted", "rejected"):
-                    # A human has already decided this concept's requirement
-                    # for this role — extraction running again never
-                    # revisits that decision.
-                    continue
-                # Deliberately excludes `importance`: it isn't part of what a
-                # requirement *is* the way requirement_type/basis/evidence_span
-                # are, and importance plays no role in capability_engine's fit
-                # calculation today. A rerun that only reproduces a fresher
-                # importance guess for an already-proposed (role, concept)
-                # interpretation is treated as the same proposal, not a
-                # reason to churn the review queue — extraction is not
-                # intended to "refresh" a stored importance in place.
-                same_interpretation = (
-                    existing["requirement_type"] == requirement_type
-                    and existing["basis"] == basis
-                    and (existing["evidence_span"] or None) == (span or None)
-                )
-                if same_interpretation:
-                    claims_deduplicated += 1
-                    continue
-                # A genuinely different interpretation of the same concept:
-                # preserve the still-unreviewed old proposal through
-                # supersession rather than leaving two current unreviewed
-                # claims for one concept. Its review_status stays
+            if same_interpretation:
+                claim_id = str(existing["id"])
+                claims_deduplicated += 1
+            else:
+                # A genuinely stronger/different reading of the same
+                # concept: preserve the still-unreviewed old proposal
+                # through supersession rather than leaving two current
+                # unreviewed claims for one concept. Its review_status stays
                 # 'unreviewed' — no human reviewed it, so it must not gain
                 # the curator veto's authority (role_requirements.py §2)
                 # merely by being superseded through proposal churn.
@@ -306,22 +340,57 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
                          document_id, evidence_span, extraction_run_id, review_status)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
                     """,
-                    (new_claim_id, role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
+                    (new_claim_id, role_instance_id, concept_id, w_type, w_importance, w_basis, document["id"], w_span, main_run_id),
                 )
+                # A revision changes what the requirement *is*, not which
+                # occurrences support it — the old row's already-attached
+                # evidence moves to the new current row, same as migration
+                # 0026's backfill does for older superseded history.
+                cur.execute(
+                    "UPDATE jobber.requirement_evidence SET requirement_claim_id = %s WHERE requirement_claim_id = %s",
+                    (new_claim_id, existing["id"]),
+                )
+                claim_id = new_claim_id
                 claims_created += 1
                 claims_superseded += 1
-                continue
-
+        else:
             cur.execute(
                 """
                 INSERT INTO jobber.requirement_claim
                     (role_instance_id, concept_id, requirement_type, importance, basis,
                      document_id, evidence_span, extraction_run_id, review_status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'unreviewed')
+                RETURNING id
                 """,
-                (role_instance_id, concept_id, requirement_type, importance, basis, document["id"], span, main_run_id),
+                (role_instance_id, concept_id, w_type, w_importance, w_basis, document["id"], w_span, main_run_id),
             )
+            claim_id = str(cur.fetchone()["id"])
             claims_created += 1
+
+        # One requirement_evidence row per distinct source occurrence in
+        # this concept group (migration 0026) — every sentence that
+        # mentioned this concept, not only the winning reading. ON CONFLICT
+        # DO NOTHING against the table's dedup indexes: an identical rerun
+        # (same document/span, or same spanless run) attaches nothing new.
+        for _i, occ in occurrences:
+            occ_surface_form, _occ_type, occ_basis, occ_span, _occ_importance, _occ_context = occ
+            cur.execute(
+                """
+                INSERT INTO jobber.requirement_evidence
+                    (requirement_claim_id, document_id, evidence_span, basis, extraction_run_id, surface_form)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (claim_id, document["id"], occ_span, occ_basis, main_run_id, occ_surface_form),
+            )
+            if cur.fetchone() is not None:
+                evidence_created += 1
+            else:
+                evidence_deduplicated += 1
+
+    for idx, (surface_form, requirement_type, basis, span, importance, _context) in enumerate(validated):
+        if item_concept.get(idx) is not None:
             continue
 
         # Unresolved vocabulary -> concept_proposal (never silently invented —
@@ -415,6 +484,8 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         "claims_created": claims_created,
         "claims_superseded": claims_superseded,
         "claims_deduplicated": claims_deduplicated,
+        "evidence_created": evidence_created,
+        "evidence_deduplicated": evidence_deduplicated,
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,

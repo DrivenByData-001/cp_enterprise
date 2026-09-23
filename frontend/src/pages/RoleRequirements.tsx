@@ -188,6 +188,57 @@ function draftFromClaim(c: RequirementClaim): EditDraft {
   }
 }
 
+function EvidenceList({ claim }: { claim: RequirementClaim }) {
+  const evidence = claim.evidence ?? []
+  const [expanded, setExpanded] = useState(false)
+
+  if (evidence.length === 0) {
+    // Pre-backfill or evidence-less claims (e.g. a manual add with no
+    // linked document) still show the claim's own legacy evidence_span, if
+    // any, rather than an empty card.
+    return claim.evidence_span ? (
+      <p className="secondary" style={{ fontSize: 13, margin: '6px 0 0', fontStyle: 'italic' }}>
+        “{claim.evidence_span}”
+      </p>
+    ) : null
+  }
+
+  const shown = expanded ? evidence : evidence.slice(0, 1)
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(e => !e)}
+        style={{ fontSize: 12, background: 'none', border: 'none', padding: 0, color: 'var(--accent, inherit)', cursor: 'pointer', textDecoration: 'underline' }}
+      >
+        {evidence.length} supporting passage{evidence.length === 1 ? '' : 's'} {expanded ? '(hide)' : '(show all)'}
+      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+        {shown.map(e => (
+          <div key={e.id}>
+            {e.evidence_span ? (
+              <p className="secondary" style={{ fontSize: 13, margin: 0, fontStyle: 'italic' }}>
+                “{e.evidence_span}”
+              </p>
+            ) : (
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                {e.basis ? BASIS_LABEL[e.basis] ?? e.basis : 'no quoted source text'}
+                {e.surface_form ? ` — “${e.surface_form}”` : ''}
+              </p>
+            )}
+            {e.document_provenance && e.document_provenance !== 'original' && (
+              <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+                Source document provenance: {e.document_provenance} — treated as weaker evidence.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RequirementCard({
   claim, roleId, busy, onBusyChange, onUpdated, onError,
 }: {
@@ -257,11 +308,7 @@ function RequirementCard({
             {claim.type_code} · {claim.requirement_type} · {BASIS_LABEL[claim.basis] ?? claim.basis}
             {claim.importance ? ` · importance ${claim.importance}/5` : ''}
           </span>
-          {claim.evidence_span && (
-            <p className="secondary" style={{ fontSize: 13, margin: '6px 0 0', fontStyle: 'italic' }}>
-              “{claim.evidence_span}”
-            </p>
-          )}
+          <EvidenceList claim={claim} />
           {claim.document_provenance && claim.document_provenance !== 'original' && (
             <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
               Source document provenance: {claim.document_provenance} — treated as weaker evidence.
@@ -542,6 +589,8 @@ export default function RoleRequirements() {
               : `Run #${lastRun.extraction_run_id}: ${lastRun.claims_created ?? 0} claim(s)` +
                 `${lastRun.claims_superseded ? `, ${lastRun.claims_superseded} superseding an earlier unreviewed proposal` : ''}` +
                 `${lastRun.claims_deduplicated ? `, ${lastRun.claims_deduplicated} identical proposal(s) skipped` : ''}` +
+                `${lastRun.evidence_created ? `, ${lastRun.evidence_created} supporting passage(s) attached` : ''}` +
+                `${lastRun.evidence_deduplicated ? ` (${lastRun.evidence_deduplicated} already attached)` : ''}` +
                 `, ${lastRun.proposals_created ?? 0} new vocabulary proposal(s)` +
                 `${lastRun.rejected_span_count ? `, ${lastRun.rejected_span_count} rejected for an invalid span` : ''}.`}
           </span>

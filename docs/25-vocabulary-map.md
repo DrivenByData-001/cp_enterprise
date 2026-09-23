@@ -588,17 +588,53 @@ never the underlying vocabulary data.**
 
 **What changes per band** (`VocabularyGraph.tsx`'s node views):
 
-- **Far** — surface-form labels are unmounted entirely (not just visually
-  hidden — the label `<div>` isn't rendered at all); pending-cluster and
-  accepted-concept labels stay, along with group pills — matching the base
-  pass's existing "shape distinguishes kind" language, now also distinguishing
-  *how much text* survives.
-- **Medium** — surface-form labels reappear (this is the zoom band a fresh
-  `fitView` on a small/medium graph typically lands in — "the normal default
-  embedded experience" the brief asked for).
-- **Close** — cluster/concept/surface-form labels get a wider `max-width`
-  (140px → 220px) instead of a permanent second line, and hovering any
-  non-group node shows a compact tooltip.
+- **Far** — every non-group node's label is unmounted entirely (not just
+  visually hidden — the label `<div>` isn't rendered at all): surface forms,
+  pending clusters, *and* accepted concepts. Only group pills, node shapes
+  (colour + size already carry priority/kind), and edges remain — pure
+  topology, per the consolidated requirement-evidence-and-graph-fix brief's
+  "far: prioritise topology, hide low-value detail." (Cluster/concept labels
+  used to stay visible at far too — a regression this pass fixes; see
+  "Regression root cause" below.)
+- **Medium** — every node's label reappears at its normal width. This is the
+  zoom band a fresh `fitView` on a small/medium graph typically lands in —
+  "the normal default embedded experience."
+- **Close** — labels widen (140px → 220px) *and* every node kind renders a
+  real, always-visible (no hover needed) inline detail sub-line drawn only
+  from fields the graph API actually returns (`data-testid` per kind:
+  `cluster-close-detail`, `concept-close-detail`, `surface-form-close-detail`):
+  a pending cluster shows its priority band plus role/observation/surface-form
+  counts; an accepted concept shows its type code plus alias count where
+  available; a surface form shows its pending/accepted status plus observation
+  count where available. Hovering any non-group node still additionally shows
+  the compact tooltip described below. Before this pass, only concept nodes
+  had an inline close-zoom sub-line (added by an earlier commit and never
+  extended to clusters/surface forms) — clusters and surface forms only grew
+  a wider label box at close zoom, which is why zooming into those node kinds
+  read as "the same picture, bigger" rather than genuinely richer.
+
+**Regression root cause.** Two separate, compounding causes, confirmed by
+direct inspection (no rasterised/canvas rendering, no app-authored CSS
+`transform: scale(...)` cheat anywhere in this codebase — React Flow's own
+viewport scaling is DOM/SVG-based and already vector-sharp, not a screenshot
+zoom):
+1. Node visual complexity was **static across zoom bands for two of the three
+   node kinds** — pending-cluster and surface-form nodes had no close-zoom
+   detail at all beyond a wider label box, so zooming into them showed
+   strictly the same information, just larger. Only concept nodes had
+   genuinely richer close-zoom content.
+2. Far zoom **did not simplify enough** — cluster and concept text labels
+   stayed rendered at every zoom level (only surface-form labels ever
+   unmounted at far), so an overview never actually read as "topology first";
+   it read as the same label-dense view, shrunk.
+   Neither cause is a rendering-sharpness bug in the literal sense (text and
+   borders scaled by React Flow's transform stay crisp at any zoom — this is
+   standard CSS-transform behaviour, not a rasterisation artifact); both
+   drove the *perception* that "zooming in doesn't add detail" and "zooming
+   out doesn't simplify," which is what "looks like just enlarging" actually
+   described. The fix is entirely content-density, not a rendering-pipeline
+   change — deliberately the least invasive fix available, and no graph
+   library change was needed or made.
 
 **Hover tooltip.** Close-zoom only, content derived solely from the
 already-loaded graph node (never a fetch triggered by hover or by a zoom
@@ -622,17 +658,18 @@ page already has.
 
 ## 16. Known limitations (fullscreen / semantic zoom pass)
 
-- **No dedicated frontend test framework existed before this pass.** A
-  minimal Vitest + React Testing Library setup was added (`vitest.config.ts`,
-  `npm test`) scoped narrowly to what jsdom can meaningfully exercise: the
-  `getZoomBand` threshold helper, and `VocabularyMapView`'s own state
-  transitions (fullscreen open/close/Escape, selection/filter/focus/node-limit
-  preservation, details collapse) with `VocabularyGraph` mocked out. Real
-  React Flow rendering — the actual zoom-band label/tooltip visual behaviour,
-  fit-view after a real resize — is not something jsdom exercises
-  meaningfully (no layout engine, no canvas), so that is covered by browser
-  smoke testing instead, per §17, exactly as the brief's own fallback
-  anticipated.
+- **jsdom cannot meaningfully exercise real React Flow rendering** (no layout
+  engine, no CSS transform geometry) — `VocabularyMapView.test.tsx`
+  deliberately mocks `VocabularyGraph` out entirely and only covers this
+  component's own state transitions (fullscreen open/close/Escape, selection/
+  filter/focus/node-limit preservation, details collapse) plus, separately,
+  the pure `getZoomBand` threshold helper (`vocabConstants.test.ts`). That gap
+  is exactly why CI could pass while the real zoom-band regression (§15)
+  shipped unnoticed. It is now closed by `frontend/e2e/vocabulary-map-zoom.spec.ts`
+  (Playwright, real Chromium, the real `@xyflow/react` graph — see §17) rather
+  than another one-off manual pass: this suite runs in CI/on demand via
+  `npm run test:e2e` and is the durable regression guard against this
+  happening again, not the ephemeral smoke test §17 used to describe.
 - **The close-zoom tooltip is position-captured on hover-enter, not
   cursor-tracked.** A deliberate simplification (brief explicitly allows a
   "lightweight" tooltip): it stays anchored to where the pointer entered the
@@ -651,44 +688,62 @@ page already has.
 
 ---
 
-## 17. Validation (fullscreen / semantic zoom pass)
+## 17. Validation (fullscreen / semantic zoom pass; regression fix + e2e pass)
 
-**Frontend**: `tsc -b` clean, `oxlint` clean (exit 0, zero findings),
-`npm test` (new: Vitest) — 11 passed, 0 failed, covering `getZoomBand`'s
-thresholds and `VocabularyMapView`'s fullscreen/selection/filter/focus/
-node-limit/details-collapse state transitions. `npm run build` succeeds
-(the same pre-existing "chunk >500kB" advisory warning noted in §13,
-unchanged in nature — React Flow plus three.js's Space page).
+**Frontend unit/component**: `tsc -b` clean. `npm test` (Vitest) — 120
+passed, 0 failed, covering `getZoomBand`'s thresholds, `VocabularyMapView`'s
+fullscreen/selection/filter/focus/node-limit/details-collapse state
+transitions (`VocabularyGraph` mocked, per §16), and the requirement-review
+evidence-list UI (a separate, unrelated component touched by the same build
+— see the requirement-evidence half of this deliverable).
 
-**Backend**: untouched — no backend file was modified by this pass, so the
-existing suite's pass/fail status (§13) is unaffected; it was not re-run
-solely for a frontend-only change.
+**Frontend real-browser (new)**: `frontend/e2e/vocabulary-map-zoom.spec.ts`,
+run via `npm run test:e2e` (Playwright, against this sandbox's pre-installed
+Chromium — `playwright.config.ts` points `launchOptions.executablePath` at
+the pre-provisioned browser directly since this sandbox has no egress to
+fetch a matching-revision download). The suite mocks every network call the
+page needs (`e2e/fixtures.ts`: `/api/auth/status`, `/api/vocabulary/graph`,
+and 404-stubs for the still-mounted-but-hidden Review tab's own calls) so it
+needs neither a running backend nor a database, and asserts against the real
+`@xyflow/react` graph:
 
-**Browser smoke test** (Playwright against this sandbox's pre-installed
-Chromium, a local backend + Vite dev server pair against a disposable seeded
-local Postgres — `local_baseline.sql` + auto-applied migrations, seed data
-created through the exact same `db.upsert_role_instance`/
-`vocabulary_bootstrap.compute_cluster_keys` helpers `test_vocabulary_graph.py`
-itself uses, with the same deterministic-pseudo-embedding stub that file's
-`_stub_embeddings` fixture uses for this sandbox's lack of huggingface.co
-egress): login → Vocabulary → Map → select a pending cluster → **Fullscreen**
-→ selection and the Limit filter (300) both survive the transition → zoom out
-via React Flow's own zoom control until surface-form label elements are
-absent from the DOM while cluster labels remain (far band) → zoom back in
-until surface-form labels reappear (medium band) → zoom in further and hover
-a node until a tooltip renders (close band) → **Hide details** collapses the
-panel and **Show details** restores it with the same selection → explicitly
-raising the node limit to 500 fires exactly one new `limit=500` graph
-request → **View similarity neighbourhood** enters focus mode while staying
-fullscreen, **Back to map** exits it while staying fullscreen → `Escape`
-closes fullscreen → the embedded view still shows the limit-500 state →
-re-enter fullscreen → **Fit** re-fits the view → zero console errors, zero
-page errors across the whole run. Screenshots retained for the deliverable
-report.
+- Pending view: far zoom → zero `[data-testid="node-label"]` elements in the
+  DOM (not just hidden) for both the cluster and the surface form; medium
+  zoom → both labels visible, no close-only detail yet; close zoom →
+  `cluster-close-detail` visibly contains the cluster's real role/observation/
+  surface-form counts and priority band, `surface-form-close-detail` contains
+  its real status — all read straight from the mocked API response, nothing
+  fabricated.
+- Hovering a node at close zoom → `node-tooltip` renders with real fields.
+- Accepted view: close zoom → `concept-close-detail` shows the real type code
+  and alias count; the accepted surface form's close detail shows its real
+  status and observation count.
+- Combined view: both a pending-cluster and a concept node render their own
+  kind-specific close-zoom detail side by side.
+- Crossing every zoom-band threshold (far → medium → close → far again) never
+  issues a second `/api/vocabulary/graph` request beyond the initial load —
+  proves semantic zoom stays purely client-side rendering, per §15.
+- Entering fullscreen after reaching close zoom: the viewport (and therefore
+  the zoom band, and its close-only detail) survives the embedded → fullscreen
+  remount unchanged, and zoom-band transitions still work afterward — proves
+  viewport preservation (`VocabularyMapView.tsx`'s `viewportRef`) does not
+  freeze future band transitions.
 
-**Data safety**: unaffected — this pass adds no new mutation path; every
-control it introduces (fullscreen, zoom, hover, details-collapse, Fit) is
-either pure client-side rendering or a call to the exact same read-only
-`GET /api/vocabulary/graph` the base pass already used and already proved
-never writes anything (§13's `test_graph_and_surface_form_endpoints_perform_
-no_writes`, unaffected by this pass).
+Zoom itself is driven through React Flow's own `Controls` +/− buttons
+(`.react-flow__controls-zoomin`/`-zoomout`) and verified by reading the real
+rendered viewport transform (`.react-flow__viewport`'s `scale(...)`) after
+each click, rather than assuming a fixed step size per click — the tests read
+the same, and only, zoom value the app itself reads (docs' own "never a
+second measurement mechanism" rule, §15).
+
+**Backend**: `pytest` — 977 passed, 7 pre-existing failures unrelated to this
+build (`ModuleNotFoundError: No module named '_cffi_backend'` inside this
+sandbox's PDF-fixture tests, present before this pass and unrelated to
+vocabulary/requirement code). No backend file changed for the semantic-zoom
+half of this pass (`backend/app/vocabulary_graph.py` was inspected, not
+modified — the close-zoom detail added client-side already had every field
+it needed).
+
+**Data safety**: unaffected — every control this pass touches (zoom bands,
+close-zoom detail, hover tooltip) is pure client-side rendering over data the
+page already fetched from the same read-only `GET /api/vocabulary/graph`.
