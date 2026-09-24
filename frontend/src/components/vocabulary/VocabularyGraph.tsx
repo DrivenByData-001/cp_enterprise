@@ -15,6 +15,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import type { VocabularyGraphEdge, VocabularyGraphNode } from '../../lib/api'
 import { BAND_COLOR, BAND_LABEL, CONCEPT_COLOR, GROUP_COLOR, getZoomBand, type ZoomBand } from './vocabConstants'
+import { computeRadialLayout, computeStarLayout } from './vocabLayout'
 
 // A minimal, generic-free view of the React Flow instance for callers that
 // only ever need to re-fit the view externally (the fullscreen top bar's
@@ -25,91 +26,9 @@ export type GraphApi = { fitView: (options?: { padding?: number }) => void }
 // The graph-library wrapper (docs/25 §"Graph library"). Purely presentation —
 // no API calls happen here; it only turns already-fetched nodes/edges into a
 // laid-out, pannable/zoomable canvas and reports clicks back to its caller.
-//
-// Layout: a small hand-rolled radial layout (brief §5's "raw words toward the
-// outside, organising vocabulary inward") computed from the *structural*
-// edges (contains/member_of/maps_to/alias_of) via BFS depth from the
-// synthetic "root" node, with each parent's angular slice divided evenly
-// among its children — the standard "balloon" radial-tree technique. No
-// layout dependency (dagre/elkjs) was added: at a few hundred nodes this
-// closed-form approach is fast, deterministic, and exactly matches the
-// brief's own concentric-rings diagram. Similarity-focus responses carry no
-// structural edges at all (just a center + its neighbours) — those get a
-// simple one-ring "star" layout instead, detected via the `focus` node flag.
-
-const HIERARCHY_RELATIONS = new Set(['contains', 'member_of', 'maps_to', 'alias_of'])
-const RING_SPACING = 150
-const FOCUS_RADIUS = 220
-
-type Point = { x: number; y: number }
-
-function computeRadialLayout(nodes: VocabularyGraphNode[], edges: VocabularyGraphEdge[]): Map<string, Point> {
-  const childrenOf = new Map<string, string[]>()
-  const parentOf = new Map<string, string>()
-
-  for (const e of edges) {
-    if (!HIERARCHY_RELATIONS.has(e.relation)) continue
-    const [parent, child] = e.relation === 'contains' ? [e.source, e.target] : [e.target, e.source]
-    if (!parentOf.has(child)) {
-      parentOf.set(child, parent)
-      childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), child])
-    }
-  }
-
-  const rootId = nodes.find((n) => n.id === 'root')?.id ?? nodes[0]?.id
-  const depth = new Map<string, number>()
-  if (rootId) {
-    depth.set(rootId, 0)
-    const queue = [rootId]
-    while (queue.length) {
-      const cur = queue.shift()!
-      for (const child of childrenOf.get(cur) ?? []) {
-        if (!depth.has(child)) {
-          depth.set(child, (depth.get(cur) ?? 0) + 1)
-          queue.push(child)
-        }
-      }
-    }
-  }
-
-  const angle = new Map<string, number>()
-  const assign = (id: string, start: number, end: number) => {
-    angle.set(id, (start + end) / 2)
-    const kids = childrenOf.get(id) ?? []
-    if (!kids.length) return
-    const span = (end - start) / kids.length
-    kids.forEach((kid, i) => assign(kid, start + i * span, start + (i + 1) * span))
-  }
-  if (rootId) assign(rootId, 0, Math.PI * 2)
-
-  const positions = new Map<string, Point>()
-  let orphanIndex = 0
-  const orphanCount = nodes.filter((n) => !depth.has(n.id)).length
-  for (const n of nodes) {
-    if (depth.has(n.id)) {
-      const d = depth.get(n.id) ?? 0
-      const a = angle.get(n.id) ?? 0
-      const r = d * RING_SPACING
-      positions.set(n.id, { x: r * Math.cos(a), y: r * Math.sin(a) })
-    } else {
-      const a = (orphanIndex / Math.max(1, orphanCount)) * Math.PI * 2
-      orphanIndex += 1
-      const r = (Math.max(...depth.values(), 0) + 1) * RING_SPACING
-      positions.set(n.id, { x: r * Math.cos(a), y: r * Math.sin(a) })
-    }
-  }
-  return positions
-}
-
-function computeStarLayout(nodes: VocabularyGraphNode[], centerId: string): Map<string, Point> {
-  const others = nodes.filter((n) => n.id !== centerId)
-  const positions = new Map<string, Point>([[centerId, { x: 0, y: 0 }]])
-  others.forEach((n, i) => {
-    const a = (i / Math.max(1, others.length)) * Math.PI * 2
-    positions.set(n.id, { x: FOCUS_RADIUS * Math.cos(a), y: FOCUS_RADIUS * Math.sin(a) })
-  })
-  return positions
-}
+// The radial/star layout math itself lives in ./vocabLayout (kept out of
+// this file so it stays independently unit-testable, and so this file only
+// ever exports components — see that module's own top comment).
 
 type NodeData = { vocabNode: VocabularyGraphNode; selected: boolean; zoomBand: ZoomBand }
 

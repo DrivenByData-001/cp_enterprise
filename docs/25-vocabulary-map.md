@@ -613,28 +613,66 @@ never the underlying vocabulary data.**
   a wider label box at close zoom, which is why zooming into those node kinds
   read as "the same picture, bigger" rather than genuinely richer.
 
-**Regression root cause.** Two separate, compounding causes, confirmed by
-direct inspection (no rasterised/canvas rendering, no app-authored CSS
-`transform: scale(...)` cheat anywhere in this codebase — React Flow's own
-viewport scaling is DOM/SVG-based and already vector-sharp, not a screenshot
-zoom):
+**Regression root cause.** Three separate, compounding causes — the first
+two were the initial diagnosis for this pass; the third, and by far the
+dominant one in practice, was only found after a live screenshot at
+realistic node density (the default `limit=300`) showed hundreds of
+surface-form labels and `contains`/`member_of` edges visually merged into
+unreadable, overlapping mush, which is what "still isn't sharp — looks like
+a scaled image" actually meant. No rasterised/canvas rendering and no
+app-authored CSS `transform: scale(...)` cheat exist anywhere in this
+codebase — React Flow's own viewport scaling is DOM/SVG-based and already
+vector-sharp, not a screenshot zoom — so "sharpness" here was never a
+rendering-pipeline problem:
+
 1. Node visual complexity was **static across zoom bands for two of the three
    node kinds** — pending-cluster and surface-form nodes had no close-zoom
    detail at all beyond a wider label box, so zooming into them showed
    strictly the same information, just larger. Only concept nodes had
-   genuinely richer close-zoom content.
+   genuinely richer close-zoom content. (Fixed: §"What changes per band"
+   above.)
 2. Far zoom **did not simplify enough** — cluster and concept text labels
    stayed rendered at every zoom level (only surface-form labels ever
    unmounted at far), so an overview never actually read as "topology first";
-   it read as the same label-dense view, shrunk.
-   Neither cause is a rendering-sharpness bug in the literal sense (text and
-   borders scaled by React Flow's transform stay crisp at any zoom — this is
-   standard CSS-transform behaviour, not a rasterisation artifact); both
-   drove the *perception* that "zooming in doesn't add detail" and "zooming
-   out doesn't simplify," which is what "looks like just enlarging" actually
-   described. The fix is entirely content-density, not a rendering-pipeline
-   change — deliberately the least invasive fix available, and no graph
-   library change was needed or made.
+   it read as the same label-dense view, shrunk. (Fixed: same section.)
+3. **The dominant cause, found via a live screenshot, not code review alone:**
+   `computeRadialLayout` (now `vocabLayout.ts`) placed every node at a fixed
+   `depth * RING_SPACING` radius and split each parent's angular slice
+   *evenly* among its children, regardless of how many children it had. With
+   the real-world node counts this graph is meant to show (hundreds of
+   surface forms unevenly spread across a handful of clusters, clusters
+   unevenly spread across priority bands), many siblings ended up a small
+   fraction of a degree apart — genuinely, geometrically almost coincident
+   in world-space coordinates. Since on-screen zoom scales *pixel* distance
+   between nodes, never their underlying world-space separation, **no amount
+   of zooming in could ever visually pull such siblings apart** — this, not
+   any rendering artifact, is what made zooming in "just enlarge the same
+   overlapping mess" rather than resolve it, and it's what produced the
+   solid-looking grey "tube" bands in the reported screenshot: hundreds of
+   nearly-coincident thin edges, anti-aliased on top of each other.
+   Fixed by two changes to the layout algorithm itself (`vocabLayout.ts`):
+   (a) a parent's angular slice is now divided among children in proportion
+   to each child's own subtree size (leaf-descendant count) rather than
+   evenly, so a cluster with fifty surface forms gets proportionally more
+   room than a sibling with two; (b) each node's children are placed at
+   `own radius + max(RING_SPACING, whatever radius the most tightly-sliced
+   one of its own children needs for at least 26px of real world-space
+   separation)` — computed **per parent**, not shared across an entire ring,
+   so one crowded branch doesn't inflate spacing for every unrelated branch
+   too. Verified directly: `VocabularyGraph.layout.test.ts` builds a
+   60-surface-form dense cluster and asserts every sibling ends up more than
+   10px apart in world-space (the pre-fix version placed dozens of them
+   within a couple of pixels of each other, at any zoom); a manual
+   Playwright screenshot pass at realistic density (~200-300 nodes) confirms
+   the far-zoom overview is now legible topology (no overlapping mass) and
+   that panning/zooming into any single cluster or surface form reaches
+   clean, non-overlapping labels — see the reported screenshot vs. the
+   fixed version in the delivery report for this pass.
+   This third fix is the one that actually addresses "genuinely sharper at
+   closer zoom, not just a bigger version of the same overlapping mess" —
+   (1) and (2) alone were real but secondary improvements; without (3), a
+   realistically-sized graph stayed illegible at every zoom level regardless
+   of what per-node detail was added.
 
 **Hover tooltip.** Close-zoom only, content derived solely from the
 already-loaded graph node (never a fetch triggered by hover or by a zoom
@@ -690,12 +728,17 @@ page already has.
 
 ## 17. Validation (fullscreen / semantic zoom pass; regression fix + e2e pass)
 
-**Frontend unit/component**: `tsc -b` clean. `npm test` (Vitest) — 120
-passed, 0 failed, covering `getZoomBand`'s thresholds, `VocabularyMapView`'s
-fullscreen/selection/filter/focus/node-limit/details-collapse state
-transitions (`VocabularyGraph` mocked, per §16), and the requirement-review
-evidence-list UI (a separate, unrelated component touched by the same build
-— see the requirement-evidence half of this deliverable).
+**Frontend unit/component**: `tsc -b` clean, `oxlint` clean (exit 0, zero
+findings). `npm test` (Vitest) — 123 passed, 0 failed, covering
+`getZoomBand`'s thresholds, `VocabularyMapView`'s fullscreen/selection/
+filter/focus/node-limit/details-collapse state transitions (`VocabularyGraph`
+mocked, per §16), `vocabLayout.ts`'s `computeRadialLayout` dense-graph
+anti-overlap properties (`VocabularyGraph.layout.test.ts` — see "Regression
+root cause" cause 3 above: a 60-surface-form dense cluster, a lopsided
+dense-vs-sparse sibling comparison, and a sparse-graph no-unnecessary-
+blow-up check), and the requirement-review evidence-list UI (a separate,
+unrelated component touched by the same build — see the requirement-evidence
+half of this deliverable).
 
 **Frontend real-browser (new)**: `frontend/e2e/vocabulary-map-zoom.spec.ts`,
 run via `npm run test:e2e` (Playwright, against this sandbox's pre-installed
