@@ -15,7 +15,7 @@ vi.mock('../lib/api', () => ({ api: {
   extractPdfText: vi.fn(), importBulk: vi.fn(), importPostingNative: vi.fn(),
   previewTarget: vi.fn(), importTarget: vi.fn(), assertCapability: vi.fn(), retractAssertion: vi.fn(),
   promoteAssertion: vi.fn(), createDevelopmentAction: vi.fn(), updateDevelopmentAction: vi.fn(),
-  deleteDevelopmentAction: vi.fn(), getRole: vi.fn(), listRequirements: vi.fn(),
+  deleteDevelopmentAction: vi.fn(), getRole: vi.fn(), listRequirements: vi.fn(), extractRequirements: vi.fn(),
   acceptRequirement: vi.fn(), rejectRequirement: vi.fn(), reopenRequirement: vi.fn(),
   editRequirement: vi.fn(), addRequirement: vi.fn(), listConcepts: vi.fn(),
   proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
@@ -100,7 +100,7 @@ describe('Import preview and retry', () => {
     await screen.findByDisplayValue('Extracted advert')
     expect(api.ingestText).not.toHaveBeenCalled()
     expect(api.checkDuplicate).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText('Capture text'))
+    fireEvent.click(screen.getByText('Save posting & continue'))
     await waitFor(() => expect(api.ingestText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Extracted advert', source: 'pdf' })))
     await waitFor(() => expect(screen.getByLabelText('Location').textContent).toBe('/role-instances/role/requirements?step=details'))
   })
@@ -116,6 +116,71 @@ describe('Import preview and retry', () => {
     await waitFor(() => expect(api.importBulk).toHaveBeenLastCalledWith([second]))
     await waitFor(() => expect(screen.queryByText(/Title missing/)).toBeNull())
     expect(screen.getAllByText('Open role')).toHaveLength(2)
+  })
+})
+
+// Explicit Role Save brief §12: the role must already be persisted the
+// moment Save posting succeeds — well before any enrichment/extraction step
+// ever runs — and the workflow must make that unmistakable rather than
+// leaving the user to guess from silence.
+describe('Save posting checkpoint', () => {
+  const emptyRequirements = {
+    items: [], review_summary: { accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, needs_reextraction: 0, complete: true },
+  }
+
+  function renderImportWorkflow() {
+    return render(
+      <MemoryRouter initialEntries={['/import']}>
+        <Routes>
+          <Route path="/import" element={<Import />} />
+          <Route path="/role-instances/:id/requirements" element={<RoleRequirements />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('persists the role on Save posting and shows Saved to Roles on Review details, with no extraction/enrichment triggered', async () => {
+    vi.mocked(api.checkDuplicate).mockResolvedValue({ exact_duplicate: null, possible_duplicate: null })
+    vi.mocked(api.ingestText).mockResolvedValue({ id: 'role-9', document_id: 'doc-9', duplicate_of_document_id: null, duplicate: { exact_duplicate: null, possible_duplicate: null }, status: 'ingested' })
+    vi.mocked(api.getRole).mockResolvedValue({ id: 'role-9', title: 'Actuarial Analyst', organisation: 'Acme', location: 'Dublin' } as Role)
+    vi.mocked(api.listRequirements).mockResolvedValue(emptyRequirements)
+
+    renderImportWorkflow()
+    expect(screen.getByText('Save posting & continue')).toBeTruthy() // the primary action's own label
+    fireEvent.change(screen.getByPlaceholderText('Paste raw posting text…'), { target: { value: 'Actuarial Analyst role at Acme.' } })
+    fireEvent.click(screen.getByText('Save posting & continue'))
+
+    await waitFor(() => expect(api.ingestText).toHaveBeenCalledTimes(1)) // the real save
+    // "Review role details" also appears as MetadataEnrichmentPanel's own
+    // sub-heading further down this same page, so the page heading is
+    // queried by role/level to stay unambiguous.
+    await screen.findByRole('heading', { level: 1, name: 'Review role details' }) // navigated straight into the review workflow
+    await screen.findByText('Saved to Roles')
+    const openLink = screen.getByText('Open saved role') as HTMLAnchorElement
+    expect(openLink.getAttribute('href')).toBe('/roles/role-9') // a real, already-persisted role id
+
+    expect(api.extractRequirements).not.toHaveBeenCalled()
+    expect(api.proposeRoleMetadata).not.toHaveBeenCalled()
+  })
+
+  it('does not show Saved and preserves the entered text when the save fails, and a retry can still succeed', async () => {
+    vi.mocked(api.checkDuplicate).mockResolvedValue({ exact_duplicate: null, possible_duplicate: null })
+    vi.mocked(api.ingestText).mockRejectedValueOnce(new Error('Network failed'))
+      .mockResolvedValueOnce({ id: 'role-10', document_id: 'doc-10', duplicate_of_document_id: null, duplicate: { exact_duplicate: null, possible_duplicate: null }, status: 'ingested' })
+    vi.mocked(api.getRole).mockResolvedValue({ id: 'role-10', title: 'Retry role', organisation: null, location: null } as Role)
+    vi.mocked(api.listRequirements).mockResolvedValue(emptyRequirements)
+
+    renderImportWorkflow()
+    fireEvent.change(screen.getByPlaceholderText('Paste raw posting text…'), { target: { value: 'A posting that will fail to save.' } })
+    fireEvent.click(screen.getByText('Save posting & continue'))
+
+    await screen.findByRole('alert')
+    expect(screen.queryByText('Saved to Roles')).toBeNull()
+    expect((screen.getByPlaceholderText('Paste raw posting text…') as HTMLTextAreaElement).value).toBe('A posting that will fail to save.')
+
+    fireEvent.click(screen.getByText('Save posting & continue'))
+    await waitFor(() => expect(api.ingestText).toHaveBeenCalledTimes(2))
+    await screen.findByText('Saved to Roles')
   })
 })
 
@@ -153,6 +218,8 @@ describe('Requirement review', () => {
   it('shows failed acceptance and allows retry without losing the claim', async () => {
     vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim], review_summary: { accepted: 0, unreviewed: 1, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, needs_reextraction: 0, complete: false } })
     vi.mocked(api.acceptRequirement).mockRejectedValueOnce(new Error('Review failed')).mockResolvedValueOnce({ ...claim, review_status: 'accepted' })
+    // SavedRoleBanner (shown on every step of this page) fetches the role on mount.
+    vi.mocked(api.getRole).mockResolvedValue({ id: 'role', title: 'Test Role', organisation: null, location: null } as Role)
     render(<MemoryRouter initialEntries={['/role-instances/role/requirements']}><Routes><Route path="/role-instances/:id/requirements" element={<RoleRequirements />} /></Routes></MemoryRouter>)
     fireEvent.click(await screen.findByText('Accept'))
     await screen.findByText('Review failed')
@@ -228,6 +295,8 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     }
     vi.mocked(api.compareRole).mockResolvedValue(comparison)
     vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
+    // SavedRoleBanner (shown on every step of this page) fetches the role on mount.
+    vi.mocked(api.getRole).mockResolvedValue({ id: 'role', title: 'Actuary', organisation: null, location: null } as Role)
     render(<MemoryRouter initialEntries={['/comparison/role']}><Routes><Route path="/comparison/:id" element={<Comparison />} /></Routes></MemoryRouter>)
     const notice = await screen.findByRole('alert')
     expect(notice.textContent).toContain('2 pending item')
@@ -258,6 +327,8 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     }
     vi.mocked(api.compareRole).mockResolvedValue(comparison)
     vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
+    // SavedRoleBanner (shown on every step of this page) fetches the role on mount.
+    vi.mocked(api.getRole).mockResolvedValue({ id: 'role', title: 'Actuary', organisation: null, location: null } as Role)
     render(<MemoryRouter initialEntries={['/comparison/role']}><Routes><Route path="/comparison/:id" element={<Comparison />} /></Routes></MemoryRouter>)
     const notice = await screen.findByRole('alert')
     expect(notice.textContent).toContain('1 pending item')

@@ -4,6 +4,7 @@ import { api, type ComparisonItem, type ComparisonResult, type ComparisonStatus,
 
 import ComparisonActions from '../components/ComparisonActions'
 import ImportSteps from '../components/ImportSteps'
+import SavedRoleBanner from '../components/SavedRoleBanner'
 
 const STATUS_LABEL: Record<ComparisonStatus, string> = {
   evidenced: 'Evidenced',
@@ -114,6 +115,7 @@ export default function Comparison() {
         ← Back to {data.role.title}
       </Link>
       <ImportSteps step={3} />
+      <SavedRoleBanner roleId={roleId} />
       <h1 style={{ fontSize: 22, marginTop: 12 }}>Structural comparison: {data.role.title}</h1>
       {!data.review_summary.complete && (
         <p role="alert" style={{ color: 'var(--warning)' }}>

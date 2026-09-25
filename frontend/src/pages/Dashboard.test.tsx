@@ -34,7 +34,7 @@ describe('Dashboard — posting-year filter', () => {
     )
     await waitFor(() => expect(api.listRoles).toHaveBeenCalled())
 
-    fireEvent.change(screen.getByDisplayValue('Recent (last few years)'), { target: { value: 'year' } })
+    fireEvent.change(screen.getByDisplayValue('Current roles'), { target: { value: 'year' } })
     expect(screen.getByText('Posting year:')).toBeTruthy()
   })
 
@@ -47,11 +47,47 @@ describe('Dashboard — posting-year filter', () => {
     )
     await waitFor(() => expect(api.listRoles).toHaveBeenCalled())
 
-    fireEvent.change(screen.getByDisplayValue('Recent (last few years)'), { target: { value: 'unknown_date' } })
+    fireEvent.change(screen.getByDisplayValue('Current roles'), { target: { value: 'unknown_date' } })
 
     await waitFor(() =>
       expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'unknown_date' })),
     )
     expect(screen.getByText(/never assumed to be the date they were captured/)).toBeTruthy()
+  })
+})
+
+// Save-checkpoint / Current-roles brief §6/§13: with no query params, Roles
+// must default to the Current view, newest/recently-captured first (never
+// similarity) — a role the user just saved must show up immediately without
+// digging through the historical corpus or an unrelated similarity ranking.
+describe('Dashboard — Current roles default', () => {
+  it('defaults to period=current with sort omitted (server applies its own recency default) when no query params are set', async () => {
+    vi.mocked(api.listRoles).mockResolvedValue(emptyRolesResponse('current'))
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    )
+    await waitFor(() =>
+      expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'current', sort: undefined })),
+    )
+    expect(screen.getByDisplayValue('Current roles')).toBeTruthy()
+    expect(screen.getByDisplayValue('Sort: captured')).toBeTruthy()
+    expect(screen.getByText(/Roles posted this calendar year/)).toBeTruthy()
+  })
+
+  it('retains similarity as an explicit, user-selectable sort under Current', async () => {
+    vi.mocked(api.listRoles).mockResolvedValue(emptyRolesResponse('current'))
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(api.listRoles).toHaveBeenCalled())
+
+    fireEvent.change(screen.getByLabelText('Sort roles'), { target: { value: 'similarity' } })
+    await waitFor(() =>
+      expect(api.listRoles).toHaveBeenLastCalledWith(expect.objectContaining({ period: 'current', sort: 'similarity' })),
+    )
   })
 })

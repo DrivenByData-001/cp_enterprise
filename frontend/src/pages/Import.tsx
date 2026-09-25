@@ -45,7 +45,7 @@ export default function Import() {
     try {
       const res = await api.extractPdfText(file)
       setText(res.text); setSource('pdf')
-      setMessage('PDF text is ready to review. Nothing has been captured yet.')
+      setMessage('PDF text is ready to review. Nothing is saved yet.')
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false); if (pdfInput.current) pdfInput.current.value = '' }
   }
@@ -85,7 +85,7 @@ export default function Import() {
       <p>{duplicate?.exact_duplicate ? 'The exact content is already stored.' : 'The text matches after whitespace differences are ignored.'}</p>
       <div className="actions">
         {match.role_instance_id && <button disabled={busy} onClick={() => navigate(`/roles/${match.role_instance_id}`)}>Open existing</button>}
-        <button disabled={busy} onClick={() => capture(true)}>Capture anyway</button>
+        <button disabled={busy} onClick={() => capture(true)}>Save anyway</button>
         <button disabled={busy} onClick={() => setDuplicate(null)}>Cancel</button>
       </div>
     </div>}
@@ -105,7 +105,8 @@ export default function Import() {
       {source === 'pdf' && <button onClick={() => { setSource('user_paste'); setText('') }}>Use pasted text instead</button>}
       <label>Upload a PDF<input ref={pdfInput} type="file" accept="application/pdf" onChange={e => previewPdf(e.target.files?.[0])} /></label>
       <p className="muted">Selectable-text PDFs only. Scanned PDFs need OCR before import. Leave unknown posting dates blank.</p>
-      <button className="primary" disabled={busy || !text.trim()} onClick={() => capture()}>{busy ? 'Working…' : 'Capture text'}</button>
+      <p className="muted" style={{ margin: '4px 0' }}>Nothing is saved until you choose Save posting.</p>
+      <button className="primary" disabled={busy || !text.trim()} onClick={() => capture()}>{busy ? 'Saving…' : 'Save posting & continue'}</button>
     </fieldset>
     <details className="card" style={{ marginTop: 16 }}>
       <summary>Advanced imports</summary>

@@ -34,6 +34,23 @@ export default function Vocabulary() {
     setParams((p) => { const next = new URLSearchParams(p); next.delete('focusConceptName'); return next }, { replace: true })
   }, [params, setParams])
 
+  // Deep link from requirement review's "Review pending terms" link (Explicit
+  // Role Save / Vocabulary Feedback brief §9.2): pre-focus/search the pending
+  // cluster queue for one extracted-but-unresolved surface form, using the
+  // literal `status=pending&q=<term>` shape the brief names, rather than
+  // reusing `focusConceptName` (which always means the *accepted* vocabulary).
+  useEffect(() => {
+    const q = params.get('q')
+    if (params.get('status') !== 'pending' || !q) return
+    setReviewFocus({ q, status: 'pending' })
+    setTab('review')
+    setParams((p) => {
+      const next = new URLSearchParams(p)
+      next.delete('status'); next.delete('q')
+      return next
+    }, { replace: true })
+  }, [params, setParams])
+
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>

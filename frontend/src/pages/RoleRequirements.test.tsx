@@ -1,16 +1,26 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import RoleRequirements from './RoleRequirements'
-import { api, type Concept, type RequirementClaim, type RequirementReviewSummary } from '../lib/api'
+import { api, type Concept, type Role, type RequirementClaim, type RequirementReviewSummary } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: {
   listRequirements: vi.fn(), extractRequirements: vi.fn(), acceptRequirement: vi.fn(),
   rejectRequirement: vi.fn(), reopenRequirement: vi.fn(), editRequirement: vi.fn(),
   addRequirement: vi.fn(), listConcepts: vi.fn(), proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  getRole: vi.fn(),
 } }))
 
 afterEach(() => { cleanup(); vi.resetAllMocks() })
+
+// SavedRoleBanner (persistent "Saved to Roles" checkpoint, shown on every
+// step of this page) fetches the role on mount — every test below renders
+// this page, so it needs a resolved default regardless of what it asserts.
+beforeEach(() => {
+  vi.mocked(api.getRole).mockResolvedValue(
+    { id: 'role-1', title: 'Test Role', organisation: null, location: null } as Role,
+  )
+})
 
 function claim(overrides: Partial<RequirementClaim> = {}): RequirementClaim {
   return {

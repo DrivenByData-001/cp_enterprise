@@ -219,7 +219,7 @@ export type RoleListResponse = {
   total: number
   limit: number
   offset: number
-  period: 'recent' | 'all' | 'year' | 'range' | 'unknown_date'
+  period: 'current' | 'recent' | 'all' | 'year' | 'range' | 'unknown_date'
   year_range: YearRange
 }
 
@@ -760,6 +760,23 @@ export type RequirementClaimCreateInput = {
   evidence_span: string
 }
 
+// User-facing vocabulary feedback for one extraction run (Explicit Role
+// Save / Vocabulary Feedback brief §7/§8) — distinct from the operational
+// counts above. Both counts are by *distinct surface form this run
+// touched*, never raw occurrence, and `pending_term_count` deliberately
+// covers every unresolved term this role contributed to, whether newly
+// created or already pending from an earlier role; `new_pending_proposal_count`
+// is the narrower "genuinely new" figure, so the two are never conflated.
+export type VocabularyMatchedExisting = { surface_form: string; concept_id: string; canonical_name: string; type_code: string }
+export type VocabularyPendingTerm = { surface_form: string; proposal_id: string; created_new_proposal: boolean }
+export type VocabularyOutcome = {
+  matched_existing_count: number
+  pending_term_count: number
+  new_pending_proposal_count: number
+  matched_existing: VocabularyMatchedExisting[]
+  pending_terms: VocabularyPendingTerm[]
+}
+
 export type ExtractionSummary = {
   status: 'ok' | 'partial' | 'failed'
   extraction_run_id: string
@@ -772,6 +789,7 @@ export type ExtractionSummary = {
   proposals_created?: number
   proposals_updated?: number
   rejected_span_count?: number
+  vocabulary_outcome?: VocabularyOutcome
   error?: string
 }
 
@@ -2333,7 +2351,7 @@ export const api = {
       concept_id?: string
       min_similarity?: number
       sort?: string
-      period?: 'recent' | 'all' | 'unknown_date'
+      period?: 'current' | 'recent' | 'all' | 'unknown_date'
       year?: number
       date_from?: string
       date_to?: string
