@@ -61,7 +61,7 @@ describe('Dashboard — posting-year filter', () => {
 // similarity) — a role the user just saved must show up immediately without
 // digging through the historical corpus or an unrelated similarity ranking.
 describe('Dashboard — Current roles default', () => {
-  it('defaults to period=current with sort omitted (server applies its own recency default) when no query params are set', async () => {
+  it('defaults to period=current with sort=captured_at (the same recency default the server applies on its own) when no query params are set', async () => {
     vi.mocked(api.listRoles).mockResolvedValue(emptyRolesResponse('current'))
     render(
       <MemoryRouter>
@@ -69,7 +69,7 @@ describe('Dashboard — Current roles default', () => {
       </MemoryRouter>,
     )
     await waitFor(() =>
-      expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'current', sort: undefined })),
+      expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'current', sort: 'captured_at' })),
     )
     expect(screen.getByDisplayValue('Current roles')).toBeTruthy()
     expect(screen.getByDisplayValue('Sort: captured')).toBeTruthy()

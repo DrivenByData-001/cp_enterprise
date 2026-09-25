@@ -137,10 +137,14 @@ def list_roles(
     # captured first, not similarity — a role the user just saved must show
     # up immediately near the top rather than wherever it happens to rank
     # against the profile.
-    use_current_recency_default = sort is None and applied_period == "current"
     effective_sort = sort or ("captured_at" if applied_period == "current" else "similarity")
 
-    if use_current_recency_default:
+    if effective_sort == "similarity":
+        rows.sort(key=lambda r: (r["similarity"] is None, -(r["similarity"] or 0)))
+    elif effective_sort == "captured_at":
+        # One implementation for "sort by captured_at", whether the caller
+        # asked for it explicitly or reached it via Current's own default —
+        # never two subtly different sorts depending on how you got here.
         # captured_at is the primary key; a row with no linked document (so
         # no captured_at at all — legacy/bulk-imported roles) falls back to
         # its own posting_date rather than being stranded at a meaningless
@@ -149,10 +153,19 @@ def list_roles(
         # date/timestamp strings compare chronologically, and "" (neither
         # value present) sorts after every real value once reversed.
         rows.sort(key=lambda r: str(r.get("captured_at") or r.get("posting_date") or ""), reverse=True)
-    elif effective_sort == "similarity":
-        rows.sort(key=lambda r: (r["similarity"] is None, -(r["similarity"] or 0)))
-    elif effective_sort in ("posting_date", "captured_at", "title"):
-        rows.sort(key=lambda r: (r.get(effective_sort) is None, str(r.get(effective_sort) or "")), reverse=(effective_sort != "title"))
+    elif effective_sort in ("posting_date", "title"):
+        # Null-last regardless of direction. Folding "is the value missing"
+        # into the same tuple as the value itself and then reversing the
+        # *whole* tuple (the previous approach here) puts missing values
+        # *first* once reversed — sorted ascending, (True, "") > (False,
+        # "2024-01-01"), so reversing flips that "missing sorts last"
+        # ordering into "missing sorts first". Sorting the two groups
+        # separately avoids that inversion entirely.
+        reverse = effective_sort != "title"
+        with_value = [r for r in rows if r.get(effective_sort) is not None]
+        without_value = [r for r in rows if r.get(effective_sort) is None]
+        with_value.sort(key=lambda r: str(r[effective_sort]), reverse=reverse)
+        rows = with_value + without_value
 
     total = len(rows)
     page = rows[offset : offset + limit]

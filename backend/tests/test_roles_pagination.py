@@ -108,6 +108,35 @@ def test_explicit_similarity_sort_still_works_under_default_current_period(clien
     assert {r["id"] for r in body["items"]} == {role_a, role_b}
 
 
+def test_explicit_captured_at_sort_matches_current_default_semantics(client):
+    """An explicit `sort=captured_at` must behave identically to Current's
+    own default sort — one comparator (posting_date fallback, null-last),
+    not two subtly different ones depending on how you reached it. Checked
+    under `period=all` specifically, so this isn't just re-testing the
+    default-period case."""
+    today = date.today()
+    with db.db_cursor() as cur:
+        earlier_posting = _role(cur, "Legacy role, no document", posting_date=(today - timedelta(days=1)).isoformat())
+        later_capture = _role_with_document(cur, "Freshly captured role", captured_at=datetime.now(timezone.utc))
+
+    body = client.get("/api/roles", params={"period": "all", "sort": "captured_at"}).json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert ids_in_order.index(later_capture) < ids_in_order.index(earlier_posting)
+
+
+def test_posting_date_sort_puts_undated_roles_last(client):
+    """Regression: folding "is the value missing" into the same tuple as the
+    value and reversing the *whole* tuple for descending order used to put
+    missing values first, the opposite of the intended null-last ordering."""
+    with db.db_cursor() as cur:
+        dated = _role(cur, "Dated role", posting_date="2020-06-01")
+        undated = _role(cur, "Undated role", posting_date=None)
+
+    body = client.get("/api/roles", params={"period": "all", "sort": "posting_date"}).json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert ids_in_order.index(dated) < ids_in_order.index(undated)
+
+
 def test_period_recent_still_works(client):
     today = date.today()
     old_date = (today - timedelta(days=365 * 6)).isoformat()  # well outside the recent window

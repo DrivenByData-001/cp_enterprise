@@ -29,7 +29,7 @@ const BASIS_OPTIONS = ['stated', 'implied', 'inferred', 'user_asserted'] as cons
 // accepts — editable in between, same posture as requirement claims below
 // ("nothing here was auto-accepted"). Placed on this page rather than a new
 // one, per the brief's own suggestion that this is the cleanest fit.
-function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
+function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved: () => void }) {
   const [proposal, setProposal] = useState<RoleMetadataInput | null>(null)
   const [proposing, setProposing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -72,6 +72,12 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
     try {
       await api.updateRoleMetadata(roleId, proposal)
       setSaved(true)
+      // The persisted-role banner above (SavedRoleBanner) fetched its own
+      // copy of the role on mount and has no other way to learn this just
+      // changed — without this, "Saved details" could keep showing the
+      // pre-save employer/title/location right next to a form that just
+      // said "Saved." successfully.
+      onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -548,6 +554,11 @@ export default function RoleRequirements() {
   const [extracting, setExtracting] = useState(false)
   const [lastRun, setLastRun] = useState<ExtractionSummary | null>(null)
   const [addingRequirement, setAddingRequirement] = useState(false)
+  // Bumped whenever MetadataEnrichmentPanel's own "Save details" commits a
+  // metadata correction, so SavedRoleBanner (which fetched its own copy of
+  // the role on mount and has no other way to find out) re-fetches instead
+  // of continuing to show the pre-save title/organisation/location.
+  const [savedRoleVersion, setSavedRoleVersion] = useState(0)
   // Unlike accepted/unreviewed/rejected counts, these can't be derived from
   // `claims`. unresolvedProposals: a surface form extraction couldn't
   // resolve to any concept becomes a concept_proposal, never a
@@ -624,8 +635,10 @@ export default function RoleRequirements() {
       </Link>
       <ImportSteps step={detailsStep ? 1 : 2} />
       <h1 style={{ fontSize: 22, marginTop: 12 }}>{detailsStep ? 'Review role details' : 'Review requirements'}</h1>
-      <SavedRoleBanner roleId={roleId} />
-      <div hidden={!detailsStep}><MetadataEnrichmentPanel key={roleId} roleId={roleId} /></div>
+      <SavedRoleBanner roleId={roleId} refreshKey={savedRoleVersion} />
+      <div hidden={!detailsStep}>
+        <MetadataEnrichmentPanel key={roleId} roleId={roleId} onSaved={() => setSavedRoleVersion((v) => v + 1)} />
+      </div>
       {detailsStep ? <button className="primary" onClick={() => setParams({})}>Continue to requirements</button> :
         <button onClick={() => setParams({ step: 'details' })}>Back to role details</button>}
       <div hidden={detailsStep}>

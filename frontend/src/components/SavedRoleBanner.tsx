@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Role } from '../lib/api'
-import { roleListUrl } from '../lib/roleNavigation'
 
 // Explicit-save-checkpoint UX: once a page has a real roleId, the role is
 // already persisted (POST /api/role-instances/ingest writes the source
@@ -12,7 +11,7 @@ import { roleListUrl } from '../lib/roleNavigation'
 // invents its own "saved" flag: it reflects whatever `api.getRole` returns
 // for this real, already-persisted id, so it can never disagree with the
 // database the way local-only state could.
-export default function SavedRoleBanner({ roleId }: { roleId: string }) {
+export default function SavedRoleBanner({ roleId, refreshKey }: { roleId: string; refreshKey?: unknown }) {
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -23,7 +22,11 @@ export default function SavedRoleBanner({ roleId }: { roleId: string }) {
       .then((r) => { if (current) setRole(r) })
       .catch((e) => { if (current) setError(e instanceof Error ? e.message : String(e)) })
     return () => { current = false }
-  }, [roleId])
+    // `refreshKey` triggers a re-fetch on demand (e.g. right after "Save
+    // details" commits a metadata correction elsewhere on the same page)
+    // without this banner otherwise going stale until the next unrelated
+    // roleId change.
+  }, [roleId, refreshKey])
 
   return (
     <div className="card" role="status" style={{ marginBottom: 16, borderColor: 'var(--good)' }}>
@@ -44,7 +47,15 @@ export default function SavedRoleBanner({ roleId }: { roleId: string }) {
       {error && <p role="alert" style={{ fontSize: 13, color: 'var(--critical)' }}>Could not confirm saved details: {error}</p>}
       <div className="actions" style={{ display: 'flex', gap: 8 }}>
         <Link to={`/roles/${roleId}`}>Open saved role</Link>
-        <Link to={roleListUrl()}>Back to Roles</Link>
+        {/* Deliberately not roleListUrl() (which restores whatever Roles
+            filters were last remembered, e.g. a specific old year or a
+            narrow facet) — right after saving, this link's whole point is
+            that the new role is visible, so it must go to the default
+            Current view, not wherever the user happened to be browsing
+            before. roleListUrl() remains correct for ordinary Role Detail
+            navigation, where returning to prior research context is the
+            useful behaviour. */}
+        <Link to="/?period=current">Back to Roles</Link>
       </div>
     </div>
   )

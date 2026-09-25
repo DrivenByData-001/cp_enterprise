@@ -239,6 +239,7 @@ label input, label textarea, label select { width: 100%; min-width: 0; }
 .workflow-steps { display: flex; flex-wrap: wrap; padding: 0; list-style: none; gap: 8px; }
 .workflow-steps li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); }
 .workflow-steps [aria-current=step] { border-color: var(--series-1); color: var(--text-primary); font-weight: 650; }
+.workflow-steps li.completed { border-color: var(--good); color: var(--good); }
 .action-list { padding-left: 20px; }
 .action-list li { margin: 12px 0; }
 button:disabled { cursor: not-allowed; opacity: 0.55; }

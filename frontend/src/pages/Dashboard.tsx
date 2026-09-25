@@ -59,15 +59,14 @@ export default function Dashboard() {
   const periodValue = params.get('period') ?? 'current'
   const period = ['current', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
   // Current's own default sort is newest/recently-captured first, not
-  // similarity (brief §6.3) — computed server-side (app/routes/roles.py)
-  // whenever `sort` is omitted entirely, so an unset sort must actually be
-  // sent as omitted here rather than defaulted client-side to 'similarity'.
-  // `displaySort` still gives the dropdown a concrete selected value either
-  // way; an explicit choice from the dropdown always wins over either
-  // default (brief §6.3/§13).
-  const explicitSort = params.get('sort')
-  const displaySort = explicitSort ?? (period === 'current' ? 'captured_at' : 'similarity')
-  const requestSort = explicitSort ?? (period === 'current' ? undefined : 'similarity')
+  // similarity (brief §6.3): sending `sort=captured_at` explicitly here is
+  // exactly the same request the server would resolve to on its own if
+  // `sort` were omitted under `period=current` (app/routes/roles.py unifies
+  // both paths through one comparator) — sent explicitly anyway so the
+  // dropdown's own displayed value is never out of step with what's
+  // actually being requested. An explicit choice from the dropdown always
+  // wins over the default (brief §6.3/§13).
+  const sort = params.get('sort') ?? (period === 'current' ? 'captured_at' : 'similarity')
   const year = /^\d{4}$/.test(params.get('year') ?? '') ? Number(params.get('year')) : ''
   const rawOffset = Number(params.get('offset') ?? 0)
   const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
@@ -101,7 +100,7 @@ export default function Dashboard() {
     if (period === 'year' && year === '') { setLoading(false); return }
     setLoading(true)
     api.listRoles({
-      career_track: track || undefined, concept_id: conceptId || undefined, sort: requestSort,
+      career_track: track || undefined, concept_id: conceptId || undefined, sort,
       period: period === 'year' ? 'all' : period as 'current' | 'all' | 'recent' | 'unknown_date',
       year: period === 'year' && year !== '' ? year : undefined,
       limit: PAGE_SIZE, offset,
@@ -111,7 +110,7 @@ export default function Dashboard() {
     }).catch((e) => { if (current) setError(String(e)) })
       .finally(() => { if (current) setLoading(false) })
     return () => { current = false }
-  }, [track, conceptId, requestSort, period, year, offset, retry])
+  }, [track, conceptId, sort, period, year, offset, retry])
 
   const availableYears: number[] = yearRange ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, i) => yearRange.max - i) : []
   const pageStart = total === 0 ? 0 : offset + 1
@@ -130,7 +129,7 @@ export default function Dashboard() {
               </option>
             ))}
           </select>
-          <select aria-label="Sort roles" value={displaySort} onChange={(e) => update('sort', e.target.value)}>
+          <select aria-label="Sort roles" value={sort} onChange={(e) => update('sort', e.target.value)}>
             <option value="similarity">Sort: similarity</option>
             <option value="posting_date">Sort: posting date</option>
             <option value="captured_at">Sort: captured</option>
