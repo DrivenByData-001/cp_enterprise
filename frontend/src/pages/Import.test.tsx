@@ -36,7 +36,7 @@ afterEach(() => {
 function pasteAndCapture(text: string) {
   const textarea = screen.getByPlaceholderText('Paste raw posting text…')
   fireEvent.change(textarea, { target: { value: text } })
-  fireEvent.click(screen.getByText('Capture text'))
+  fireEvent.click(screen.getByText('Save posting & continue'))
 }
 
 describe('Import — exact duplicate warning', () => {
@@ -55,7 +55,7 @@ describe('Import — exact duplicate warning', () => {
     await waitFor(() => expect(screen.getByText('This document appears to have already been captured.')).toBeTruthy())
     expect(screen.getByText('Forvis Mazars Ireland')).toBeTruthy()
     expect(screen.getByText('Open existing')).toBeTruthy()
-    expect(screen.getByText('Capture anyway')).toBeTruthy()
+    expect(screen.getByText('Save anyway')).toBeTruthy()
     expect(api.ingestText).not.toHaveBeenCalled()
   })
 
@@ -68,9 +68,9 @@ describe('Import — exact duplicate warning', () => {
 
     renderImport()
     pasteAndCapture('Some duplicated posting text.')
-    await waitFor(() => expect(screen.getByText('Capture anyway')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Save anyway')).toBeTruthy())
 
-    fireEvent.click(screen.getByText('Capture anyway'))
+    fireEvent.click(screen.getByText('Save anyway'))
     await waitFor(() => expect(api.ingestText).toHaveBeenCalledTimes(1))
     expect(api.ingestText).toHaveBeenCalledWith(expect.objectContaining({ text: 'Some duplicated posting text.' }))
   })

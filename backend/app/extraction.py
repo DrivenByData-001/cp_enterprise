@@ -245,6 +245,39 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
     evidence_created = evidence_deduplicated = 0
 
+    # Vocabulary outcome (Explicit Role Save / Vocabulary Feedback brief §7/§8):
+    # user-facing feedback on what extraction actually did with the
+    # vocabulary, distinct from the operational counts above. Built directly
+    # from this run's own already-computed `item_concept`/`validated` data —
+    # never a second AI call, never a per-item DB round trip (the one lookup
+    # below is batched). Keyed by normalized surface form so a term mentioned
+    # more than once in the same posting is reported once, not once per
+    # occurrence.
+    matched_existing_by_surface_form: dict[str, dict] = {}
+    concept_lookup = {c["id"]: c for c in _concepts_by_ids(cur, list(set(item_concept.values())))}
+    for idx, concept_id in item_concept.items():
+        surface_form = validated[idx][0]
+        key = normalize_name(surface_form)
+        if key in matched_existing_by_surface_form:
+            continue
+        concept = concept_lookup.get(concept_id)
+        if concept is None:
+            continue
+        matched_existing_by_surface_form[key] = {
+            "surface_form": surface_form,
+            "concept_id": concept_id,
+            "canonical_name": concept["canonical_name"],
+            "type_code": concept["type_code"],
+        }
+
+    # Pending terms this role/run *contributed to* (brief §8's "not merely
+    # globally new concept_proposal rows"): every distinct unresolved surface
+    # form this run processed, whether it created a brand-new pending
+    # proposal or merely added evidence to one already pending from an
+    # earlier role — populated below, inside the same loop that already does
+    # that DB work, so this never re-derives it from a second query.
+    pending_terms_by_surface_form: dict[str, dict] = {}
+
     def _requirement_type_rank(requirement_type: str) -> int:
         # Lower is stronger — mirrors role_requirements.requirement_type_rank_sql
         # (the same ranking resolve_occurrences_for_concept uses), kept as a
@@ -410,6 +443,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
             (normalized,),
         )
         existing = cur.fetchone()
+        was_already_pending = existing is not None
         if existing:
             proposal_id = existing["id"]
             cur.execute(
@@ -439,6 +473,19 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
             )
             proposal_id = cur.fetchone()["id"]
             proposals_created += 1
+
+        # First sight of this normalized surface form *within this run*
+        # decides what gets reported — a later occurrence of the same term
+        # later in this same loop (e.g. mentioned twice in one posting)
+        # always finds `existing` truthy by then regardless, so recording
+        # only the first sight is exactly the same "did this run bring the
+        # term into pending status" fact, never a copy of DB-round-trip noise.
+        if normalized not in pending_terms_by_surface_form:
+            pending_terms_by_surface_form[normalized] = {
+                "surface_form": surface_form,
+                "proposal_id": str(proposal_id),
+                "created_new_proposal": not was_already_pending,
+            }
 
         # requirement_type/basis/span (migration 0022) preserve *this* item's
         # own shape, not concept_proposal's shared/global columns above — if
@@ -489,6 +536,24 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,
+        # User-facing vocabulary feedback (brief §7/§8): what this run
+        # actually did with the vocabulary, on top of the operational counts
+        # above. matched_existing_count/pending_term_count are both counted
+        # by *distinct surface form this run touched* — never by raw
+        # occurrence — so a term mentioned twice in one posting is one line,
+        # not two. pending_term_count intentionally counts every unresolved
+        # term this role/run contributed evidence to, whether or not it was
+        # already pending from an earlier role (see pending_terms_by_surface_form's
+        # own docstring above) — new_pending_proposal_count is the narrower,
+        # separately-reported "how many were genuinely new" figure so the two
+        # are never conflated.
+        "vocabulary_outcome": {
+            "matched_existing_count": len(matched_existing_by_surface_form),
+            "pending_term_count": len(pending_terms_by_surface_form),
+            "new_pending_proposal_count": proposals_created,
+            "matched_existing": list(matched_existing_by_surface_form.values()),
+            "pending_terms": list(pending_terms_by_surface_form.values()),
+        },
     }
 
 

@@ -232,9 +232,18 @@ see `docs/20-render-deployment.md` §8 for the full design and
    narrative itself is authored in profile360's own tool, not here) and its
    history. It gets embedded on demand for every similarity computation
    elsewhere in this app (Dashboard/Space/Targets).
-2. **Import** — the main flow is Add posting → Review details → Review
-   requirements → Compare. Preview PDF text before capture; edit details
-   manually or request AI suggestions. Advanced imports remain available:
+2. **Import** — the main flow is Save posting → Review details → Review
+   requirements → Compare. **Save posting** is the actual persistence
+   checkpoint: the source document and role are stored the moment it
+   succeeds, well before any AI enrichment runs, and a persistent "Saved to
+   Roles" banner on every later step confirms it and lets you leave and come
+   back safely (docs/31 §1/§3). Preview PDF text before saving (nothing is
+   saved yet at that point); edit details manually or request AI
+   suggestions — proposed details are clearly distinguished from the saved
+   ones until you explicitly accept them. Requirement extraction reports
+   which extracted terms matched already-accepted vocabulary vs. which are
+   new and now await curation in Vocabulary (docs/31 §4-6). Advanced imports
+   remain available:
 
    - *Source-aware ingest* — paste raw text (or upload a selectable-text PDF)
      to capture it as an immutable document + `role_instance`, then extract
@@ -247,8 +256,12 @@ see `docs/20-render-deployment.md` §8 for the full design and
      `.json` files at once to bulk-import a folder you've already captured.
 3. **Dashboard** — roles ranked by similarity to your current profile,
    filterable by career track, server-side paginated, and temporally
-   filtered (defaults to recent/current roles — see "All years"/a specific
-   year to browse the full 2008–2025 historical corpus; docs/18 §3).
+   filtered (defaults to **Current roles** — this calendar year's postings,
+   plus newly saved undated ones — sorted newest-first rather than by
+   similarity by default; see "Recent"/"All years"/a specific year to browse
+   the full 2008–2025 historical corpus, and similarity remains an explicit
+   sort choice; docs/31 §7-8, superseding docs/18 §3's original "recent"
+   default).
 4. **Space** — a 3D PCA starfield of every captured role, target, and your
    profile, positioned by embedding similarity, with screen-space-sized
    markers (they don't balloon as you zoom in — docs/18 §1) and a temporal

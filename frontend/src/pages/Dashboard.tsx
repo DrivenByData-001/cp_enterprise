@@ -54,11 +54,19 @@ export default function Dashboard() {
   const [params, setParams] = useSearchParams()
   useEffect(() => { rememberRoleList(params.toString()) }, [params])
   const track = params.get('track') ?? ''
-  const sort = params.get('sort') ?? 'similarity'
   const facetType = params.get('facet') ?? ''
   const conceptId = facetType ? params.get('concept') ?? '' : ''
-  const periodValue = params.get('period') ?? 'recent'
-  const period = ['recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'recent'
+  const periodValue = params.get('period') ?? 'current'
+  const period = ['current', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
+  // Current's own default sort is newest/recently-captured first, not
+  // similarity (brief §6.3): sending `sort=captured_at` explicitly here is
+  // exactly the same request the server would resolve to on its own if
+  // `sort` were omitted under `period=current` (app/routes/roles.py unifies
+  // both paths through one comparator) — sent explicitly anyway so the
+  // dropdown's own displayed value is never out of step with what's
+  // actually being requested. An explicit choice from the dropdown always
+  // wins over the default (brief §6.3/§13).
+  const sort = params.get('sort') ?? (period === 'current' ? 'captured_at' : 'similarity')
   const year = /^\d{4}$/.test(params.get('year') ?? '') ? Number(params.get('year')) : ''
   const rawOffset = Number(params.get('offset') ?? 0)
   const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
@@ -93,7 +101,7 @@ export default function Dashboard() {
     setLoading(true)
     api.listRoles({
       career_track: track || undefined, concept_id: conceptId || undefined, sort,
-      period: period === 'year' ? 'all' : period as 'all' | 'recent' | 'unknown_date',
+      period: period === 'year' ? 'all' : period as 'current' | 'all' | 'recent' | 'unknown_date',
       year: period === 'year' && year !== '' ? year : undefined,
       limit: PAGE_SIZE, offset,
     }).then((res) => {
@@ -148,19 +156,23 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Temporal filter (docs/18 §3): defaults to "recent" so the ~2008-2025
-          historical corpus doesn't drown out current roles day to day, while
-          every historical year stays one click away — never hidden at the
+      {/* Temporal filter (Save-checkpoint / Current-roles brief §6): defaults
+          to "Current" so a role just saved is immediately visible without
+          being drowned out by the ~2008-2025 historical corpus — the
+          historical corpus stays one click away, never hidden at the
           persistence layer, only in this default view. Labels are explicit
           about *posting* year (source-aware ingest cleanup, problem #8):
           this filters by when the role was posted, never by when it was
           captured/uploaded — capture date is a separate, optional axis this
-          filter never substitutes for a missing posting date. */}
+          filter never substitutes for a missing posting date, except for
+          Current's own well-documented undated-but-newly-saved carve-out
+          below. */}
       <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16, padding: '8px 12px' }}>
         <span className="secondary" style={{ fontSize: 13 }}>
           Showing:
         </span>
         <select aria-label="Posting period" value={period} onChange={(e) => update('period', e.target.value)}>
+          <option value="current">Current roles</option>
           <option value="recent">Recent (last few years)</option>
           <option value="all">All years{yearRange ? ` (${yearRange.min}–${yearRange.max})` : ''}</option>
           <option value="year">A specific posting year…</option>
@@ -180,6 +192,11 @@ export default function Dashboard() {
               ))}
             </select>
           </>
+        )}
+        {period === 'current' && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            Roles posted this calendar year, plus newly captured roles whose posting date is not known.
+          </span>
         )}
         {(period === 'all' || period === 'year') && (
           <span className="muted" style={{ fontSize: 12 }}>

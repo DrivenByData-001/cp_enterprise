@@ -1,16 +1,26 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import RoleRequirements from './RoleRequirements'
-import { api, type Concept, type RequirementClaim, type RequirementReviewSummary } from '../lib/api'
+import { api, type Concept, type Role, type RequirementClaim, type RequirementReviewSummary } from '../lib/api'
 
 vi.mock('../lib/api', () => ({ api: {
   listRequirements: vi.fn(), extractRequirements: vi.fn(), acceptRequirement: vi.fn(),
   rejectRequirement: vi.fn(), reopenRequirement: vi.fn(), editRequirement: vi.fn(),
   addRequirement: vi.fn(), listConcepts: vi.fn(), proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
+  getRole: vi.fn(),
 } }))
 
 afterEach(() => { cleanup(); vi.resetAllMocks() })
+
+// SavedRoleBanner (persistent "Saved to Roles" checkpoint, shown on every
+// step of this page) fetches the role on mount — every test below renders
+// this page, so it needs a resolved default regardless of what it asserts.
+beforeEach(() => {
+  vi.mocked(api.getRole).mockResolvedValue(
+    { id: 'role-1', title: 'Test Role', organisation: null, location: null } as Role,
+  )
+})
 
 function claim(overrides: Partial<RequirementClaim> = {}): RequirementClaim {
   return {
@@ -242,5 +252,38 @@ describe('review-incomplete warning', () => {
     await screen.findByText('Python')
     expect(screen.getByText(/2 extracted terms could not be matched to the vocabulary/)).toBeTruthy()
     expect(screen.getByText('Continue to comparison (requirement review incomplete)')).toBeTruthy()
+  })
+})
+
+describe('SavedRoleBanner', () => {
+  it('links Back to Roles to the default Current view, never the last-remembered filters', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: reviewSummary() })
+    renderPage()
+    await screen.findByText('Saved to Roles')
+    const backLink = screen.getByText('Back to Roles') as HTMLAnchorElement
+    expect(backLink.getAttribute('href')).toBe('/?period=current')
+  })
+
+  it('re-fetches the saved role after Save details commits a metadata correction, so Saved details never goes stale', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: reviewSummary() })
+    vi.mocked(api.getRole)
+      .mockResolvedValueOnce({ id: 'role-1', title: 'Old Title', organisation: null, location: null } as Role)
+      .mockResolvedValueOnce({ id: 'role-1', title: 'New Title', organisation: 'Acme', location: 'Dublin' } as Role)
+    vi.mocked(api.proposeRoleMetadata).mockResolvedValue({
+      status: 'ok', extraction_run_id: 'run-1', error: null,
+      proposal: { title: 'New Title', organisation: 'Acme', location: 'Dublin' },
+    })
+    vi.mocked(api.updateRoleMetadata).mockResolvedValue({ id: 'role-1' } as Role)
+
+    renderPage()
+    await screen.findByText('Old Title')
+
+    fireEvent.click(screen.getByText('Suggest details from the source'))
+    await screen.findByText('Save details')
+    fireEvent.click(screen.getByText('Save details'))
+
+    await waitFor(() => expect(api.updateRoleMetadata).toHaveBeenCalledTimes(1))
+    await screen.findByText('New Title') // the banner's own "Saved details" re-fetched, not left stale
+    expect(api.getRole).toHaveBeenCalledTimes(2)
   })
 })

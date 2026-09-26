@@ -27,8 +27,8 @@ def list_roles(
     career_track: str | None = None,
     concept_id: str | None = None,
     min_similarity: float | None = None,
-    sort: str = Query("similarity", pattern="^(similarity|posting_date|captured_at|title)$"),
-    period: str = Query("recent", pattern="^(recent|all|unknown_date)$"),
+    sort: str | None = Query(None, pattern="^(similarity|posting_date|captured_at|title)$"),
+    period: str = Query("current", pattern="^(current|recent|all|unknown_date)$"),
     year: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -38,15 +38,23 @@ def list_roles(
     """Server-side filtered, sorted, and paginated (brief: "every role loaded
     into the browser" must not be required). Temporal precedence: an
     explicit `year` or `date_from`/`date_to` always wins; otherwise `period`
-    decides ('recent' — the default — or 'all'). Pagination is applied last,
-    after similarity is computed and the full matching set is sorted — see
-    the comment above the slice below for why that's still "server-side"
+    decides ('current' — the default, the everyday operational view — or
+    'recent'/'all'/'unknown_date'). Pagination is applied last, after
+    similarity is computed and the full matching set is sorted — see the
+    comment above the slice below for why that's still "server-side"
     pagination in the sense that matters (the browser never receives
     unpaginated rows), even though the DB query itself isn't LIMIT/OFFSET'd:
     at this corpus's scale (~300 roles) an in-memory sort after a SQL-side
     similarity-independent filter is simpler and no less correct than
     pushing cosine ranking into SQL, and every filter that *can* run in SQL
     (track, concept, temporal) already does.
+
+    `sort` defaults to `None` rather than a fixed literal specifically so an
+    explicit query parameter can be told apart from "the caller didn't ask" —
+    the Save-checkpoint/Current-roles brief's own default-sort behaviour
+    (newest/recently-captured first under 'current', §6.3) only applies when
+    the caller truly omitted it; passing `sort=similarity` explicitly always
+    wins, same as any other explicit temporal/sort parameter.
     """
     with db_cursor() as cur:
         _, profile_vec = ensure_profile_embedding(cur)
@@ -73,6 +81,20 @@ def list_roles(
                 filters += " AND ri.posting_date <= %s"
                 params.append(date_to)
             applied_period = "range"
+        elif period == "current":
+            # The default, everyday operational view (Save-checkpoint /
+            # Current-roles brief §6.1): a role counts as "current" when its
+            # own posting year is this calendar year, or — only when no
+            # posting date was ever captured for it — its linked source
+            # document was itself captured this calendar year. This decides
+            # *inclusion* only; it never substitutes captured_at into
+            # posting_date, and a dated-but-old role is never pulled in just
+            # because it happens to have been recaptured recently.
+            filters += (
+                " AND (EXTRACT(YEAR FROM ri.posting_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
+                " OR (ri.posting_date IS NULL AND EXTRACT(YEAR FROM d.captured_at) = EXTRACT(YEAR FROM CURRENT_DATE)))"
+            )
+            applied_period = "current"
         elif period == "unknown_date":
             # A named, explicit filter for "posting date was never captured"
             # (docs: source-aware ingest cleanup, problem #8) — distinct from
@@ -110,10 +132,40 @@ def list_roles(
     if min_similarity is not None:
         rows = [r for r in rows if r["similarity"] is not None and r["similarity"] >= min_similarity]
 
-    if sort == "similarity":
+    # An explicit `sort` always wins (brief §6.3/§13). Only when the caller
+    # truly omitted it does Current's own default apply: newest/recently-
+    # captured first, not similarity — a role the user just saved must show
+    # up immediately near the top rather than wherever it happens to rank
+    # against the profile.
+    effective_sort = sort or ("captured_at" if applied_period == "current" else "similarity")
+
+    if effective_sort == "similarity":
         rows.sort(key=lambda r: (r["similarity"] is None, -(r["similarity"] or 0)))
-    elif sort in ("posting_date", "captured_at", "title"):
-        rows.sort(key=lambda r: (r.get(sort) is None, str(r.get(sort) or "")), reverse=(sort != "title"))
+    elif effective_sort == "captured_at":
+        # One implementation for "sort by captured_at", whether the caller
+        # asked for it explicitly or reached it via Current's own default —
+        # never two subtly different sorts depending on how you got here.
+        # captured_at is the primary key; a row with no linked document (so
+        # no captured_at at all — legacy/bulk-imported roles) falls back to
+        # its own posting_date rather than being stranded at a meaningless
+        # position, and a row with neither sorts last. Plain descending
+        # string comparison already gives all three: two real ISO-shaped
+        # date/timestamp strings compare chronologically, and "" (neither
+        # value present) sorts after every real value once reversed.
+        rows.sort(key=lambda r: str(r.get("captured_at") or r.get("posting_date") or ""), reverse=True)
+    elif effective_sort in ("posting_date", "title"):
+        # Null-last regardless of direction. Folding "is the value missing"
+        # into the same tuple as the value itself and then reversing the
+        # *whole* tuple (the previous approach here) puts missing values
+        # *first* once reversed — sorted ascending, (True, "") > (False,
+        # "2024-01-01"), so reversing flips that "missing sorts last"
+        # ordering into "missing sorts first". Sorting the two groups
+        # separately avoids that inversion entirely.
+        reverse = effective_sort != "title"
+        with_value = [r for r in rows if r.get(effective_sort) is not None]
+        without_value = [r for r in rows if r.get(effective_sort) is None]
+        with_value.sort(key=lambda r: str(r[effective_sort]), reverse=reverse)
+        rows = with_value + without_value
 
     total = len(rows)
     page = rows[offset : offset + limit]

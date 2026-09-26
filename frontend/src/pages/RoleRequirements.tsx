@@ -7,9 +7,11 @@ import {
   type RequirementClaim,
   type RequirementClaimEditInput,
   type RoleMetadataInput,
+  type VocabularyOutcome,
 } from '../lib/api'
 import ImportSteps from '../components/ImportSteps'
 import RoleMetadataForm from '../components/RoleMetadataForm'
+import SavedRoleBanner from '../components/SavedRoleBanner'
 
 const BASIS_LABEL: Record<string, string> = {
   stated: 'stated',
@@ -27,7 +29,7 @@ const BASIS_OPTIONS = ['stated', 'implied', 'inferred', 'user_asserted'] as cons
 // accepts — editable in between, same posture as requirement claims below
 // ("nothing here was auto-accepted"). Placed on this page rather than a new
 // one, per the brief's own suggestion that this is the cleanest fit.
-function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
+function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved: () => void }) {
   const [proposal, setProposal] = useState<RoleMetadataInput | null>(null)
   const [proposing, setProposing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -70,6 +72,12 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
     try {
       await api.updateRoleMetadata(roleId, proposal)
       setSaved(true)
+      // The persisted-role banner above (SavedRoleBanner) fetched its own
+      // copy of the role on mount and has no other way to learn this just
+      // changed — without this, "Saved details" could keep showing the
+      // pre-save employer/title/location right next to a form that just
+      // said "Saved." successfully.
+      onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -100,6 +108,7 @@ function MetadataEnrichmentPanel({ roleId }: { roleId: string }) {
 
       {proposal && (
         <div style={{ marginTop: 12 }}>
+          <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>Proposed details (not yet saved)</div>
           <RoleMetadataForm value={proposal} onChange={value => { setProposal(value); setSaved(false) }} disabled={saving} />
           <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="primary" onClick={accept} disabled={saving}>
@@ -162,6 +171,60 @@ function ConceptPicker({ onSelect }: { onSelect: (c: Concept) => void }) {
           than inventing one here.
         </p>
       )}
+    </div>
+  )
+}
+
+// Vocabulary feedback after extraction (Explicit Role Save / Vocabulary
+// Feedback brief §7/§9): makes explicit which extracted terms matched
+// already-accepted vocabulary (an alias like "ALM" resolving to its
+// canonical concept) versus which are genuinely new and now await curation —
+// a match must never look like it was silently ignored just because it
+// didn't create a pending cluster. This only explains and links; Vocabulary
+// itself remains the one curation surface (no second review UI here).
+function VocabularyOutcomePanel({ outcome }: { outcome: VocabularyOutcome }) {
+  const [showMatches, setShowMatches] = useState(false)
+  const [showPending, setShowPending] = useState(false)
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Vocabulary</h3>
+      <p style={{ margin: '4px 0' }}>
+        {outcome.matched_existing_count} extracted term{outcome.matched_existing_count === 1 ? '' : 's'} matched existing vocabulary.
+        <br />
+        {outcome.pending_term_count} term{outcome.pending_term_count === 1 ? '' : 's'} need vocabulary review.
+      </p>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {outcome.matched_existing_count > 0 && (
+          <button onClick={() => setShowMatches((s) => !s)}>{showMatches ? 'Hide matches' : 'Show matches'}</button>
+        )}
+        {outcome.pending_term_count > 0 && (
+          <button onClick={() => setShowPending((s) => !s)}>{showPending ? 'Hide pending terms' : 'Review pending terms'}</button>
+        )}
+      </div>
+      {showMatches && (
+        <ul style={{ marginTop: 8, marginBottom: 0 }}>
+          {outcome.matched_existing.map((m) => (
+            <li key={m.surface_form} style={{ fontSize: 13 }}>
+              {m.surface_form} → {m.canonical_name} <span className="muted">({m.type_code})</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {showPending && (
+        <ul style={{ marginTop: 8, marginBottom: 0 }}>
+          {outcome.pending_terms.map((p) => (
+            <li key={p.surface_form} style={{ fontSize: 13 }}>
+              {p.surface_form}{' '}
+              <Link to={`/vocabulary?status=pending&q=${encodeURIComponent(p.surface_form)}`}>Review in Vocabulary</Link>
+              {!p.created_new_proposal && <span className="muted"> (already pending from an earlier role)</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+        New terms are added to Vocabulary as pending proposals. They become canonical only after review.
+      </p>
     </div>
   )
 }
@@ -491,6 +554,11 @@ export default function RoleRequirements() {
   const [extracting, setExtracting] = useState(false)
   const [lastRun, setLastRun] = useState<ExtractionSummary | null>(null)
   const [addingRequirement, setAddingRequirement] = useState(false)
+  // Bumped whenever MetadataEnrichmentPanel's own "Save details" commits a
+  // metadata correction, so SavedRoleBanner (which fetched its own copy of
+  // the role on mount and has no other way to find out) re-fetches instead
+  // of continuing to show the pre-save title/organisation/location.
+  const [savedRoleVersion, setSavedRoleVersion] = useState(0)
   // Unlike accepted/unreviewed/rejected counts, these can't be derived from
   // `claims`. unresolvedProposals: a surface form extraction couldn't
   // resolve to any concept becomes a concept_proposal, never a
@@ -567,7 +635,10 @@ export default function RoleRequirements() {
       </Link>
       <ImportSteps step={detailsStep ? 1 : 2} />
       <h1 style={{ fontSize: 22, marginTop: 12 }}>{detailsStep ? 'Review role details' : 'Review requirements'}</h1>
-      <div hidden={!detailsStep}><MetadataEnrichmentPanel key={roleId} roleId={roleId} /></div>
+      <SavedRoleBanner roleId={roleId} refreshKey={savedRoleVersion} />
+      <div hidden={!detailsStep}>
+        <MetadataEnrichmentPanel key={roleId} roleId={roleId} onSaved={() => setSavedRoleVersion((v) => v + 1)} />
+      </div>
       {detailsStep ? <button className="primary" onClick={() => setParams({})}>Continue to requirements</button> :
         <button onClick={() => setParams({ step: 'details' })}>Back to role details</button>}
       <div hidden={detailsStep}>
@@ -596,6 +667,8 @@ export default function RoleRequirements() {
           </span>
         )}
       </div>
+
+      {lastRun?.vocabulary_outcome && <VocabularyOutcomePanel outcome={lastRun.vocabulary_outcome} />}
 
       {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
       {error && <button onClick={() => setRetry(retry + 1)}>Reload requirements</button>}

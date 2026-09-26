@@ -1,8 +1,9 @@
-"""GET /api/roles temporal filtering + server-side pagination (docs/18 §3/§5).
+"""GET /api/roles temporal filtering + server-side pagination (docs/18 §3/§5;
+default period + sort per the Explicit Role Save / Current Roles brief §6/§13).
 Real Postgres test database throughout — no mocking beyond conftest's
 deterministic embedding stub."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from app import db
 
@@ -15,7 +16,128 @@ def _role(cur, title, posting_date=None, career_track="actuarial"):
     )
 
 
-def test_default_period_is_recent_and_includes_null_dates(client):
+def _role_with_document(cur, title, posting_date=None, captured_at=None, career_track="actuarial"):
+    """Like `_role`, but backed by a real linked document — needed whenever a
+    test cares about `captured_at` (an undated role's only "current" signal,
+    and Current's own default sort key), since a bare role_instance with no
+    document_id carries no captured_at at all."""
+    document_id, _ = db.create_document(cur, kind="job_posting", content_text=f"{title} posting text.", provenance_quality="original")
+    if captured_at is not None:
+        cur.execute("UPDATE jobber.document SET captured_at = %s WHERE id = %s", (captured_at, document_id))
+    return db.upsert_role_instance(
+        cur, None,
+        {
+            "instance_type": "observed_posting", "title": title, "posting_date": posting_date,
+            "career_track": career_track, "document_id": document_id,
+        },
+        skills=[],
+    )
+
+
+def test_default_period_is_current_and_includes_undated_recently_captured_roles(client):
+    """Brief §6.1/§13: current-year posting date is included; a prior-year
+    posting date is excluded even from the default view; an undated role is
+    included only when its own source document was captured this calendar
+    year, never merely because it has no posting date at all (that's
+    'recent'/'unknown_date's job, not Current's)."""
+    today = date.today()
+    last_year = today.year - 1
+
+    with db.db_cursor() as cur:
+        current_dated = _role_with_document(cur, "Current dated role", posting_date=today.isoformat())
+        old_dated = _role_with_document(cur, "Old dated role", posting_date=date(last_year, 6, 15).isoformat())
+        current_undated = _role_with_document(
+            cur, "Newly captured undated role", posting_date=None, captured_at=datetime.now(timezone.utc),
+        )
+        stale_undated = _role_with_document(
+            cur, "Old capture undated role", posting_date=None, captured_at=datetime(last_year, 6, 15, tzinfo=timezone.utc),
+        )
+
+    body = client.get("/api/roles").json()
+    ids = {r["id"] for r in body["items"]}
+    assert body["period"] == "current"
+    assert current_dated in ids
+    assert current_undated in ids
+    assert old_dated not in ids  # a dated-but-old role is never pulled in by Current
+    assert stale_undated not in ids  # an undated role's stale capture doesn't count as current either
+
+
+def test_current_period_defaults_to_newest_captured_first(client):
+    """Brief §6.3: Current's own default sort is newest/recently-captured
+    first, not similarity — a role the user just saved must be immediately
+    visible near the top."""
+    now = datetime.now(timezone.utc)
+    with db.db_cursor() as cur:
+        oldest = _role_with_document(cur, "Oldest captured", captured_at=now - timedelta(hours=2))
+        middle = _role_with_document(cur, "Middle captured", captured_at=now - timedelta(hours=1))
+        newest = _role_with_document(cur, "Newest captured", captured_at=now)
+
+    body = client.get("/api/roles").json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert ids_in_order.index(newest) < ids_in_order.index(middle) < ids_in_order.index(oldest)
+
+
+def test_current_period_falls_back_to_posting_date_when_captured_at_is_missing(client):
+    """A role with no linked document (so no captured_at at all — e.g. a
+    legacy/bulk-imported role) still participates in Current's default
+    newest-first sort via its own posting_date, compared chronologically
+    against another role's real captured_at, rather than being stranded at
+    a meaningless position for lack of a captured_at to compare."""
+    today = date.today()
+    with db.db_cursor() as cur:
+        earlier_posting = _role(cur, "Legacy role, no document", posting_date=(today - timedelta(days=1)).isoformat())
+        later_capture = _role_with_document(cur, "Freshly captured role", captured_at=datetime.now(timezone.utc))
+
+    body = client.get("/api/roles").json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert set(ids_in_order) == {earlier_posting, later_capture}
+    assert ids_in_order.index(later_capture) < ids_in_order.index(earlier_posting)
+
+
+def test_explicit_similarity_sort_still_works_under_default_current_period(client):
+    """Explicit query parameters win over Current's own default (brief
+    §6.3/§13) — similarity sorting must remain fully available, it merely
+    stops being the default."""
+    today = date.today()
+    with db.db_cursor() as cur:
+        role_a = _role_with_document(cur, "Role A", posting_date=today.isoformat())
+        role_b = _role_with_document(cur, "Role B", posting_date=today.isoformat())
+
+    body = client.get("/api/roles", params={"sort": "similarity"}).json()
+    assert body["period"] == "current"
+    assert {r["id"] for r in body["items"]} == {role_a, role_b}
+
+
+def test_explicit_captured_at_sort_matches_current_default_semantics(client):
+    """An explicit `sort=captured_at` must behave identically to Current's
+    own default sort — one comparator (posting_date fallback, null-last),
+    not two subtly different ones depending on how you reached it. Checked
+    under `period=all` specifically, so this isn't just re-testing the
+    default-period case."""
+    today = date.today()
+    with db.db_cursor() as cur:
+        earlier_posting = _role(cur, "Legacy role, no document", posting_date=(today - timedelta(days=1)).isoformat())
+        later_capture = _role_with_document(cur, "Freshly captured role", captured_at=datetime.now(timezone.utc))
+
+    body = client.get("/api/roles", params={"period": "all", "sort": "captured_at"}).json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert ids_in_order.index(later_capture) < ids_in_order.index(earlier_posting)
+
+
+def test_posting_date_sort_puts_undated_roles_last(client):
+    """Regression: folding "is the value missing" into the same tuple as the
+    value and reversing the *whole* tuple for descending order used to put
+    missing values first, the opposite of the intended null-last ordering."""
+    with db.db_cursor() as cur:
+        dated = _role(cur, "Dated role", posting_date="2020-06-01")
+        undated = _role(cur, "Undated role", posting_date=None)
+
+    body = client.get("/api/roles", params={"period": "all", "sort": "posting_date"}).json()
+    ids_in_order = [r["id"] for r in body["items"]]
+    assert ids_in_order.index(dated) < ids_in_order.index(undated)
+
+
+def test_period_recent_still_works(client):
     today = date.today()
     old_date = (today - timedelta(days=365 * 6)).isoformat()  # well outside the recent window
     recent_date = (today - timedelta(days=30)).isoformat()
@@ -25,7 +147,7 @@ def test_default_period_is_recent_and_includes_null_dates(client):
         recent_id = _role(cur, "Recent role", posting_date=recent_date)
         undated_id = _role(cur, "Undated role", posting_date=None)
 
-    body = client.get("/api/roles").json()
+    body = client.get("/api/roles", params={"period": "recent"}).json()
     ids = {r["id"] for r in body["items"]}
     assert body["period"] == "recent"
     assert recent_id in ids

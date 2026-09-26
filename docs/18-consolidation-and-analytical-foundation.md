@@ -114,6 +114,15 @@ play/pause, and frame-paced fetches).
 
 ## 3. Dashboard: temporal filter + server-side pagination
 
+> **Superseded default (see docs/31 §7-8):** the default `period` below is
+> now `current`, not `recent` — a freshly *saved* role (regardless of
+> whether it happens to fall inside the `recent` window) must be visible
+> immediately, and the everyday view should track the current year rather
+> than a rolling multi-year window. `recent` itself, described below, is
+> unchanged and still available as an explicit choice. Default *sort* under
+> `current` is also newest/recently-captured first rather than similarity
+> (again, only when the caller doesn't pass an explicit `sort`).
+
 `GET /api/roles` (`backend/app/routes/roles.py::list_roles`) gained:
 
 - `period` (`recent` default | `all`), `year`, `date_from`/`date_to` —
@@ -139,8 +148,9 @@ similarity ranking into pgvector SQL would be a larger architectural change
 outside a consolidation pass' scope; documented here as a legitimate future
 optimisation, not a current problem at ~300 roles.
 
-`Dashboard.tsx` exposes: a period selector (Recent / All years / a specific
-year, populated from `year_range`), Previous/Next pagination showing
+`Dashboard.tsx` exposes: a period selector (**Current** / Recent / All years
+/ a specific year / Unknown posting date, populated from `year_range` —
+Current is now the default, docs/31 §7-8), Previous/Next pagination showing
 `X–Y of total`, and resets to page 1 on any filter change.
 
 ## 4. Role navigation
