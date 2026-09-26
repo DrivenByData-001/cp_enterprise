@@ -118,9 +118,15 @@ export default function Dashboard() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
-        <h1 style={{ fontSize: 22, margin: 0 }}>Roles</h1>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: 22, margin: 0 }}>Opportunities</h1>
+          <p className="secondary" style={{ marginTop: 4, maxWidth: 640 }}>
+            Current roles and historical postings are market observations. Open one to understand the role and
+            evaluate it against your evidence.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <select aria-label="Career track" value={track} onChange={(e) => update('track', e.target.value)}>
             <option value="">All tracks</option>
             {TRACKS.map((t) => (
@@ -153,6 +159,9 @@ export default function Dashboard() {
               ))}
             </select>
           )}
+          <Link to="/import">
+            <button type="button" className="primary">Add posting</button>
+          </Link>
         </div>
       </div>
 
@@ -226,7 +235,7 @@ export default function Dashboard() {
           <Link
             key={r.id}
             to={`/roles/${r.id}`}
-            state={{ returnTo: `/?${params.toString()}` }}
+            state={{ returnTo: `/opportunities?${params.toString()}` }}
             className="card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}
           >

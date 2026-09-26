@@ -640,6 +640,9 @@ export default function Capabilities() {
   return (
     <div>
       <h1 style={{ fontSize: 22, margin: 0 }}>Capability catalogue</h1>
+      <p className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+        Model-maintenance work, not a step required for every opportunity.
+      </p>
       <p className="secondary" style={{ marginTop: 4 }}>
         Capability concepts originate in the Vocabulary. Add an assessment specification here to make them usable by the capability engine.
       </p>

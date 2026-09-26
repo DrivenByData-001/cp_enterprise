@@ -343,7 +343,7 @@ export default function RoleDetail() {
     <div>
       {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
       <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 13 }}>
-        ← Back to {isTarget ? 'targets' : 'roles'}
+        ← Back to {isTarget ? 'targets' : 'opportunities'}
       </Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 12 }}>

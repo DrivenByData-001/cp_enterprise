@@ -1,5 +1,50 @@
 # Career Navigator
 
+A personal career decision-support system — not primarily a job tracker or an
+analytical workbench. It helps you understand yourself, understand the
+market, form plausible career directions, evaluate real opportunities against
+those directions, and work on applications, without needing to understand
+the analytical machinery underneath.
+
+## How the product is organized
+
+Four primary destinations:
+
+- **Home** (`/`) — your career cockpit: current direction, evidence,
+  opportunities and the most useful next action.
+- **Explore my future** (`/future`) — preferences, targets, pathways and
+  market evidence, explained in plain language and linked from one hub.
+- **Opportunities** (`/opportunities`) — current roles and historical
+  postings as market observations; open one to evaluate it against your
+  evidence.
+- **Applications** (`/applications`) — work on roles you've chosen to
+  pursue. This is an honest placeholder in the current phase (see "Product
+  phases" below) — no application workspaces are persisted yet.
+
+Two secondary areas hold supporting tools without cluttering the primary
+journeys: **My profile & evidence** (Profile overview, Evidence & mappings,
+Career history, Capability coverage, Preferences) and **Data & models**
+(Vocabulary, Capability catalogue, Role map, Trends, Economics). The
+sophisticated analysis described later in this README remains fully intact —
+you just don't need to understand its architecture to use the product
+day to day.
+
+See [`docs/32-phase1-product-shell.md`](docs/32-phase1-product-shell.md) for the full user-journey
+walkthrough, including which features are still placeholders and the
+limitations of current ones (existing Targets are not yet the full
+property-driven target-discovery system; the observed role corpus is not
+assumed to represent the whole labour market).
+
+## Product phases
+
+The current phase reorganizes navigation and page framing around user
+journeys (Home / Explore my future / Opportunities / Applications) rather
+than around internal analytical modules — see `docs/32-phase1-product-shell.md`. It
+changes information architecture and framing only: no analytical behaviour
+described in the rest of this README changed as part of it.
+
+## Technical architecture
+
 The newest surface is **Pathways** — see [Economic pathways, compensation and archetype context](docs/30-economic-pathways.md): your current or latest-known earnings from accepted profile360 evidence, what a target and each useful intermediate archetype would pay (always with the basis the figure came from), the structural gaps between you and them, and the market option value of closing each gap. Route depth in this version is deliberately limited to direct plus one intermediate archetype.
 
 The preceding workflow improvements are described in [Career workflow improvements](docs/27-career-workflow-improvements.md): guided posting import, form-based target creation, consistent concept filters, evidence-based intermediate roles, and actionable comparison.

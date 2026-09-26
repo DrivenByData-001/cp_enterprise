@@ -56,6 +56,10 @@ export default function Vocabulary() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, margin: 0 }}>Vocabulary</h1>
+          <p className="muted" style={{ marginTop: 4, maxWidth: 640, fontSize: 13 }}>
+            The canonical language used to match role requirements and career evidence. Most users only need to come
+            here when a role contains unresolved terms or a concept needs correction.
+          </p>
           <p className="secondary" style={{ marginTop: 4, maxWidth: 640 }}>
             {tab === 'review'
               ? 'Review the proposal queue as lexical clusters, prioritised by how much analytical value curating each one unlocks — not by raw mention count. The priority score is a curation order, not a statement that a concept is intrinsically more important.'

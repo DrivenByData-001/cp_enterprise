@@ -1,5 +1,9 @@
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './useAuth'
+import { hasLegacyRoleListQuery } from './lib/roleNavigation'
+import Home from './pages/Home'
+import Explore from './pages/Explore'
+import Applications from './pages/Applications'
 import Dashboard from './pages/Dashboard'
 import RoleDetail from './pages/RoleDetail'
 import RoleEdit from './pages/RoleEdit'
@@ -20,13 +24,61 @@ import Trends from './pages/Trends'
 import Economics from './pages/Economics'
 import Pathways from './pages/Pathways'
 
+// `/` used to be the Roles list. Old bookmarks/links carrying its query
+// params (`?period=current` etc.) must keep working as Opportunities links,
+// never silently reinterpreted as Home — but an unrelated query string on
+// `/` should still render Home, since Home may grow its own params later.
+function Root() {
+  const location = useLocation()
+  if (hasLegacyRoleListQuery(location.search)) {
+    return <Navigate to={`/opportunities${location.search}`} replace />
+  }
+  return <Home />
+}
+
+// Primary destinations are always visible; a route not listed here (role/
+// comparison/pathway/target detail pages) still lights up the primary tab it
+// conceptually belongs under, so the shell never looks like it's lost track
+// of where you are.
+const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string) => boolean }[] = [
+  { path: '/', label: 'Home', match: (p) => p === '/' },
+  {
+    path: '/future',
+    label: 'Explore my future',
+    match: (p) => p === '/future' || p === '/targets' || p.startsWith('/targets/') || p === '/pathways' || p.startsWith('/pathways/'),
+  },
+  {
+    path: '/opportunities',
+    label: 'Opportunities',
+    match: (p) => p === '/opportunities' || p.startsWith('/roles/') || p.startsWith('/comparison/') || p.startsWith('/role-instances/'),
+  },
+  { path: '/applications', label: 'Applications', match: (p) => p === '/applications' },
+]
+
 function App() {
   const { logout } = useAuth()
   const { pathname } = useLocation()
-  const groups = [
-    { label: 'Explore roles', links: [['/', 'Roles'], ['/space', 'Role map'], ['/trends', 'Trends'], ['/economics', 'Economics'], ['/pathways', 'Pathways'], ['/targets', 'Targets']] },
-    { label: 'My evidence', links: [['/profile', 'Profile overview'], ['/profile360', 'Evidence and mappings'], ['/coverage', 'Capability coverage'], ['/episodes', 'Career history'], ['/preferences', 'Preferences']] },
-    { label: 'Manage vocabulary', links: [['/vocabulary', 'Vocabulary'], ['/capabilities', 'Capability catalogue']] },
+  const secondaryGroups = [
+    {
+      label: 'My profile & evidence',
+      links: [
+        ['/profile', 'Profile overview'],
+        ['/profile360', 'Evidence and mappings'],
+        ['/episodes', 'Career history'],
+        ['/coverage', 'Capability coverage'],
+        ['/preferences', 'Preferences'],
+      ],
+    },
+    {
+      label: 'Data & models',
+      links: [
+        ['/vocabulary', 'Vocabulary'],
+        ['/capabilities', 'Capability catalogue'],
+        ['/space', 'Role map'],
+        ['/trends', 'Trends'],
+        ['/economics', 'Economics'],
+      ],
+    },
   ]
 
   return (
@@ -34,16 +86,45 @@ function App() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="site-header"><strong>Career Navigator</strong></header>
       <nav className="nav" aria-label="Main navigation">
-        {groups.map(group => <details key={group.label} className="nav-group">
-          <summary className={group.links.some(([path]) => pathname === path || (path !== '/' && pathname.startsWith(path + '/'))) ? 'active' : ''}>{group.label}</summary>
-          <div className="nav-menu">{group.links.map(([path, label]) => <NavLink key={path} to={path} end={path === '/'} onClick={e => e.currentTarget.closest('details')?.removeAttribute('open')} className={({ isActive }) => isActive ? 'active' : ''}>{label}</NavLink>)}</div>
-        </details>)}
-        <NavLink to="/import" className={({ isActive }) => isActive ? 'active' : ''}>Add posting</NavLink>
-        <button type="button" onClick={logout} title="Sign out of Career Navigator">Log out</button>
+        <div className="nav-primary">
+          {PRIMARY_LINKS.map(({ path, label, match }) => (
+            <NavLink key={path} to={path} end={path === '/'} className={() => (match(pathname) ? 'active' : '')}>
+              {label}
+            </NavLink>
+          ))}
+        </div>
+        <div className="nav-secondary">
+          {secondaryGroups.map((group) => (
+            <details key={group.label} className="nav-group">
+              <summary className={group.links.some(([path]) => pathname === path || pathname.startsWith(path + '/')) ? 'active' : ''}>
+                {group.label}
+              </summary>
+              <div className="nav-menu">
+                {group.links.map(([path, label]) => (
+                  <NavLink
+                    key={path}
+                    to={path}
+                    onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+                    className={({ isActive }) => (isActive ? 'active' : '')}
+                  >
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+        <NavLink to="/import" className={({ isActive }) => `nav-action${isActive ? ' active' : ''}`}>
+          Add posting
+        </NavLink>
+        <button type="button" className="nav-logout" onClick={logout} title="Sign out of Career Navigator">Log out</button>
       </nav>
       <main id="main-content">
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Root />} />
+        <Route path="/future" element={<Explore />} />
+        <Route path="/opportunities" element={<Dashboard />} />
+        <Route path="/applications" element={<Applications />} />
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
@@ -63,7 +144,7 @@ function App() {
         <Route path="/roles/:id/edit" element={<RoleEdit />} />
         <Route path="/role-instances/:id/requirements" element={<RoleRequirements />} />
         <Route path="/comparison/:id" element={<Comparison />} />
-        <Route path="*" element={<div><h1>Page not found</h1><NavLink to="/">Return to roles</NavLink></div>} />
+        <Route path="*" element={<div><h1>Page not found</h1><NavLink to="/">Return home</NavLink></div>} />
       </Routes>
       </main>
     </div>

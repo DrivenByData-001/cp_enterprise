@@ -55,7 +55,7 @@ export default function SavedRoleBanner({ roleId, refreshKey }: { roleId: string
             before. roleListUrl() remains correct for ordinary Role Detail
             navigation, where returning to prior research context is the
             useful behaviour. */}
-        <Link to="/?period=current">Back to Roles</Link>
+        <Link to="/opportunities?period=current">Back to Roles</Link>
       </div>
     </div>
   )

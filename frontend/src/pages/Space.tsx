@@ -383,7 +383,7 @@ export default function Space() {
             A 3D PCA projection of every captured role, target, and your profile by embedding similarity. Closer
             stars are more semantically similar — the axes themselves carry no direct meaning. Drag to rotate,
             scroll to zoom, click a star to open it. {data.points.length} point{data.points.length === 1 ? '' : 's'}{' '}
-            in view.
+            in view. An optional visual exploration, not a recommendation or compensation map.
           </p>
         </div>
         <label className="secondary" style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>

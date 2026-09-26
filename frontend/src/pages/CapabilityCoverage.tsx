@@ -115,7 +115,7 @@ export default function CapabilityCoveragePage() {
       <h1 style={{ fontSize: 22, margin: 0 }}>Capability coverage</h1>
       <p className="secondary" style={{ marginTop: 4 }}>
         What you can evidence today, what is partial, what you have asserted, and where no evidence has been found —
-        never "you lack this". Every status traces back to profile360.
+        never "you lack this". Every status traces back to profile360. A diagnostic view, not a general career score.
       </p>
 
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
