@@ -132,6 +132,7 @@ function App() {
         <Route path="/pathways/:id" element={<Pathways />} />
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
+        <Route path="/targets/:id" element={<RoleDetail />} />
         <Route path="/episodes" element={<Episodes />} />
         <Route path="/vocabulary" element={<Vocabulary />} />
         <Route path="/capabilities" element={<Capabilities />} />

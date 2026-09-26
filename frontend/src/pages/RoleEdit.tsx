@@ -98,7 +98,7 @@ function LegacyJsonEditor({ role }: { role: Role }) {
         await api.updateRole(role.id, parsed)
       }
       setResult({ ok: true, message: 'Saved. Re-embedded from the updated content.' })
-      setTimeout(() => navigate(`/roles/${role.id}`), 700)
+      setTimeout(() => navigate(isTarget ? `/targets/${role.id}` : `/roles/${role.id}`), 700)
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -128,7 +128,7 @@ function LegacyJsonEditor({ role }: { role: Role }) {
           <button className="primary" onClick={submit} disabled={busy || !text.trim()}>
             {busy ? 'Saving…' : 'Save changes'}
           </button>
-          <button onClick={() => navigate(`/roles/${role.id}`)} disabled={busy}>
+          <button onClick={() => navigate(isTarget ? `/targets/${role.id}` : `/roles/${role.id}`)} disabled={busy}>
             Cancel
           </button>
         </div>
@@ -170,7 +170,7 @@ function SavedTargetEditor({ role }: { role: Role }) {
     {error && <p role="alert">{error} Your edits are preserved.</p>}
     <button disabled={busy || !draft.target.title.trim()} onClick={async () => {
       setBusy(true); setError('')
-      try { await api.updateTarget(role.id, draft); navigate(`/roles/${role.id}`) }
+      try { await api.updateTarget(role.id, draft); navigate(`/targets/${role.id}`) }
       catch (e) { setError(String(e)) }
       finally { setBusy(false) }
     }}>{busy ? 'Saving…' : 'Save target changes'}</button>
@@ -196,7 +196,7 @@ export default function RoleEdit() {
 
   return (
     <div>
-      <Link to={`/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
+      <Link to={isTarget ? `/targets/${role.id}` : `/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
         ← Back to {role.title}
       </Link>
 

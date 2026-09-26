@@ -414,7 +414,10 @@ export default function Space() {
               highlightTrack={highlightTrack}
               onHover={setHover}
               onLeave={() => setHover(null)}
-              onClick={(id) => navigate(`/roles/${id}`)}
+              onClick={(id) => {
+                const point = data.points.find((p) => p.id === id)
+                navigate(point && point.node_type !== 'posting' ? `/targets/${id}` : `/roles/${id}`)
+              }}
             />
             {hover && (
               <Html

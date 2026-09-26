@@ -44,7 +44,7 @@ export default function Targets() {
         {targets.map((t) => (
           <Link
             key={t.id}
-            to={`/roles/${t.id}`}
+            to={`/targets/${t.id}`}
             className="card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}
           >

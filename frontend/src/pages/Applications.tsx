@@ -15,7 +15,7 @@ export default function Applications() {
         </p>
         <p className="secondary">For now, choose a role from Opportunities and use the existing comparison tools.</p>
         <div className="actions">
-          <Link to="/opportunities"><button type="button" className="primary">Browse opportunities</button></Link>
+          <Link to="/opportunities" className="button primary">Browse opportunities</Link>
           <Link to="/profile360">Profile &amp; evidence</Link>
         </div>
       </div>

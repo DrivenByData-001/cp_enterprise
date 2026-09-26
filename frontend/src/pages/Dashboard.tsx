@@ -159,9 +159,7 @@ export default function Dashboard() {
               ))}
             </select>
           )}
-          <Link to="/import">
-            <button type="button" className="primary">Add posting</button>
-          </Link>
+          <Link to="/import" className="button primary">Add posting</Link>
         </div>
       </div>
 

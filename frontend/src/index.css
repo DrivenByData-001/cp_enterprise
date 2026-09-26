@@ -137,6 +137,28 @@ button.primary {
   border: none;
 }
 
+/* Button-styled links (navigation, never a submit/mutation) — a real <a>,
+   never a <button> nested inside one: nested interactive controls are
+   invalid HTML and break native link behaviour (open in new tab, etc). */
+a.button {
+  display: inline-block;
+  font-family: inherit;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.button.primary {
+  background: var(--series-1);
+  color: white;
+  border: none;
+}
+
 input,
 textarea,
 select {

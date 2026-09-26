@@ -55,7 +55,7 @@ export default function Home() {
             Explore existing targets, preferences and pathways while the fuller direction-builder is developed.
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
-            <Link to="/future"><button type="button" className="primary">Explore my future</button></Link>
+            <Link to="/future" className="button primary">Explore my future</Link>
             <Link to="/targets">View saved targets</Link>
           </div>
         </section>
@@ -87,7 +87,7 @@ export default function Home() {
             </div>
           )}
           <div className="actions" style={{ marginTop: 12 }}>
-            <Link to="/opportunities?period=current"><button type="button" className="primary">View current opportunities</button></Link>
+            <Link to="/opportunities?period=current" className="button primary">View current opportunities</Link>
             <Link to="/import">Add posting</Link>
           </div>
         </section>
@@ -122,7 +122,7 @@ export default function Home() {
             preparation. For now, start from an opportunity.
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
-            <Link to="/opportunities"><button type="button">Browse opportunities</button></Link>
+            <Link to="/opportunities" className="button">Browse opportunities</Link>
           </div>
         </section>
       </div>

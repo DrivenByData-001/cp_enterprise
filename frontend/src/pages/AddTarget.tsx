@@ -31,7 +31,7 @@ export default function AddTarget() {
     setBusy(true); setError(null)
     try {
       const res = await api.importTarget(draft)
-      navigate(`/roles/${res.id}`)
+      navigate(`/targets/${res.id}`)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
@@ -58,7 +58,7 @@ export default function AddTarget() {
         <label>Target JSON<textarea rows={8} value={json} onChange={e => setJson(e.target.value)} disabled={busy} /></label>
         <button disabled={busy || !json.trim()} onClick={async () => {
           setBusy(true); setError(null)
-          try { const res = await api.importTarget(JSON.parse(json)); navigate(`/roles/${res.id}`) }
+          try { const res = await api.importTarget(JSON.parse(json)); navigate(`/targets/${res.id}`) }
           catch (e) { setError(e instanceof Error ? e.message : String(e)) }
           finally { setBusy(false) }
         }}>Import JSON</button>
