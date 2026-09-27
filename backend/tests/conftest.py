@@ -77,6 +77,8 @@ _RESETTABLE_JOBBER_TABLES = [
     "d_pathways",
     "d_target_path",
     "d_target_evidence",
+    "application_note",
+    "application",
     "development_action",
     "capability_gold_judgment",
     "eval_run",

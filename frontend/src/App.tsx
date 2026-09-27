@@ -4,6 +4,7 @@ import { hasLegacyRoleListQuery } from './lib/roleNavigation'
 import Home from './pages/Home'
 import Explore from './pages/Explore'
 import Applications from './pages/Applications'
+import ApplicationWorkspace from './pages/ApplicationWorkspace'
 import Dashboard from './pages/Dashboard'
 import RoleDetail from './pages/RoleDetail'
 import RoleEdit from './pages/RoleEdit'
@@ -125,6 +126,7 @@ function App() {
         <Route path="/future" element={<Explore />} />
         <Route path="/opportunities" element={<Dashboard />} />
         <Route path="/applications" element={<Applications />} />
+        <Route path="/applications/:id" element={<ApplicationWorkspace />} />
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
@@ -133,6 +135,7 @@ function App() {
         <Route path="/targets" element={<Targets />} />
         <Route path="/targets/new" element={<AddTarget />} />
         <Route path="/targets/:id" element={<RoleDetail />} />
+        <Route path="/targets/:id/edit" element={<RoleEdit />} />
         <Route path="/episodes" element={<Episodes />} />
         <Route path="/vocabulary" element={<Vocabulary />} />
         <Route path="/capabilities" element={<Capabilities />} />

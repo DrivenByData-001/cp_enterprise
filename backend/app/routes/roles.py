@@ -1,3 +1,4 @@
+import psycopg
 from fastapi import APIRouter, HTTPException, Query
 
 from ..db import build_role_view, db_cursor, delete_role_instance, flatten_role_instance, upsert_role_instance
@@ -245,7 +246,23 @@ def update_role(role_id: str, payload: JobPostingImport):
 
 @router.delete("/{role_id}")
 def delete_role(role_id: str):
+    """Phase 3 (docs/34 "Role deletion"): an application workspace protects
+    its role from deletion — application history is never silently
+    cascade-deleted, active or closed/withdrawn alike. That's enforced at
+    the database level by jobber.application's restrictive FK (migration
+    0027), not by this pre-check alone: delete_role_instance's own final
+    `DELETE FROM jobber.role_instance` is what would actually raise the
+    ForeignKeyViolation this catches, so the same clear 409 is returned even
+    under a race where an application is created after some other check
+    already passed."""
     with db_cursor() as cur:
-        if not delete_role_instance(cur, role_id):
+        try:
+            deleted = delete_role_instance(cur, role_id)
+        except psycopg.errors.ForeignKeyViolation:
+            raise HTTPException(
+                409,
+                "This role has an application workspace, so its history is preserved — it can't be deleted while an application exists for it.",
+            )
+        if not deleted:
             raise HTTPException(404, "role not found")
     return {"status": "deleted"}

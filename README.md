@@ -17,9 +17,11 @@ Four primary destinations:
 - **Opportunities** (`/opportunities`) — current roles and historical
   postings as market observations; open one to evaluate it against your
   evidence.
-- **Applications** (`/applications`) — work on roles you've chosen to
-  pursue. This is an honest placeholder in the current phase (see "Product
-  phases" below) — no application workspaces are persisted yet.
+- **Applications** (`/applications`) — persistent workspaces for roles
+  you've decided to pursue: preparation checks, evidence to use, gaps and
+  application-local notes, all grounded in the existing comparison/Profile360
+  machinery (see "Product phases" below). CV/cover-letter/interview-prep
+  generation is not built yet.
 
 Two secondary areas hold supporting tools without cluttering the primary
 journeys: **My profile & evidence** (Profile overview, Evidence & mappings,
@@ -49,7 +51,19 @@ structural evidence comparison and economics up front as compact, honest
 facts, with the existing detailed review tools and raw posting text below —
 see [`docs/33-phase2-opportunity-decision-workspace.md`](docs/33-phase2-opportunity-decision-workspace.md).
 Target detail (`/targets/:id`) keeps its separate Explore-my-future framing
-unchanged. Persistent application workspaces remain Phase 3.
+unchanged.
+
+Phase 3 adds the **persistent Application workspace backbone**: an "I want to
+apply" action on an observed opportunity idempotently creates or reopens a
+persistent `jobber.application` row (at most one active application per
+role, enforced by a database constraint, never just a frontend check), a real
+`/applications` index, and a `/applications/:id` workspace with structural
+preparation checks, an evidence pack derived from the existing comparison
+engine, and application-local notes that are never auto-promoted into
+Profile360 evidence — see
+[`docs/34-phase3-application-workspace-backbone.md`](docs/34-phase3-application-workspace-backbone.md).
+No CV, cover letter, positioning brief or interview-prep generation yet, and
+no new score — that stays out of scope until Phase 4.
 
 ## Technical architecture
 

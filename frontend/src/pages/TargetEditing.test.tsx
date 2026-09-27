@@ -32,3 +32,29 @@ it('preserves an imagined target and requirement priority when editing without l
   // than flipping to Opportunities.
   await screen.findByText('Saved target')
 })
+
+// Phase 3 routing cleanup (docs/34 §12): editing a target now goes through
+// its own /targets/:id/edit route (App.tsx renders the same RoleEdit there),
+// so a link built from a target's own id never has to fall back to
+// /roles/:id/edit and its Opportunities-flavoured nav context. The old
+// /roles/:id/edit deep link keeps working too — see RoleEdit.test.tsx.
+it('renders and saves identically via the new /targets/:id/edit route', async () => {
+  vi.mocked(api.getRole).mockResolvedValue({
+    id: 'target', node_type: 'target_real', title: 'Head of Risk', organisation: null, location: null,
+    country: null, remote_type: null, employment_type: null, posting_date: null, captured_at: null,
+    career_track: null, seniority_level: null, salary_min: null, salary_max: null, currency: null,
+    summary: null, description: null, requirements: null, responsibilities: null, key_skills_summary: null,
+    top_adjacent_roles: null, extraction_status: null, extraction_notes: null, similarity: null, url: null,
+    raw_json: null, grounding_note: null, feasibility_note: null, is_plausible: null, skills: [],
+  } satisfies Role)
+  vi.mocked(api.updateTarget).mockResolvedValue({ id: 'target', status: 'updated' })
+  vi.mocked(api.resolveTargetRequirements).mockResolvedValue([])
+  render(<MemoryRouter initialEntries={['/targets/target/edit']}><Routes>
+    <Route path="/targets/:id/edit" element={<RoleEdit />} />
+    <Route path="/targets/:id" element={<p>Saved target</p>} />
+  </Routes></MemoryRouter>)
+  await screen.findByText('Review and edit your target')
+  fireEvent.click(screen.getByText('Save target changes'))
+  await waitFor(() => expect(api.updateTarget).toHaveBeenCalledWith('target', expect.anything()))
+  await screen.findByText('Saved target')
+})

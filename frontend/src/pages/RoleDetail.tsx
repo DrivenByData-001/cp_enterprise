@@ -320,6 +320,8 @@ export default function RoleDetail() {
   const location = useLocation()
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -405,6 +407,24 @@ export default function RoleDetail() {
       navigate(isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl())
     } catch (e) { setDeleteError(e instanceof Error ? e.message : String(e)) }
     finally { setDeleting(false) }
+  }
+
+  // Phase 3 (docs/34 §7): a mutation button, not a navigation Link — always
+  // hits the idempotent create/reopen endpoint and lets the backend decide
+  // whether this opens a new application or an existing active one. Never
+  // gated on requirement review, compensation, or evidence completeness:
+  // those affect preparation state, not whether the user may pursue the role.
+  const handleApply = async () => {
+    if (applying) return
+    setApplying(true)
+    setApplyError(null)
+    try {
+      const result = await api.createOrReopenApplication(role.id)
+      navigate(`/applications/${result.id}`)
+    } catch (e) {
+      setApplyError(e instanceof Error ? e.message : String(e))
+      setApplying(false)
+    }
   }
 
   return (
@@ -529,7 +549,7 @@ export default function RoleDetail() {
           <h2 style={{ fontSize: 18 }}>Potential steps toward this target</h2>
           {role.path.target_mapping && <div>
             <p>{role.path.target_mapping.mapped} of {role.path.target_mapping.total} target requirements mapped and included.</p>
-            {!role.path.target_mapping.complete && <p role="alert">Target mapping is incomplete. Readiness and intermediate-step conclusions are withheld. <Link to={`/roles/${role.id}/edit`}>Review target requirements</Link></p>}
+            {!role.path.target_mapping.complete && <p role="alert">Target mapping is incomplete. Readiness and intermediate-step conclusions are withheld. <Link to={`/targets/${role.id}/edit`}>Review target requirements</Link></p>}
             <ul>{role.path.target_mapping.items.map((item, index) => <li key={index}>{item.name}: {item.mapping_status === 'mapped' ? `Mapped → ${item.canonical_name}` : item.mapping_status === 'excluded' ? `Mapped → ${item.canonical_name}, but excluded by requirement review — needs review` : 'Unmapped — excluded from analysis; needs review'}</li>)}</ul>
           </div>}
           <p className="secondary">{role.path.method}</p>
@@ -695,19 +715,32 @@ export default function RoleDetail() {
       {/* Section 8: next actions. Phase 1 cleanup folded in here too — these
           were `<Link><button>…</button></Link>` (invalid nested interactive
           markup); now real `a.button` links, consistent with the rest of the
-          app. No dead "I want to apply" action — that's Phase 3. */}
+          app. Phase 3 (docs/34 §7): "I want to apply" is the prominent
+          primary action for an observed opportunity — a mutation button, not
+          a Link, so it can call the create/reopen endpoint before
+          navigating. Never shown for targets. */}
       <section aria-labelledby="next-actions-h" style={{ marginTop: 16 }}>
         <h2 id="next-actions-h" style={{ fontSize: 18 }}>
           Next actions
         </h2>
+        {applyError && (
+          <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+            Couldn't open the application: {applyError}
+          </p>
+        )}
         <div className="actions">
+          {!isTarget && (
+            <button type="button" className="button primary" disabled={applying} onClick={handleApply}>
+              {applying ? 'Opening application…' : 'I want to apply'}
+            </button>
+          )}
           <Link to={`/role-instances/${role.id}/requirements`} className="button">
             {isTarget ? 'Requirements' : 'Review requirements'}
           </Link>
-          <Link to={`/comparison/${role.id}`} className={isTarget ? 'button' : 'button primary'}>
+          <Link to={`/comparison/${role.id}`} className="button">
             {isTarget ? 'Compare' : 'Review evidence in detail'}
           </Link>
-          <Link to={`/roles/${role.id}/edit`} className="button">
+          <Link to={isTarget ? `/targets/${role.id}/edit` : `/roles/${role.id}/edit`} className="button">
             {isTarget ? 'Edit' : 'Correct role details'}
           </Link>
           {!isTarget && (

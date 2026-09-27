@@ -1048,6 +1048,101 @@ export type ComparisonResult = {
   review_summary: RequirementReviewSummary
 }
 
+// --- Phase 3: persistent application workspace (docs/34) -------------------
+//
+// `status` is a plain user workflow state — never a derived/AI verdict (see
+// docs/34). An application always ties to exactly one observed posting; a
+// target can never become one. Notes are application-local and are never
+// promoted into Profile360/comparison evidence automatically.
+
+export type ApplicationStatus = 'preparing' | 'ready' | 'submitted' | 'interviewing' | 'closed' | 'withdrawn'
+export type ApplicationNoteType = 'general' | 'evidence_example'
+
+export type Application = {
+  id: string
+  role_instance_id: string
+  status: ApplicationStatus
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationCreateResult = Application & {
+  // true when this call created a brand-new application; false when an
+  // existing active one was found and returned instead ("reopened").
+  created: boolean
+}
+
+export type ApplicationRoleSummary = {
+  id: string
+  title: string | null
+  organisation: string | null
+  location: string | null
+  posting_date: string | null
+}
+
+export type ApplicationListItem = Application & { role: ApplicationRoleSummary }
+
+export type ApplicationListResponse = {
+  items: ApplicationListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type ApplicationNote = {
+  id: string
+  application_id: string
+  concept_id: string | null
+  note_type: ApplicationNoteType
+  note_text: string
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationDetailRole = {
+  id: string
+  title: string | null
+  organisation: string | null
+  location: string | null
+  country: string | null
+  remote_type: string | null
+  posting_date: string | null
+  instance_type: string
+  url: string | null
+}
+
+export type ApplicationDetail = {
+  application: Application
+  role: ApplicationDetailRole
+  notes: ApplicationNote[]
+}
+
+// Every comparison item plus the two things only an application evidence
+// pack adds: whether the role-side requirement is a human-reviewed claim or
+// legacy fallback extraction (build §5), and this application's own notes
+// linked to that concept (never treated as accepted evidence — see
+// `ApplicationNote` above).
+export type ApplicationEvidenceItem = ComparisonItem & {
+  role_requirement_reviewed: boolean
+  notes: ApplicationNote[]
+}
+
+export type ApplicationEvidence = {
+  application_id: string
+  role_instance_id: string
+  role: { id: string; title: string; kind: string }
+  review_summary: RequirementReviewSummary
+  counts: Record<ComparisonStatus, number>
+  blocking_gaps: GapConcept[]
+  unverified_required: (GapConcept & { status: ComparisonStatus })[]
+  items: ApplicationEvidenceItem[]
+  notes: ApplicationNote[]
+  engine_version: string
+}
+
+export type ApplicationNoteInput = { concept_id?: string | null; note_type: ApplicationNoteType; note_text: string }
+export type ApplicationNoteUpdateInput = Partial<ApplicationNoteInput>
+
 export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
 
 export type PreferenceObservation = {
@@ -2888,4 +2983,26 @@ export const api = {
 
   // --- Phase 4: accepted vocabulary overview -----------------------------------
   getAcceptedVocabularyOverview: () => req<AcceptedVocabularyOverview>('/vocabulary/accepted-overview'),
+
+  // --- Phase 3: persistent application workspace (docs/34) -----------------
+  createOrReopenApplication: (role_instance_id: string) =>
+    req<ApplicationCreateResult>('/applications', { method: 'POST', body: JSON.stringify({ role_instance_id }) }),
+  listApplications: (params: { status?: ApplicationStatus; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    if (params.offset !== undefined) qs.set('offset', String(params.offset))
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<ApplicationListResponse>(`/applications${suffix}`)
+  },
+  getApplication: (id: string) => req<ApplicationDetail>(`/applications/${id}`),
+  updateApplicationStatus: (id: string, status: ApplicationStatus) =>
+    req<Application>(`/applications/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  getApplicationEvidence: (id: string) => req<ApplicationEvidence>(`/applications/${id}/evidence`),
+  createApplicationNote: (id: string, payload: ApplicationNoteInput) =>
+    req<ApplicationNote>(`/applications/${id}/notes`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateApplicationNote: (id: string, noteId: string, payload: ApplicationNoteUpdateInput) =>
+    req<ApplicationNote>(`/applications/${id}/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteApplicationNote: (id: string, noteId: string) =>
+    req<{ status: string }>(`/applications/${id}/notes/${noteId}`, { method: 'DELETE' }),
 }
