@@ -9,6 +9,8 @@ import {
   type ApplicationArtifactsResponse,
   type ApplicationDetail,
   type ApplicationDetailRole,
+  type ApplicationEvent,
+  type ApplicationEventType,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
   type ApplicationNote,
@@ -20,6 +22,9 @@ import {
 // Phase 4 (docs/35): the real Positioning/CV/Supporting-material stages that
 // replace the old "Coming next" placeholders, plus the Interview placeholder
 // that's still honestly future.
+// Phase 5 (docs/36): the Lifecycle timeline and the real Interview stage that
+// replaces that placeholder — Interview Prep generation, grounding, and the
+// lifecycle-event CRUD actions.
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -35,6 +40,10 @@ vi.mock('../lib/api', () => ({
     editApplicationArtifact: vi.fn(),
     adoptApplicationArtifact: vi.fn(),
     discardApplicationArtifact: vi.fn(),
+    listApplicationEvents: vi.fn(),
+    createApplicationEvent: vi.fn(),
+    updateApplicationEvent: vi.fn(),
+    deleteApplicationEvent: vi.fn(),
   },
 }))
 
@@ -105,8 +114,15 @@ function makeArtifactsResponse(overrides: Partial<ApplicationArtifactsResponse['
   const empty = { active: null, draft: null, history_count: 0 }
   return {
     application_id: 'app-1',
-    artifacts: { positioning: empty, cv: empty, cover_letter: empty, supporting_statement: empty, ...overrides },
+    artifacts: { positioning: empty, cv: empty, cover_letter: empty, supporting_statement: empty, interview_prep: empty, ...overrides },
     generation_context: { reviewed_requirements_used: 1, legacy_requirements_excluded: 0, pending_unreviewed_excluded: 0, counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 1 }, application_examples: 0 },
+    interview_generation_context: {
+      reviewed_requirements_used: 1, legacy_requirements_excluded: 0, pending_unreviewed_excluded: 0,
+      counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 1 }, application_examples: 0,
+      active_positioning_available: false, active_cv_available: false, active_cover_letter_available: false,
+      active_supporting_statement_available: false, lifecycle_events_count: 0,
+      upcoming_interview_available: false, upcoming_interview: null,
+    },
   }
 }
 
@@ -140,11 +156,33 @@ function makePositioningArtifact(overrides: Partial<ApplicationArtifact> = {}): 
   }
 }
 
-function renderWorkspace(detail: ApplicationDetail, evidence: ApplicationEvidence | Error, artifacts: ApplicationArtifactsResponse = makeArtifactsResponse()) {
+function makeEvent(overrides: Partial<ApplicationEvent> = {}): ApplicationEvent {
+  return {
+    id: 'event-1',
+    application_id: 'app-1',
+    event_type: 'submitted' as ApplicationEventType,
+    event_at: '2026-01-05T10:00:00Z',
+    label: null,
+    notes: null,
+    details: {},
+    created_at: '2026-01-05T10:00:00Z',
+    updated_at: '2026-01-05T10:00:00Z',
+    ...overrides,
+  }
+}
+
+function renderWorkspace(
+  detail: ApplicationDetail,
+  evidence: ApplicationEvidence | Error,
+  artifacts: ApplicationArtifactsResponse = makeArtifactsResponse(),
+  events: ApplicationEvent[] | Error = [],
+) {
   vi.mocked(api.getApplication).mockResolvedValue(detail)
   if (evidence instanceof Error) vi.mocked(api.getApplicationEvidence).mockRejectedValue(evidence)
   else vi.mocked(api.getApplicationEvidence).mockResolvedValue(evidence)
   vi.mocked(api.getApplicationArtifacts).mockResolvedValue(artifacts)
+  if (events instanceof Error) vi.mocked(api.listApplicationEvents).mockRejectedValue(events)
+  else vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events })
   return render(
     <MemoryRouter initialEntries={['/applications/app-1']}>
       <Routes>
@@ -268,6 +306,7 @@ describe('Gaps and uncertainties', () => {
     vi.mocked(api.getApplication).mockResolvedValue(makeDetail())
     vi.mocked(api.getApplicationEvidence).mockResolvedValueOnce(withoutNote).mockResolvedValueOnce(withNote)
     vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>
         <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
@@ -302,6 +341,7 @@ describe('Application notes', () => {
     vi.mocked(api.updateApplicationNote).mockResolvedValue({ ...noteObj, note_text: 'Ask about hybrid policy in the first call.' })
     vi.mocked(api.deleteApplicationNote).mockResolvedValue({ status: 'deleted' })
     vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
 
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>
@@ -361,7 +401,7 @@ describe('Application package (Phase 4, docs/35)', () => {
     expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
   })
 
-  it('shows Positioning, CV and Supporting material stages, and Interview as a future placeholder', async () => {
+  it('shows Positioning, CV, Supporting material and a real Interview stage', async () => {
     renderWorkspace(makeDetail(), makeEvidence())
     await screen.findByRole('heading', { name: 'Application package' })
     expect(screen.getByRole('heading', { name: 'Positioning' })).toBeTruthy()
@@ -369,8 +409,9 @@ describe('Application package (Phase 4, docs/35)', () => {
     expect(screen.getByText('Supporting material')).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Cover letter' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Supporting statement' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Interview' })).toBeTruthy()
-    expect(screen.getByText(/arrives in a later phase/)).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Interview' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Interview prep' })).toBeTruthy()
+    expect(screen.queryByText(/arrives in a later phase/)).toBeNull()
     // nothing generates just by the section being present
     expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
   })
@@ -522,6 +563,271 @@ describe('Application package (Phase 4, docs/35)', () => {
     vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: makePositioningArtifact({ status: 'active' }) })
     renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active: null, draft, history_count: 0 } }))
     const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('Adopt'))
+    await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalled())
+    expect(api.updateApplicationStatus).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
+  })
+})
+
+describe('Lifecycle (Phase 5, docs/36)', () => {
+  it('renders a timeline of recorded events, newest first', async () => {
+    const older = makeEvent({ id: 'e1', event_type: 'submitted', event_at: '2026-01-01T00:00:00Z' })
+    const newer = makeEvent({ id: 'e2', event_type: 'interview_scheduled', event_at: '2026-02-01T00:00:00Z', label: 'Technical panel' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [newer, older])
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    expect(within(section).getByText('Technical panel', { exact: false })).toBeTruthy()
+    expect(within(section).getByText('Submitted')).toBeTruthy()
+  })
+
+  it('shows an empty state when no events are recorded', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    expect(await within(section).findByText('No events recorded yet.')).toBeTruthy()
+  })
+
+  it('shows the current status inline, without a second status control', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    expect(await within(section).findByText('Preparing')).toBeTruthy()
+    expect(within(section).queryByLabelText('Application status')).toBeNull()
+  })
+
+  it('records a submission via the composer', async () => {
+    const created = makeEvent({ id: 'e1', event_type: 'submitted', event_at: '2026-01-05T10:00:00.000Z' })
+    vi.mocked(api.createApplicationEvent).mockResolvedValue(created)
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(section).getByText('Record submission'))
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [created] })
+    fireEvent.click(within(section).getByText('Save event'))
+    await waitFor(() => expect(api.createApplicationEvent).toHaveBeenCalledWith('app-1', expect.objectContaining({ event_type: 'submitted' })))
+    expect(await within(section).findByText('Submitted')).toBeTruthy()
+  })
+
+  it('schedules an interview and shows it as upcoming', async () => {
+    const future = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString()
+    const created = makeEvent({ id: 'e1', event_type: 'interview_scheduled', event_at: future, label: 'Panel round' })
+    vi.mocked(api.createApplicationEvent).mockResolvedValue(created)
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(section).getByText('Schedule interview'))
+    fireEvent.change(within(section).getByPlaceholderText(/Technical panel/), { target: { value: 'Panel round' } })
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [created] })
+    fireEvent.click(within(section).getByText('Save event'))
+    await waitFor(() => expect(api.createApplicationEvent).toHaveBeenCalled())
+    expect(await within(section).findByText(/Upcoming: Interview scheduled — Panel round/)).toBeTruthy()
+  })
+
+  it('edits an existing event', async () => {
+    const event = makeEvent({ id: 'e1', event_type: 'interview_completed', notes: 'Went well.' })
+    const edited = { ...event, notes: 'Went very well.' }
+    vi.mocked(api.updateApplicationEvent).mockResolvedValue(edited)
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [event])
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(section).getByText('Edit'))
+    const textarea = within(section).getByDisplayValue('Went well.')
+    fireEvent.change(textarea, { target: { value: 'Went very well.' } })
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [edited] })
+    fireEvent.click(within(section).getByText('Save event'))
+    await waitFor(() => expect(api.updateApplicationEvent).toHaveBeenCalledWith('app-1', 'e1', expect.objectContaining({ notes: 'Went very well.' })))
+    expect(await within(section).findByText('Went very well.')).toBeTruthy()
+  })
+
+  it('deletes an event after confirmation', async () => {
+    const event = makeEvent({ id: 'e1' })
+    vi.mocked(api.deleteApplicationEvent).mockResolvedValue({ status: 'deleted' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [event])
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    await within(section).findByText('Submitted')
+    vi.stubGlobal('confirm', () => true)
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
+    fireEvent.click(within(section).getByText('Delete'))
+    await waitFor(() => expect(api.deleteApplicationEvent).toHaveBeenCalledWith('app-1', 'e1'))
+    await within(section).findByText('No events recorded yet.')
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps the rest of the workspace usable when the events request fails', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), new Error('events service down'))
+    expect(await screen.findByRole('heading', { name: 'Head of Capital' })).toBeTruthy()
+    expect(await screen.findByText(/Timeline couldn't be loaded/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Application package' })).toBeTruthy()
+  })
+
+  it('recording an event never changes the application status', async () => {
+    const created = makeEvent({ id: 'e1', event_type: 'offer_received' })
+    vi.mocked(api.createApplicationEvent).mockResolvedValue(created)
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(section).getByText('Record offer'))
+    fireEvent.click(within(section).getByText('Save event'))
+    await waitFor(() => expect(api.createApplicationEvent).toHaveBeenCalled())
+    expect(api.updateApplicationStatus).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
+  })
+})
+
+describe('Interview stage (Phase 5, docs/36)', () => {
+  function makeInterviewPrepArtifact(overrides: Partial<ApplicationArtifact> = {}): ApplicationArtifact {
+    return {
+      id: 'ip-1',
+      application_id: 'app-1',
+      artifact_type: 'interview_prep' as ArtifactType,
+      status: 'draft',
+      origin: 'ai',
+      generator_version: '1',
+      model: 'test-model',
+      prompt_name: 'application_interview_prep.md',
+      prompt_version: 'v1',
+      guidance: null,
+      source_manifest: [{ ref: 'role_requirement:c1', kind: 'role_requirement', label: 'Python (reviewed role requirement)', category: 'role_side_context' }],
+      content: {
+        focus_areas: [{ title: 'Python', why_it_matters: 'Core requirement.', source_refs: ['role_requirement:c1'] }],
+        questions: [
+          {
+            question: 'Tell me about a Python project.', question_type: 'experience', source_refs: ['role_requirement:c1'],
+            answer_plan: { approach: 'Use the STAR method.', evidence_points: [], cautions: [] },
+          },
+        ],
+        questions_to_ask: [],
+        closing_points: [],
+        prep_checklist: ['Review the job description again.'],
+      },
+      grounding_status: 'grounded_generation',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      superseded_at: null,
+      stale: false,
+      ...overrides,
+    }
+  }
+
+  it('shows interview context and a deterministic readiness summary, with no AI call on mount', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const section = (await screen.findByRole('heading', { name: 'Interview' })).closest('section') as HTMLElement
+    expect(within(section).getByText(/No interview currently scheduled/)).toBeTruthy()
+    expect(within(section).getByText(/What this prep will use/)).toBeTruthy()
+    expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
+  })
+
+  it('shows the upcoming interview in the interview context card', async () => {
+    const future = new Date(Date.now() + 1000 * 60 * 60 * 24 * 3).toISOString()
+    renderWorkspace(
+      makeDetail(), makeEvidence(), makeArtifactsResponse(),
+      [makeEvent({ id: 'e1', event_type: 'interview_scheduled', event_at: future, label: 'Panel round' })],
+    )
+    const section = (await screen.findByRole('heading', { name: 'Interview' })).closest('section') as HTMLElement
+    expect(await within(section).findByText(/Panel round/)).toBeTruthy()
+  })
+
+  it('generating Interview Prep shows a busy state, guards against double-submit, and lands as a Draft', async () => {
+    let resolveGenerate: (v: { created: boolean; artifact: ApplicationArtifact }) => void = () => {}
+    vi.mocked(api.generateApplicationArtifact).mockReturnValue(new Promise((resolve) => { resolveGenerate = resolve }))
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText(/Generate with optional guidance/))
+    const generateButton = within(card).getByText('Generate')
+    fireEvent.click(generateButton)
+    expect(await within(card).findByText('Generating…')).toBeTruthy()
+    fireEvent.click(within(card).getByText('Generating…'))
+    expect(api.generateApplicationArtifact).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(
+      makeArtifactsResponse({ interview_prep: { active: null, draft: makeInterviewPrepArtifact(), history_count: 0 } }),
+    )
+    resolveGenerate({ created: true, artifact: makeInterviewPrepArtifact() })
+    await waitFor(() => expect(within(card).getByText('Draft awaiting review')).toBeTruthy())
+    expect(within(card).queryByText('Current')).toBeNull()
+  })
+
+  it('generation error leaves an existing Current Interview Prep usable', async () => {
+    vi.mocked(api.generateApplicationArtifact).mockRejectedValue(new Error('503 model unavailable'))
+    const active = makeInterviewPrepArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText(/Regenerate with optional guidance/))
+    fireEvent.click(within(card).getByText('Regenerate'))
+    await waitFor(() => expect(within(card).getByText(/503 model unavailable/)).toBeTruthy())
+    expect(within(card).getByText('Tell me about a Python project.')).toBeTruthy()
+    expect(within(card).getByText('Current')).toBeTruthy()
+  })
+
+  it('Adopt makes a draft Current; Regenerate leaves Current stable until adoption', async () => {
+    const draft = makeInterviewPrepArtifact()
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active: null, draft, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+
+    const adopted = makeInterviewPrepArtifact({ status: 'active' })
+    vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: adopted })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ interview_prep: { active: adopted, draft: null, history_count: 0 } }))
+    fireEvent.click(within(card).getByText('Adopt'))
+    await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalledWith('app-1', 'ip-1'))
+    await waitFor(() => expect(within(card).getByText('Current')).toBeTruthy())
+  })
+
+  it('shows a stale banner for a current Interview Prep whose context has changed', async () => {
+    const stale = makeInterviewPrepArtifact({ status: 'active', stale: true })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active: stale, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Current — but stale')).toBeTruthy()
+    expect(within(card).getByText(/Evidence or application context has changed/)).toBeTruthy()
+  })
+
+  it('expands source provenance and offers copy/download for Interview Prep', async () => {
+    const active = makeInterviewPrepArtifact({ status: 'active' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    const sourceButtons = within(card).getAllByText('Sources (1)')
+    expect(sourceButtons.length).toBeGreaterThan(0)
+    fireEvent.click(sourceButtons[0])
+    expect(within(card).getAllByText(/Python \(reviewed role requirement\)/).length).toBeGreaterThan(0)
+    expect(within(card).getByText('Copy as Markdown')).toBeTruthy()
+    expect(within(card).getByText('Download .md')).toBeTruthy()
+  })
+
+  it('a user edit creates an edited-draft state, labelled as not automatically revalidated', async () => {
+    const active = makeInterviewPrepArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('Edit'))
+    const textarea = within(card).getByDisplayValue('Core requirement.')
+    fireEvent.change(textarea, { target: { value: 'Central to this role.' } })
+
+    const edited = makeInterviewPrepArtifact({
+      id: 'edited-1', origin: 'user_edit', grounding_status: 'user_edited_not_revalidated',
+      content: {
+        focus_areas: [{ title: 'Python', why_it_matters: 'Central to this role.', source_refs: ['role_requirement:c1'] }],
+        questions: [], questions_to_ask: [], closing_points: [], prep_checklist: [],
+      },
+    })
+    vi.mocked(api.editApplicationArtifact).mockResolvedValue({ artifact: edited })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ interview_prep: { active, draft: edited, history_count: 0 } }))
+    fireEvent.click(within(card).getByText('Save edit'))
+    await waitFor(() => expect(api.editApplicationArtifact).toHaveBeenCalled())
+    await waitFor(() => expect(within(card).getByText(/source trace has not been automatically revalidated/)).toBeTruthy())
+  })
+
+  it('recording completed-interview feedback does not affect the evidence UI', async () => {
+    const created = makeEvent({ id: 'e1', event_type: 'interview_completed', notes: 'Asked about Python internals.' })
+    vi.mocked(api.createApplicationEvent).mockResolvedValue(created)
+    renderWorkspace(makeDetail(), makeEvidence())
+    await screen.findByRole('heading', { name: 'Evidence to use' })
+    const lifecycleSection = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(lifecycleSection).getByText('Record completed interview'))
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [created] })
+    fireEvent.click(within(lifecycleSection).getByText('Save event'))
+    await waitFor(() => expect(api.createApplicationEvent).toHaveBeenCalled())
+    expect(screen.getByRole('heading', { name: 'Evidence to use' })).toBeTruthy()
+    expect(screen.getByText('No accepted profile evidence found.')).toBeTruthy()
+  })
+
+  it('application status remains user-controlled after Interview Prep actions', async () => {
+    const draft = makeInterviewPrepArtifact()
+    vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: makeInterviewPrepArtifact({ status: 'active' }) })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ interview_prep: { active: null, draft, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Interview prep' })).closest('section') as HTMLElement
     fireEvent.click(within(card).getByText('Adopt'))
     await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalled())
     expect(api.updateApplicationStatus).not.toHaveBeenCalled()

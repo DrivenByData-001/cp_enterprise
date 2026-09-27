@@ -19,6 +19,16 @@ model again), Phase 4 has a single `generate_artifact` action that always
 calls the model and always produces/replaces only the draft (build §2/§16) —
 the frontend simply relabels the same action "Regenerate" once a draft or
 active version already exists; the backend action is identical either way.
+
+Phase 5 (docs/36) adds a fifth type, `interview_prep`, through the exact same
+machinery — no parallel document-generation subsystem, no new version-history
+table. Its only special cases are (a) its own grounding rules in
+`_validate_and_shape` (an answer-plan evidence point/closing point needs
+person-side backing; a focus area/question/caution/question-to-ask may be
+role-side-only) and (b) `compute_staleness` additionally reading
+`get_active_application_materials` for it alone, so an ordinary CV/Positioning
+artifact's staleness is completely unaffected by lifecycle events or by
+`interview_prep` itself.
 """
 
 import json
@@ -39,7 +49,9 @@ from .application_generation import (
     compute_fingerprint_for,
     gather_application_evidence,
     generation_readiness_summary,
+    get_active_application_materials,
     get_active_positioning,
+    interview_readiness_summary,
 )
 
 # A claim about the applicant must be backed by at least one source in one of
@@ -51,24 +63,27 @@ from .db import db_cursor, to_json_param
 from .models import (
     ApplicationCoverLetterGeneration,
     ApplicationCVGeneration,
+    ApplicationInterviewPrepGeneration,
     ApplicationPositioningGeneration,
     ApplicationSupportingStatementGeneration,
 )
 
 GENERATOR_VERSION = "1"
-ARTIFACT_TYPES = ("positioning", "cv", "cover_letter", "supporting_statement")
+ARTIFACT_TYPES = ("positioning", "cv", "cover_letter", "supporting_statement", "interview_prep")
 
 _PROMPT_NAMES = {
     "positioning": "application_positioning.md",
     "cv": "application_cv.md",
     "cover_letter": "application_cover_letter.md",
     "supporting_statement": "application_supporting_statement.md",
+    "interview_prep": "application_interview_prep.md",
 }
 _OUTPUT_MODELS = {
     "positioning": ApplicationPositioningGeneration,
     "cv": ApplicationCVGeneration,
     "cover_letter": ApplicationCoverLetterGeneration,
     "supporting_statement": ApplicationSupportingStatementGeneration,
+    "interview_prep": ApplicationInterviewPrepGeneration,
 }
 _TASKS = {t: f"application_{t}_generate" for t in ARTIFACT_TYPES}
 
@@ -254,22 +269,30 @@ def _serialize(cur, row: dict) -> dict:
     }
 
 
-def compute_staleness(cur, application_id: str, row: dict, *, bundle=None, active_positioning=None) -> bool:
+def compute_staleness(
+    cur, application_id: str, row: dict, *, bundle=None, active_positioning=None, active_application_materials=None,
+) -> bool:
     bundle = bundle or gather_application_evidence(cur, application_id)
     if row["artifact_type"] != "positioning" and active_positioning is None:
         active_positioning = get_active_positioning(cur, application_id)
+    if row["artifact_type"] == "interview_prep" and active_application_materials is None:
+        active_application_materials = get_active_application_materials(cur, application_id)
     current_fingerprint = compute_fingerprint_for(
         bundle, artifact_type=row["artifact_type"], guidance=row["guidance"],
         active_positioning=active_positioning if row["artifact_type"] != "positioning" else None,
+        active_application_materials=active_application_materials if row["artifact_type"] == "interview_prep" else None,
     )
     return current_fingerprint != row["input_fingerprint"]
 
 
-def _summary(cur, row: dict | None, bundle, active_positioning) -> dict | None:
+def _summary(cur, row: dict | None, bundle, active_positioning, active_application_materials=None) -> dict | None:
     if row is None:
         return None
     serialized = _serialize(cur, row)
-    serialized["stale"] = compute_staleness(cur, row["application_id"], row, bundle=bundle, active_positioning=active_positioning)
+    serialized["stale"] = compute_staleness(
+        cur, row["application_id"], row, bundle=bundle, active_positioning=active_positioning,
+        active_application_materials=active_application_materials,
+    )
     return serialized
 
 
@@ -283,6 +306,10 @@ def list_artifacts(cur, application_id: str) -> dict:
     (build §19). One evidence gather total, never once per artifact type."""
     bundle = gather_application_evidence(cur, application_id)
     active_positioning = get_active_positioning(cur, application_id)
+    # Cheap, indexed lookups (three rows at most) computed once here, never
+    # once per artifact type — same discipline active_positioning already
+    # follows, and only actually read by _summary for the interview_prep row.
+    active_application_materials = get_active_application_materials(cur, application_id)
 
     artifacts = {}
     for artifact_type in ARTIFACT_TYPES:
@@ -298,8 +325,8 @@ def list_artifacts(cur, application_id: str) -> dict:
         # would otherwise clobber this pending result set before it's read.
         history_count = cur.fetchone()["n"]
         artifacts[artifact_type] = {
-            "active": _summary(cur, active, bundle, active_positioning),
-            "draft": _summary(cur, draft, bundle, active_positioning),
+            "active": _summary(cur, active, bundle, active_positioning, active_application_materials),
+            "draft": _summary(cur, draft, bundle, active_positioning, active_application_materials),
             "history_count": history_count,
         }
 
@@ -307,6 +334,13 @@ def list_artifacts(cur, application_id: str) -> dict:
         "application_id": application_id,
         "artifacts": artifacts,
         "generation_context": generation_readiness_summary(bundle),
+        # Phase 5 (docs/36 §14): the Interview stage's own deterministic,
+        # AI-free "what this prep will use" summary — additive, never
+        # replacing generation_context above, and still inside this one
+        # bounded request (no extra round trip for the workspace).
+        "interview_generation_context": interview_readiness_summary(
+            bundle, active_positioning=active_positioning, active_application_materials=active_application_materials,
+        ),
     }
 
 
@@ -440,6 +474,29 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
                     )
             for i, paragraph in enumerate(section.get("paragraphs", [])):
                 _require_grounded(f"section {section['heading']!r} paragraph {i + 1}", paragraph["source_refs"], ctx, require_person_side=True)
+
+    if artifact_type == "interview_prep":
+        # docs/36 §11: a focus area or practice question may legitimately be
+        # grounded in role-side context alone (it describes what the role may
+        # test), and a caution may be role-side-only (it describes a gap, not
+        # a claim). An answer-plan evidence point and a closing point make a
+        # claim *about the applicant*, so both require person-side backing —
+        # same rule Phase 4 already applies to every other applicant-facing
+        # block. `questions_to_ask` are about the role/company, not the
+        # applicant, so they follow focus_areas/questions, not evidence_points.
+        for area in data.get("focus_areas", []):
+            _require_grounded(f"focus_area {area['title']!r}", area["source_refs"], ctx, require_person_side=False)
+        for q in data.get("questions", []):
+            _require_grounded(f"question {q['question']!r}", q["source_refs"], ctx, require_person_side=False)
+            plan = q.get("answer_plan") or {}
+            for i, ep in enumerate(plan.get("evidence_points", [])):
+                _require_grounded(f"answer_plan evidence_point {i + 1} for question {q['question']!r}", ep["source_refs"], ctx, require_person_side=True)
+            for i, caution in enumerate(plan.get("cautions", [])):
+                _require_grounded(f"answer_plan caution {i + 1} for question {q['question']!r}", caution["source_refs"], ctx, require_person_side=False)
+        for qa in data.get("questions_to_ask", []):
+            _require_grounded(f"question_to_ask {qa['text']!r}", qa["source_refs"], ctx, require_person_side=False)
+        for cp in data.get("closing_points", []):
+            _require_grounded(f"closing_point {cp['text']!r}", cp["source_refs"], ctx, require_person_side=True)
 
     return data
 

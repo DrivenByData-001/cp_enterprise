@@ -100,6 +100,25 @@ regenerating it. See
 Interview preparation and richer application-lifecycle outcomes remain
 Phase 5.
 
+Phase 5 completes the application-execution journey: a persisted, purely
+user-recorded **lifecycle timeline** (`jobber.application_event` — submission,
+interviews, offers, closure/outcome) that never drives `application.status`
+and is never an AI judgment, surfaced as a Lifecycle section on the
+Application workspace and, without any extra per-row request, as a
+latest-event/next-interview summary on the `/applications` index; and a real
+**Interview stage** that replaces the old placeholder. Interview Prep is a
+fifth `jobber.application_artifact` type reusing Phase 4's exact
+generate → draft → adopt → active lifecycle — no new version-history table.
+Its generation context extends Phase 4's single grounded-context builder with
+the current Application package (CV/cover letter/supporting statement/
+positioning, offered as consistency context, never as new evidence) and the
+lifecycle timeline (offered as user-supplied context, never canonical
+evidence); generated questions are always framed as preparation hypotheses,
+never known employer questions, and no readiness/hiring-probability score of
+any kind was added. See
+[`docs/36-phase5-interview-lifecycle.md`](docs/36-phase5-interview-lifecycle.md).
+Career Direction / Target Discovery remains Phase 6.
+
 ## Technical architecture
 
 The newest surface is **Pathways** — see [Economic pathways, compensation and archetype context](docs/30-economic-pathways.md): your current or latest-known earnings from accepted profile360 evidence, what a target and each useful intermediate archetype would pay (always with the basis the figure came from), the structural gaps between you and them, and the market option value of closing each gap. Route depth in this version is deliberately limited to direct plus one intermediate archetype.

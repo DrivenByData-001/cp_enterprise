@@ -20,8 +20,10 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
+from .. import application_events as events
 from ..comparison_service import build_role_comparison
 from ..db import db_cursor
+from ..models import ApplicationEventInput, ApplicationEventUpdate
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
@@ -125,7 +127,14 @@ def list_applications(
     offset: int = Query(0, ge=0),
 ):
     """Bounded, server-joined list (build §3/§8/§13): role summary comes back
-    in the same query, so the frontend never fetches each role individually."""
+    in the same query, so the frontend never fetches each role individually.
+
+    Phase 5 (docs/36 §6) adds a lifecycle summary — latest event and next
+    scheduled interview — via two `LEFT JOIN LATERAL`s evaluated per row
+    inside this one query, not a second request per application (build §21):
+    the "soonest still-upcoming interview_scheduled event" rule this computes
+    in SQL is the same rule `application_events.next_scheduled_interview`
+    computes in Python over an already-fetched event list elsewhere."""
     filters = ""
     params: list = []
     if status:
@@ -139,9 +148,23 @@ def list_applications(
         cur.execute(
             f"""
             SELECT a.id, a.role_instance_id, a.status, a.created_at, a.updated_at,
-                   ri.title, ri.organisation, ri.location, ri.posting_date
+                   ri.title, ri.organisation, ri.location, ri.posting_date,
+                   latest.event_type AS latest_event_type, latest.event_at AS latest_event_at,
+                   nxt.event_at AS next_interview_at, nxt.label AS next_interview_label
             FROM jobber.application a
             JOIN jobber.role_instance ri ON ri.id = a.role_instance_id
+            LEFT JOIN LATERAL (
+                SELECT event_type, event_at FROM jobber.application_event e
+                WHERE e.application_id = a.id
+                ORDER BY e.event_at DESC, e.created_at DESC
+                LIMIT 1
+            ) latest ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT event_at, label FROM jobber.application_event e
+                WHERE e.application_id = a.id AND e.event_type = 'interview_scheduled' AND e.event_at >= now()
+                ORDER BY e.event_at ASC
+                LIMIT 1
+            ) nxt ON TRUE
             WHERE TRUE{filters}
             ORDER BY a.updated_at DESC
             LIMIT %s OFFSET %s
@@ -164,6 +187,14 @@ def list_applications(
                 "location": r["location"],
                 "posting_date": r["posting_date"],
             },
+            "latest_event": (
+                {"event_type": r["latest_event_type"], "event_at": r["latest_event_at"]}
+                if r["latest_event_type"] is not None else None
+            ),
+            "next_interview": (
+                {"event_at": r["next_interview_at"], "label": r["next_interview_label"]}
+                if r["next_interview_at"] is not None else None
+            ),
         }
         for r in rows
     ]
@@ -356,3 +387,56 @@ def get_application_evidence(application_id: UUID):
         "notes": notes,
         "engine_version": comparison["engine_version"],
     }
+
+
+# --- lifecycle events (docs/36) ---------------------------------------------
+#
+# jobber.application_event is user-recorded history — submission, interviews,
+# offers, closure. It is never an AI judgment and never changes
+# jobber.application.status (build §3): the user still sets status only
+# through PATCH /{application_id} above. An event and the current status may
+# legitimately disagree for a while (e.g. an interview is scheduled before
+# the user updates status to 'interviewing') — the timeline records what
+# happened, status records how the user currently categorises the
+# application. See application_events.py for the shared list/CRUD/derivation
+# helpers this router calls.
+
+
+@router.get("/{application_id}/events")
+def list_application_events(application_id: UUID):
+    """Newest-first, bounded — the one request the workspace needs on load
+    (build §4/§21), never one request per row."""
+    with db_cursor() as cur:
+        _require_application(cur, application_id)
+        return {"application_id": str(application_id), "events": events.list_events(cur, str(application_id))}
+
+
+@router.post("/{application_id}/events")
+def create_application_event(application_id: UUID, payload: ApplicationEventInput):
+    with db_cursor() as cur:
+        _require_application(cur, application_id)
+        return events.create_event(cur, str(application_id), payload)
+
+
+@router.patch("/{application_id}/events/{event_id}")
+def update_application_event(application_id: UUID, event_id: UUID, payload: ApplicationEventUpdate):
+    fields = payload.model_dump(exclude_unset=True)
+    with db_cursor() as cur:
+        _require_application(cur, application_id)
+        row = events.update_event(cur, str(application_id), str(event_id), fields)
+        if not row:
+            raise HTTPException(404, "event not found on this application")
+        return row
+
+
+@router.delete("/{application_id}/events/{event_id}")
+def delete_application_event(application_id: UUID, event_id: UUID):
+    """A user-created lifecycle event may be deleted when it was recorded
+    incorrectly (build §4). Scoped by both application_id and event_id, like
+    every other Application mutation — never deletes the Application itself
+    or any application_artifact."""
+    with db_cursor() as cur:
+        _require_application(cur, application_id)
+        if not events.delete_event(cur, str(application_id), str(event_id)):
+            raise HTTPException(404, "event not found on this application")
+    return {"status": "deleted"}

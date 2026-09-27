@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type ApplicationListItem, type ApplicationStatus } from '../lib/api'
+import { api, type ApplicationEventType, type ApplicationListItem, type ApplicationStatus } from '../lib/api'
 
 // Phase 3 (docs/34 §8): a real, persisted Applications index — one bounded
 // list call, role metadata already joined server-side, no N+1.
+// Phase 5 (docs/36 §6): the same bounded list response now also carries a
+// lifecycle summary (latest event / next scheduled interview) per row, so
+// this index needs no per-application events request.
 
 const ACTIVE_STATUSES: ApplicationStatus[] = ['preparing', 'ready', 'submitted', 'interviewing']
 
@@ -16,9 +19,41 @@ const STATUS_LABEL: Record<ApplicationStatus, string> = {
   withdrawn: 'Withdrawn',
 }
 
+const EVENT_TYPE_LABEL: Record<ApplicationEventType, string> = {
+  submitted: 'Submitted',
+  interview_scheduled: 'Interview scheduled',
+  interview_completed: 'Interview completed',
+  offer_received: 'Offer received',
+  offer_accepted: 'Offer accepted',
+  offer_declined: 'Offer declined',
+  rejected: 'Rejected',
+  role_closed: 'Role closed',
+  withdrawn: 'Withdrawn',
+  closed: 'Closed',
+  other: 'Other',
+}
+
 function formatDate(value: string): string {
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString()
+}
+
+function LifecycleSummaryLine({ item }: { item: ApplicationListItem }) {
+  if (item.next_interview) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        Next interview{item.next_interview.label ? ` — ${item.next_interview.label}` : ''}: {formatDate(item.next_interview.event_at)}
+      </div>
+    )
+  }
+  if (item.latest_event) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        Latest: {EVENT_TYPE_LABEL[item.latest_event.event_type]} on {formatDate(item.latest_event.event_at)}
+      </div>
+    )
+  }
+  return null
 }
 
 function ApplicationRow({ item }: { item: ApplicationListItem }) {
@@ -37,6 +72,7 @@ function ApplicationRow({ item }: { item: ApplicationListItem }) {
           <div className="muted" style={{ fontSize: 11 }}>Updated {formatDate(item.updated_at)}</div>
         </div>
       </div>
+      <LifecycleSummaryLine item={item} />
       <div className="actions" style={{ marginTop: 10 }}>
         <Link to={`/applications/${item.id}`} className="button primary">
           Open application
