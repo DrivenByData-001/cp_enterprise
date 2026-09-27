@@ -37,11 +37,19 @@ assumed to represent the whole labour market).
 
 ## Product phases
 
-The current phase reorganizes navigation and page framing around user
-journeys (Home / Explore my future / Opportunities / Applications) rather
-than around internal analytical modules — see `docs/32-phase1-product-shell.md`. It
-changes information architecture and framing only: no analytical behaviour
-described in the rest of this README changed as part of it.
+Phase 1 reorganized navigation and page framing around user journeys (Home /
+Explore my future / Opportunities / Applications) rather than around internal
+analytical modules — see `docs/32-phase1-product-shell.md`. It changed
+information architecture and framing only: no analytical behaviour described
+in the rest of this README changed as part of it.
+
+Phase 2 turns an observed posting's detail page (`/roles/:id`) into a
+summary-first **Opportunity Decision Workspace** — requirement-review state,
+structural evidence comparison and economics up front as compact, honest
+facts, with the existing detailed review tools and raw posting text below —
+see [`docs/33-phase2-opportunity-decision-workspace.md`](docs/33-phase2-opportunity-decision-workspace.md).
+Target detail (`/targets/:id`) keeps its separate Explore-my-future framing
+unchanged. Persistent application workspaces remain Phase 3.
 
 ## Technical architecture
 

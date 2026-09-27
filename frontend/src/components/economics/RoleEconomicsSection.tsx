@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
@@ -596,31 +596,29 @@ function ObservationRow({
   )
 }
 
+// Compensation is fetched once by RoleDetail (the Decision Summary's compact
+// Economics tile and this detailed section both read it from there) so
+// opening a role never issues two requests for the same state — see
+// docs/33-phase2-opportunity-decision-workspace.md.
 export function RoleEconomicsSection({
   roleId,
   isTarget,
   hasSourceDocument,
   archetype,
   onArchetypeChanged,
+  data,
+  error,
+  reload,
 }: {
   roleId: string
   isTarget: boolean
   hasSourceDocument: boolean
   archetype: RoleArchetypeSummary | undefined
   onArchetypeChanged: () => void
+  data: RoleCompensationResponse | null
+  error: string | null
+  reload: () => void
 }) {
-  const [data, setData] = useState<RoleCompensationResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(() => {
-    api
-      .getRoleCompensation(roleId)
-      .then(setData)
-      .catch((e) => setError(String(e)))
-  }, [roleId])
-
-  useEffect(load, [load])
-
   return (
     <div className="form-grid" style={{ marginTop: 16 }}>
       <section className="card">
@@ -629,10 +627,17 @@ export function RoleEconomicsSection({
         {!data && !error && <p className="muted">Loading…</p>}
         {data && (
           <>
-            <CompensationFigure compensation={data.compensation} />
-
-            <h4 style={{ fontSize: 13, margin: '16px 0 6px' }}>Your comparison</h4>
-            <PersonalComparisonPanel comparison={data.personal_comparison} />
+            {/* A posting's Decision Summary (above, on Role Detail) already
+                shows this exact headline — repeating it here would duplicate
+                text on the page. Targets have no Decision Summary, so this is
+                their only place to see it. */}
+            {isTarget && (
+              <>
+                <CompensationFigure compensation={data.compensation} />
+                <h4 style={{ fontSize: 13, margin: '16px 0 6px' }}>Your comparison</h4>
+                <PersonalComparisonPanel comparison={data.personal_comparison} />
+              </>
+            )}
 
             {data.observations.length > 0 && (
               <details style={{ marginTop: 12 }}>
@@ -645,7 +650,7 @@ export function RoleEconomicsSection({
                       key={observation.id}
                       roleId={roleId}
                       observation={observation}
-                      onChanged={load}
+                      onChanged={reload}
                     />
                   ))}
                 </ul>
@@ -653,7 +658,7 @@ export function RoleEconomicsSection({
             )}
 
             {!isTarget && (
-              <CompensationReview roleId={roleId} hasSourceDocument={hasSourceDocument} onAccepted={load} />
+              <CompensationReview roleId={roleId} hasSourceDocument={hasSourceDocument} onAccepted={reload} />
             )}
           </>
         )}

@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
-import { api, type RoleContextBasis, type RoleContextEnrichment, type Role, type RoleSkill, type TeamSizeEstimate } from '../lib/api'
+import {
+  api,
+  type ComparisonResult,
+  type RoleCompensationResponse,
+  type RoleContextBasis,
+  type RoleContextEnrichment,
+  type Role,
+  type RoleSkill,
+  type TeamSizeEstimate,
+} from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
 import { RoleEconomicsSection } from '../components/economics/RoleEconomicsSection'
+import { DecisionSummary, RequirementsAskFor, RequirementReviewPendingNotice } from '../components/opportunity/DecisionSummary'
 
 // Shared chip rendering for both the reviewed-requirements and legacy-skills
 // sections below — same look, so the *labelling of the section itself* is
@@ -323,6 +333,44 @@ export default function RoleDetail() {
 
   useEffect(reload, [reload])
 
+  // Compensation and comparison are fetched once here — by RoleDetail, not by
+  // the components that display them — so the Decision Summary's compact
+  // tiles and the detailed sections below never issue a second request for
+  // the same state (docs/33). Each fails independently: a broken comparison
+  // fetch never blanks the compensation tile or the rest of the page, and
+  // vice versa.
+  const [compensation, setCompensation] = useState<RoleCompensationResponse | null>(null)
+  const [compensationError, setCompensationError] = useState<string | null>(null)
+  const loadCompensation = useCallback(() => {
+    if (!id) return
+    setCompensationError(null)
+    api
+      .getRoleCompensation(id)
+      .then(setCompensation)
+      .catch((e) => setCompensationError(e instanceof Error ? e.message : String(e)))
+  }, [id])
+
+  const [comparison, setComparison] = useState<ComparisonResult | null>(null)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const loadComparison = useCallback(() => {
+    if (!id) return
+    setComparisonError(null)
+    api
+      .compareRole(id)
+      .then(setComparison)
+      .catch((e) => setComparisonError(e instanceof Error ? e.message : String(e)))
+  }, [id])
+
+  useEffect(() => {
+    if (!role) return
+    loadCompensation()
+    // The Decision Summary's evidence tile is posting-only (targets keep
+    // their own Explore-my-future framing) — no reason to ask the
+    // comparison engine for a page that will never show its answer.
+    if (role.node_type === 'posting') loadComparison()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role?.id, role?.node_type])
+
   if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
   if (!role) return <p className="muted">Loading…</p>
 
@@ -377,16 +425,37 @@ export default function RoleDetail() {
             {role.organisation ?? (isTarget ? 'No organisation specified' : 'Unknown org')}
             {role.location ? ` · ${role.location}` : ''}
             {role.remote_type ? ` · ${role.remote_type}` : ''}
+            {!isTarget && role.employment_type ? ` · ${role.employment_type}` : ''}
           </div>
+          {/* Opportunity header (build §1): posting date is primary provenance,
+              captured date is secondary — never headlined the way similarity
+              used to be. Targets keep their own large similarity treatment
+              on the right; it is never shown this small/secondary for them. */}
+          {!isTarget && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              {role.posting_date ? `Posted ${role.posting_date}` : 'Posting date unknown'}
+              {role.captured_at ? ` · captured ${role.captured_at.slice(0, 10)}` : ''}
+              {role.similarity !== null ? ` · ${Math.round(role.similarity! * 100)}% similarity to profile` : ''}
+            </div>
+          )}
+          {!isTarget && role.url && (
+            <div style={{ marginTop: 4 }}>
+              <a href={role.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 12 }}>
+                View original posting ↗
+              </a>
+            </div>
+          )}
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 28, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-            {role.similarity !== null ? `${Math.round(role.similarity! * 100)}%` : '—'}
+        {isTarget && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+              {role.similarity !== null ? `${Math.round(role.similarity! * 100)}%` : '—'}
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              narrative similarity
+            </div>
           </div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {isTarget ? 'narrative similarity' : 'similarity to profile'}
-          </div>
-        </div>
+        )}
       </div>
 
       {isTarget && role.is_plausible === false && (
@@ -401,6 +470,23 @@ export default function RoleDetail() {
 
       <ExtractionQualityNotice role={role} />
 
+      {/* Decision-workspace summary (build §2/§3, docs/33) — posting-only.
+          Targets keep their existing Explore-my-future-oriented content below
+          instead; see the isTarget branches further down this file. */}
+      {!isTarget && (
+        <>
+          <DecisionSummary
+            role={role}
+            comparison={comparison}
+            comparisonError={comparisonError}
+            onRetryComparison={loadComparison}
+            compensation={compensation}
+            compensationError={compensationError}
+          />
+          <RequirementsAskFor role={role} />
+        </>
+      )}
+
       {/* Build §14: compensation with its basis, the personal comparison,
           the reviewed archetype and the Pathways entry point. This replaces
           the old bare "Salary" card, which showed the legacy salary_min/max
@@ -413,20 +499,10 @@ export default function RoleDetail() {
         hasSourceDocument={Boolean(role.url || role.source_document_text || role.description)}
         archetype={role.archetype}
         onArchetypeChanged={reload}
+        data={compensation}
+        error={compensationError}
+        reload={loadCompensation}
       />
-
-      {!isTarget && (
-        <div className="form-grid" style={{ marginTop: 16 }}>
-          <div className="card">
-            <h3 style={{ marginTop: 0, fontSize: 14 }}>Dates</h3>
-            <p className="secondary">
-              Posted: {role.posting_date ?? '—'}
-              <br />
-              Captured: {role.captured_at?.slice(0, 10) ?? '—'}
-            </p>
-          </div>
-        </div>
-      )}
 
       {isTarget && role.path && (
         <section className="card" style={{ marginTop: 16 }}>
@@ -592,40 +668,38 @@ export default function RoleDetail() {
 
       <RoleContextSection roleId={role.id} />
 
-      {role.requirement_review && !role.requirement_review.complete && (
-        <p style={{ marginTop: 16, fontSize: 13, color: 'var(--warning)' }}>
-          Requirements review pending — {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals + role.requirement_review.needs_reextraction} item
-          {role.requirement_review.unreviewed + role.requirement_review.unresolved_proposals + role.requirement_review.needs_reextraction === 1 ? '' : 's'} not yet reviewed
-          {role.requirement_review.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''}
-          {role.requirement_review.needs_reextraction > 0 ? ' (including terms newly added to the vocabulary awaiting re-extraction)' : ''} and
-          excluded from comparison/analysis.{' '}
-          <Link to={`/role-instances/${role.id}/requirements`}>Review now</Link>
-        </p>
-      )}
+      {/* Targets keep this notice exactly where it always was. Postings show
+          the same notice earlier, inside "What this role asks for". */}
+      {isTarget && <RequirementReviewPendingNotice role={role} />}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
-        {role.url ? (
-          <a href={role.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 13 }}>
-            View original posting ↗
-          </a>
-        ) : (
-          <span />
-        )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Link to={`/role-instances/${role.id}/requirements`}>
-            <button>Requirements</button>
+      {/* Section 8: next actions. Phase 1 cleanup folded in here too — these
+          were `<Link><button>…</button></Link>` (invalid nested interactive
+          markup); now real `a.button` links, consistent with the rest of the
+          app. No dead "I want to apply" action — that's Phase 3. */}
+      <section aria-labelledby="next-actions-h" style={{ marginTop: 16 }}>
+        <h2 id="next-actions-h" style={{ fontSize: 18 }}>
+          Next actions
+        </h2>
+        <div className="actions">
+          <Link to={`/role-instances/${role.id}/requirements`} className="button">
+            {isTarget ? 'Requirements' : 'Review requirements'}
           </Link>
-          <Link to={`/comparison/${role.id}`}>
-            <button>Compare</button>
+          <Link to={`/comparison/${role.id}`} className={isTarget ? 'button' : 'button primary'}>
+            {isTarget ? 'Compare' : 'Review evidence in detail'}
           </Link>
-          <Link to={`/roles/${role.id}/edit`}>
-            <button>Edit</button>
+          <Link to={`/roles/${role.id}/edit`} className="button">
+            {isTarget ? 'Edit' : 'Correct role details'}
           </Link>
+          {!isTarget && (
+            <Link to="/future" className="button">
+              Explore my future
+            </Link>
+          )}
           <button disabled={deleting} onClick={handleDelete} style={{ color: 'var(--critical)' }}>
             {deleting ? 'Deleting…' : `Delete ${isTarget ? 'target' : 'role'}`}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   )
 }

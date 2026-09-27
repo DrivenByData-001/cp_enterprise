@@ -23,6 +23,29 @@ vi.mock('../lib/api', () => ({
     rejectRoleCompensation: vi.fn(),
     reacceptRoleCompensation: vi.fn(),
     deleteRole: vi.fn(),
+    // Role Detail's Decision Summary (docs/33) also fetches the structural
+    // comparison, in parallel with compensation, once the role loads. None of
+    // the tests in this file assert on it — a harmless empty default keeps
+    // every existing compensation-focused test unaffected.
+    compareRole: vi.fn().mockResolvedValue({
+      role: { id: 'role', title: 'role', kind: 'posting' },
+      items: [],
+      counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 0 },
+      blocking_gaps: [],
+      unverified_required: [],
+      fit_score: null,
+      embedding_similarity: null,
+      engine_version: 'test',
+      review_summary: {
+        accepted: 0,
+        unreviewed: 0,
+        rejected: 0,
+        unresolved_proposals: 0,
+        extraction_attempted: false,
+        needs_reextraction: 0,
+        complete: true,
+      },
+    }),
   },
 }))
 
