@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import {
   api,
@@ -323,12 +323,19 @@ export default function RoleDetail() {
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Every fetch below is guarded against resolving for a since-superseded
+  // id: navigating from /roles/A to /roles/B without unmounting must never
+  // let a slow A response overwrite B's state. `currentId` always holds the
+  // id this component is currently showing; a `.then`/`.catch` only applies
+  // if the id it was fetched for still matches it.
+  const currentId = useRef(id)
+
   const reload = useCallback(() => {
     if (!id) return
     api
       .getRole(id)
-      .then(setRole)
-      .catch((e) => setError(String(e)))
+      .then((r) => { if (currentId.current === id) setRole(r) })
+      .catch((e) => { if (currentId.current === id) setError(String(e)) })
   }, [id])
 
   useEffect(reload, [reload])
@@ -346,8 +353,8 @@ export default function RoleDetail() {
     setCompensationError(null)
     api
       .getRoleCompensation(id)
-      .then(setCompensation)
-      .catch((e) => setCompensationError(e instanceof Error ? e.message : String(e)))
+      .then((r) => { if (currentId.current === id) setCompensation(r) })
+      .catch((e) => { if (currentId.current === id) setCompensationError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
   const [comparison, setComparison] = useState<ComparisonResult | null>(null)
@@ -357,8 +364,21 @@ export default function RoleDetail() {
     setComparisonError(null)
     api
       .compareRole(id)
-      .then(setComparison)
-      .catch((e) => setComparisonError(e instanceof Error ? e.message : String(e)))
+      .then((r) => { if (currentId.current === id) setComparison(r) })
+      .catch((e) => { if (currentId.current === id) setComparisonError(e instanceof Error ? e.message : String(e)) })
+  }, [id])
+
+  // The instant id changes, forget the previous role entirely — role,
+  // compensation and comparison alike — rather than leaving any of it on
+  // screen while the new id's own requests are still in flight.
+  useEffect(() => {
+    currentId.current = id
+    setRole(null)
+    setError(null)
+    setCompensation(null)
+    setCompensationError(null)
+    setComparison(null)
+    setComparisonError(null)
   }, [id])
 
   useEffect(() => {

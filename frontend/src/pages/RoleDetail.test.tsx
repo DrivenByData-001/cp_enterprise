@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import RoleDetail from './RoleDetail'
 import {
   api,
@@ -258,10 +258,13 @@ describe('Opportunity Decision Workspace — posting', () => {
       NO_COMPENSATION,
       emptyComparison({ review_summary: { accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: false, needs_reextraction: 0, complete: true } }),
     )
-    await screen.findByRole('heading', { name: 'Decision summary' })
+    // "No reviewed requirements to compare yet." depends on the comparison
+    // fetch, the second of two async waves (role, then compensation/
+    // comparison) — awaiting it also guarantees the first-wave, role-derived
+    // content below has settled, so those can be asserted synchronously.
+    await screen.findByText('No reviewed requirements to compare yet.')
     expect(screen.getByText('Not yet extracted.')).toBeTruthy()
     expect(screen.getByText("Requirements haven't been extracted from this posting yet.")).toBeTruthy()
-    expect(screen.getByText('No reviewed requirements to compare yet.')).toBeTruthy()
     expect(screen.getByText('Captured source text')).toBeTruthy()
     expect(screen.getByText('Original captured advert text goes here.')).toBeTruthy()
   })
@@ -444,5 +447,99 @@ describe('makes no AI call merely by opening the page', () => {
     await waitFor(() => expect(api.compareRole).toHaveBeenCalled())
     expect(api.proposeRoleCompensation).not.toHaveBeenCalled()
     expect(api.proposeRoleArchetype).not.toHaveBeenCalled()
+  })
+})
+
+describe('Cross-role navigation never leaks stale state', () => {
+  // Navigating /roles/A -> /roles/B re-renders the same mounted RoleDetail
+  // with a new :id param — React Router does not unmount it. A's comparison
+  // and compensation must disappear the instant B is requested (never shown
+  // for B while it loads), and a slow A response that resolves *after* B's
+  // own response must never be allowed to overwrite it.
+  function renderWithNavigator(initial: string) {
+    function Nav() {
+      const navigate = useNavigate()
+      return (
+        <button type="button" onClick={() => navigate('/roles/B')}>
+          Go to B
+        </button>
+      )
+    }
+    return render(
+      <MemoryRouter initialEntries={[initial]}>
+        <Nav />
+        <Routes>
+          <Route path="/roles/:id" element={<RoleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('clears A\'s comparison/compensation on navigation and ignores A\'s late, out-of-order response', async () => {
+    const roleA: Role = { ...basePosting, id: 'A', title: 'Role A' }
+    const roleB: Role = { ...basePosting, id: 'B', title: 'Role B' }
+
+    // Deferred promises so the test controls exactly when each role's
+    // compensation/comparison resolves — including resolving A's (the
+    // stale, superseded request) *after* B's own response has already
+    // landed, which is the out-of-order case the fix must survive.
+    let resolveCompA!: (v: RoleCompensationResponse) => void
+    let resolveCompB!: (v: RoleCompensationResponse) => void
+    let resolveCmpA!: (v: ComparisonResult) => void
+    let resolveCmpB!: (v: ComparisonResult) => void
+
+    vi.mocked(api.getRole).mockImplementation((id: string) => Promise.resolve(id === 'A' ? roleA : roleB))
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'x', enrichment: null })
+    vi.mocked(api.getRoleCompensation).mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          if (id === 'A') resolveCompA = resolve
+          else resolveCompB = resolve
+        }),
+    )
+    vi.mocked(api.compareRole).mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          if (id === 'A') resolveCmpA = resolve
+          else resolveCmpB = resolve
+        }),
+    )
+
+    renderWithNavigator('/roles/A')
+    await screen.findByRole('heading', { level: 1, name: 'Role A' })
+
+    // Navigate away before A's own compensation/comparison ever resolve.
+    fireEvent.click(screen.getByText('Go to B'))
+    await screen.findByRole('heading', { level: 1, name: 'Role B' })
+
+    // B is showing, but its own requests are still pending too — both
+    // tiles must show their own loading state, never A's data (there is
+    // none to show yet, since A's requests never resolved).
+    const economicsTile = screen.getByRole('heading', { name: 'Economics' }).closest('section') as HTMLElement
+    const evidenceTile = screen.getByRole('heading', { name: 'Evidence' }).closest('section') as HTMLElement
+    expect(within(economicsTile).getByText('Loading…')).toBeTruthy()
+    expect(within(evidenceTile).getByText('Loading…')).toBeTruthy()
+
+    // B's own responses land first.
+    resolveCompB(advertCompensation())
+    resolveCmpB(
+      emptyComparison({
+        items: [makeItem({ status: 'evidenced' })],
+        counts: { evidenced: 1, partial: 0, user_asserted: 0, not_found: 0 },
+      }),
+    )
+    await screen.findByText('Advert salary')
+    await within(evidenceTile).findByText('evidenced')
+
+    // A's slow, now-stale responses finally arrive — they must be ignored.
+    resolveCompA(NO_COMPENSATION)
+    resolveCmpA(emptyComparison())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Role B' })).toBeTruthy()
+    expect(screen.getByText('Advert salary')).toBeTruthy()
+    expect(screen.queryByText('Insufficient evidence')).toBeNull()
+    expect(within(evidenceTile).getByText('evidenced')).toBeTruthy()
+    expect(within(evidenceTile).queryByText('No reviewed requirements to compare yet.')).toBeNull()
   })
 })
