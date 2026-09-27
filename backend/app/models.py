@@ -1,4 +1,6 @@
+import json
 from datetime import date as _date
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator, field_validator
@@ -973,3 +975,139 @@ class ApplicationArtifactEditRequest(BaseModel):
     see ApplicationArtifact.grounding_status)."""
 
     content: dict
+
+
+# --- Phase 5: Application lifecycle events (docs/36) ------------------------
+# (backend/app/application_events.py, backend/app/routes/applications.py)
+#
+# jobber.application_event is user-recorded history — never an AI judgment,
+# and never a source jobber.application.status is derived from (status stays
+# exactly what Phase 3 made it: user-set, via the existing status control
+# only). `details` is bounded JSON, same "sensible string lengths" discipline
+# docs/35 already applies to note text/guidance.
+
+ApplicationEventType = Literal[
+    "submitted", "interview_scheduled", "interview_completed", "offer_received",
+    "offer_accepted", "offer_declined", "rejected", "role_closed", "withdrawn",
+    "closed", "other",
+]
+
+
+def _bounded_details(value: dict) -> dict:
+    if len(json.dumps(value, default=str)) > 5000:
+        raise ValueError("details is too large (max 5000 characters serialized)")
+    return value
+
+
+class ApplicationEventInput(BaseModel):
+    event_type: ApplicationEventType
+    event_at: datetime
+    label: Optional[str] = Field(default=None, max_length=200)
+    notes: Optional[str] = Field(default=None, max_length=10000)
+    details: dict = Field(default_factory=dict)
+
+    @field_validator("label", "notes")
+    @classmethod
+    def _blank_to_none(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("details")
+    @classmethod
+    def _bounded(cls, value):
+        return _bounded_details(value)
+
+
+class ApplicationEventUpdate(BaseModel):
+    """Every field optional; only supplied fields change (same pattern as
+    ApplicationNoteUpdate)."""
+
+    event_type: Optional[ApplicationEventType] = None
+    event_at: Optional[datetime] = None
+    label: Optional[str] = Field(default=None, max_length=200)
+    notes: Optional[str] = Field(default=None, max_length=10000)
+    details: Optional[dict] = None
+
+    @field_validator("label", "notes")
+    @classmethod
+    def _blank_to_none(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("details")
+    @classmethod
+    def _bounded(cls, value):
+        if value is None:
+            return None
+        return _bounded_details(value)
+
+
+# --- Phase 5: Interview Preparation artifact (docs/36) ----------------------
+# (backend/app/application_generation.py, backend/app/application_artifacts.py)
+#
+# A fifth application_artifact type, reusing every invariant the four Phase 4
+# shapes already established: every factual block carries `source_refs` into
+# the same stable source registry, rejected before persistence if it cites
+# anything not actually offered (application_artifacts.py). No numeric
+# likelihood/confidence/readiness score of any kind (docs/36 §18) —
+# `question_type` classifies a question, it never ranks or scores it.
+
+InterviewQuestionType = Literal[
+    "experience", "technical", "leadership", "stakeholder", "motivation",
+    "role_specific", "case", "other",
+]
+
+
+class InterviewFocusArea(BaseModel):
+    title: str
+    why_it_matters: str
+    source_refs: list[str] = []
+
+
+class InterviewEvidencePoint(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class InterviewCaution(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class InterviewAnswerPlan(BaseModel):
+    approach: str
+    evidence_points: list[InterviewEvidencePoint] = []
+    cautions: list[InterviewCaution] = []
+
+
+class InterviewQuestion(BaseModel):
+    question: str
+    question_type: InterviewQuestionType = "other"
+    source_refs: list[str] = []
+    answer_plan: InterviewAnswerPlan
+
+
+class InterviewQuestionToAsk(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class InterviewClosingPoint(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class ApplicationInterviewPrepGeneration(BaseModel):
+    """Preparation hypotheses, never known employer questions (docs/36 §10):
+    every question is something worth practising, not something the
+    interviewer is confirmed to ask."""
+
+    focus_areas: list[InterviewFocusArea] = []
+    questions: list[InterviewQuestion] = []
+    questions_to_ask: list[InterviewQuestionToAsk] = []
+    closing_points: list[InterviewClosingPoint] = []
+    prep_checklist: list[str] = []

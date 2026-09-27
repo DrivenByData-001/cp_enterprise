@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Home from './Home'
-import { api, type Application, type ApplicationRoleSummary, type Role, type RoleListResponse } from '../lib/api'
+import { api, type ApplicationListItem, type Role, type RoleListResponse } from '../lib/api'
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -16,7 +16,7 @@ function rolesResponse(items: Role[], total = items.length): RoleListResponse {
   return { items, total, limit: 5, offset: 0, period: 'current', year_range: { min: 2008, max: 2026 } }
 }
 
-function applicationsResponse(items: (Application & { role: ApplicationRoleSummary })[] = []) {
+function applicationsResponse(items: ApplicationListItem[] = []) {
   return { items, total: items.length, limit: 20, offset: 0 }
 }
 
@@ -109,6 +109,7 @@ describe('Home — Applications summary (docs/34 §11)', () => {
       applicationsResponse([
         {
           id: 'app-1', role_instance_id: 'role-1', status: 'preparing', created_at: 't', updated_at: 't',
+          latest_event: null, next_interview: null,
           role: { id: 'role-1', title: 'Head of Capital', organisation: 'An insurer', location: null, posting_date: null },
         },
       ]),
@@ -126,6 +127,7 @@ describe('Home — Applications summary (docs/34 §11)', () => {
       applicationsResponse([
         {
           id: 'app-closed', role_instance_id: 'role-2', status: 'withdrawn', created_at: 't', updated_at: 't',
+          latest_event: null, next_interview: null,
           role: { id: 'role-2', title: 'Withdrawn Role', organisation: null, location: null, posting_date: null },
         },
       ]),

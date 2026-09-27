@@ -1080,7 +1080,7 @@ export type ApplicationRoleSummary = {
   posting_date: string | null
 }
 
-export type ApplicationListItem = Application & { role: ApplicationRoleSummary }
+export type ApplicationListItem = Application & ApplicationLifecycleSummary & { role: ApplicationRoleSummary }
 
 export type ApplicationListResponse = {
   items: ApplicationListItem[]
@@ -1143,6 +1143,58 @@ export type ApplicationEvidence = {
 export type ApplicationNoteInput = { concept_id?: string | null; note_type: ApplicationNoteType; note_text: string }
 export type ApplicationNoteUpdateInput = Partial<ApplicationNoteInput>
 
+// --- Phase 5: Application lifecycle events (docs/36) ------------------------
+//
+// jobber.application_event is user-recorded history — submission, interviews,
+// offers, closure. Never an AI judgment, and never a source `status` above is
+// derived from: the timeline records what happened, status records how the
+// user currently categorises the application (see ApplicationWorkspace.tsx's
+// Lifecycle section).
+
+export type ApplicationEventType =
+  | 'submitted'
+  | 'interview_scheduled'
+  | 'interview_completed'
+  | 'offer_received'
+  | 'offer_accepted'
+  | 'offer_declined'
+  | 'rejected'
+  | 'role_closed'
+  | 'withdrawn'
+  | 'closed'
+  | 'other'
+
+export type ApplicationEvent = {
+  id: string
+  application_id: string
+  event_type: ApplicationEventType
+  event_at: string
+  label: string | null
+  notes: string | null
+  details: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationEventListResponse = { application_id: string; events: ApplicationEvent[] }
+
+export type ApplicationEventInput = {
+  event_type: ApplicationEventType
+  event_at: string
+  label?: string | null
+  notes?: string | null
+  details?: Record<string, unknown>
+}
+export type ApplicationEventUpdateInput = Partial<ApplicationEventInput>
+
+// Surfaced by GET /api/applications (build §6) so the index needs no
+// per-application events request — see `list_applications`'s own
+// LEFT JOIN LATERAL aggregate.
+export type ApplicationLifecycleSummary = {
+  latest_event: { event_type: ApplicationEventType; event_at: string } | null
+  next_interview: { event_at: string; label: string | null } | null
+}
+
 // --- Phase 4: grounded Application package generation (docs/35) ------------
 //
 // Four artifact types share one active/draft/superseded lifecycle
@@ -1152,7 +1204,7 @@ export type ApplicationNoteUpdateInput = Partial<ApplicationNoteInput>
 // and `grounding_status` distinguishes a straight AI generation from a
 // version the user has since hand-edited (no longer machine-revalidated).
 
-export type ArtifactType = 'positioning' | 'cv' | 'cover_letter' | 'supporting_statement'
+export type ArtifactType = 'positioning' | 'cv' | 'cover_letter' | 'supporting_statement' | 'interview_prep'
 export type ArtifactStatus = 'draft' | 'active' | 'superseded'
 export type ArtifactOrigin = 'ai' | 'user_edit'
 export type GroundingStatus = 'grounded_generation' | 'user_edited_not_revalidated'
@@ -1201,7 +1253,34 @@ export type SupportingStatementContent = {
   gaps_addressed: string[]
 }
 
-export type ArtifactContent = PositioningContent | CVContent | CoverLetterContent | SupportingStatementContent
+// --- Phase 5: Interview Preparation artifact (docs/36) ----------------------
+//
+// A fifth artifact_type, sharing every lifecycle/provenance invariant the
+// four Phase 4 shapes above already established. No numeric likelihood/
+// confidence/readiness score anywhere in this shape (build §18) —
+// `question_type` classifies a question, it never ranks it.
+
+export type InterviewQuestionType =
+  | 'experience' | 'technical' | 'leadership' | 'stakeholder' | 'motivation' | 'role_specific' | 'case' | 'other'
+
+export type InterviewFocusArea = { title: string; why_it_matters: string; source_refs: string[] }
+export type InterviewAnswerPlan = { approach: string; evidence_points: SourcedText[]; cautions: SourcedText[] }
+export type InterviewQuestion = {
+  question: string
+  question_type: InterviewQuestionType
+  source_refs: string[]
+  answer_plan: InterviewAnswerPlan
+}
+
+export type InterviewPrepContent = {
+  focus_areas: InterviewFocusArea[]
+  questions: InterviewQuestion[]
+  questions_to_ask: SourcedText[]
+  closing_points: SourcedText[]
+  prep_checklist: string[]
+}
+
+export type ArtifactContent = PositioningContent | CVContent | CoverLetterContent | SupportingStatementContent | InterviewPrepContent
 
 export type ApplicationArtifact = {
   id: string
@@ -1233,10 +1312,24 @@ export type GenerationContextSummary = {
   application_examples: number
 }
 
+// Phase 5 (docs/36 §14): the Interview stage's own deterministic, AI-free
+// "what this prep will use" summary — additive to GenerationContextSummary,
+// still delivered inside the one bounded GET .../artifacts request.
+export type InterviewGenerationContextSummary = GenerationContextSummary & {
+  active_positioning_available: boolean
+  active_cv_available: boolean
+  active_cover_letter_available: boolean
+  active_supporting_statement_available: boolean
+  lifecycle_events_count: number
+  upcoming_interview_available: boolean
+  upcoming_interview: { event_type: ApplicationEventType; event_at: string; label: string | null } | null
+}
+
 export type ApplicationArtifactsResponse = {
   application_id: string
   artifacts: Record<ArtifactType, ArtifactTypeState>
   generation_context: GenerationContextSummary
+  interview_generation_context: InterviewGenerationContextSummary
 }
 
 export type ArtifactHistoryResponse = { application_id: string; artifact_type: ArtifactType; history: ApplicationArtifact[] }
@@ -3135,6 +3228,15 @@ export const api = {
     req<ApplicationNote>(`/applications/${id}/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteApplicationNote: (id: string, noteId: string) =>
     req<{ status: string }>(`/applications/${id}/notes/${noteId}`, { method: 'DELETE' }),
+
+  // --- Phase 5: Application lifecycle events (docs/36) --------------------
+  listApplicationEvents: (id: string) => req<ApplicationEventListResponse>(`/applications/${id}/events`),
+  createApplicationEvent: (id: string, payload: ApplicationEventInput) =>
+    req<ApplicationEvent>(`/applications/${id}/events`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateApplicationEvent: (id: string, eventId: string, payload: ApplicationEventUpdateInput) =>
+    req<ApplicationEvent>(`/applications/${id}/events/${eventId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteApplicationEvent: (id: string, eventId: string) =>
+    req<{ status: string }>(`/applications/${id}/events/${eventId}`, { method: 'DELETE' }),
 
   // --- Phase 4: grounded Application package generation (docs/35) --------
   getApplicationArtifacts: (id: string) => req<ApplicationArtifactsResponse>(`/applications/${id}/artifacts`),

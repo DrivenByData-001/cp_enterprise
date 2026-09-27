@@ -25,6 +25,8 @@ function item(overrides: Partial<ApplicationListItem> = {}): ApplicationListItem
     status: 'preparing',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
+    latest_event: null,
+    next_interview: null,
     role: { id: 'role-1', title: 'Head of Capital', organisation: 'An insurer', location: 'London', posting_date: '2026-01-01' },
     ...overrides,
   }
@@ -90,5 +92,33 @@ describe('Applications index — failure', () => {
     vi.mocked(api.listApplications).mockRejectedValue(new Error('service unavailable'))
     renderPage()
     expect(await screen.findByText(/Applications couldn't be loaded/)).toBeTruthy()
+  })
+})
+
+describe('Applications index — lifecycle summary (Phase 5, docs/36 §6)', () => {
+  it('shows the next scheduled interview from the one bounded list response', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(
+      listResponse([item({ next_interview: { event_at: '2026-03-01T00:00:00Z', label: 'Technical panel' } })]),
+    )
+    renderPage()
+    expect(await screen.findByText(/Next interview — Technical panel/)).toBeTruthy()
+    // still exactly one request — the summary rides the existing list call
+    expect(api.listApplications).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the latest event when there is no upcoming interview', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(
+      listResponse([item({ latest_event: { event_type: 'rejected', event_at: '2026-02-01T00:00:00Z' }, next_interview: null })]),
+    )
+    renderPage()
+    expect(await screen.findByText(/Latest: Rejected/)).toBeTruthy()
+  })
+
+  it('shows nothing extra for an application with no recorded lifecycle history', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(listResponse([item()]))
+    renderPage()
+    await screen.findByText('Head of Capital')
+    expect(screen.queryByText(/Next interview/)).toBeNull()
+    expect(screen.queryByText(/Latest:/)).toBeNull()
   })
 })

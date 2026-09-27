@@ -36,6 +36,8 @@ import json
 from dataclasses import dataclass, field
 
 from . import profile360_reader as p360
+from .application_events import list_events as _list_application_events
+from .application_events import next_scheduled_interview
 from .comparison_service import build_role_comparison
 from .db import build_role_view
 
@@ -55,6 +57,13 @@ CATEGORY_PARTIAL_EVIDENCE = "partial_evidence"
 CATEGORY_USER_SUPPLIED = "user_supplied_context"
 CATEGORY_ROLE_SIDE = "role_side_context"
 CATEGORY_STRATEGY = "strategy"
+# Phase 5 (docs/36 §8): the *current* Application package (CV/cover
+# letter/supporting statement — positioning already reads as CATEGORY_STRATEGY
+# everywhere else) offered to Interview Prep only, as consistency context.
+# Deliberately its own category, never folded into CATEGORY_STRATEGY or any
+# person-side bucket: a generated CV is not new proof the applicant did
+# anything, so it must never satisfy a person-side grounding requirement.
+CATEGORY_APPLICATION_MATERIAL = "application_material"
 
 CATEGORY_LABELS = {
     CATEGORY_CANONICAL_EVIDENCE: "Accepted profile evidence",
@@ -62,6 +71,7 @@ CATEGORY_LABELS = {
     CATEGORY_USER_SUPPLIED: "Application-only user input",
     CATEGORY_ROLE_SIDE: "Role-side requirement/context",
     CATEGORY_STRATEGY: "Current positioning strategy",
+    CATEGORY_APPLICATION_MATERIAL: "Current application material (not new evidence)",
 }
 
 
@@ -103,6 +113,12 @@ class EvidenceBundle:
     notes: list[dict]
     profile_snapshot: dict | None
     episodes: list[dict]
+    # Phase 5 (docs/36): bounded lifecycle timeline, read once here for every
+    # artifact_type alike (cheap, indexed) even though only interview_prep's
+    # fingerprint/source registry actually uses it — see
+    # compute_fingerprint_for's own docstring for why an ordinary
+    # CV/Positioning artifact must never go stale from this field changing.
+    events: list[dict] = field(default_factory=list)
 
 
 def _split_requirements(items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -157,26 +173,48 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
 
     profile_snapshot = p360.get_current_snapshot(cur)
     episodes = p360.list_episodes(cur, limit=EPISODE_LIMIT)
+    events = _list_application_events(cur, application_id)
 
     return EvidenceBundle(
         application_id=application_id, role_instance_id=role_instance_id, application=application, role=role,
         comparison=comparison, accepted_requirements=accepted, legacy_requirements=legacy,
-        notes=notes, profile_snapshot=profile_snapshot, episodes=episodes,
+        notes=notes, profile_snapshot=profile_snapshot, episodes=episodes, events=events,
     )
 
 
-def get_active_positioning(cur, application_id: str) -> dict | None:
-    """The current active positioning artifact, read directly (not through
-    application_artifacts.py, which depends on this module) — used both as
-    downstream generation input (docs/35 §4 "Current positioning") for
-    cv/cover_letter/supporting_statement, and to compute their staleness."""
+def get_active_artifact(cur, application_id: str, artifact_type: str) -> dict | None:
+    """The current active version of one artifact type, read directly (not
+    through application_artifacts.py, which depends on this module). The
+    shared primitive behind get_active_positioning and, for interview_prep
+    generation (docs/36 §8), the analogous CV/cover_letter/supporting_statement
+    lookups in get_active_application_materials."""
     cur.execute(
         "SELECT id, content, guidance, updated_at FROM jobber.application_artifact "
-        "WHERE application_id = %s AND artifact_type = 'positioning' AND status = 'active'",
-        (application_id,),
+        "WHERE application_id = %s AND artifact_type = %s AND status = 'active'",
+        (application_id, artifact_type),
     )
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+def get_active_positioning(cur, application_id: str) -> dict | None:
+    """The current active positioning artifact — used both as downstream
+    generation input (docs/35 §4 "Current positioning") for
+    cv/cover_letter/supporting_statement/interview_prep, and to compute their
+    staleness."""
+    return get_active_artifact(cur, application_id, "positioning")
+
+
+def get_active_application_materials(cur, application_id: str) -> dict:
+    """The active cv/cover_letter/supporting_statement artifacts, offered to
+    Interview Prep generation only (docs/36 §8), as consistency/strategy
+    context — never as new person-side evidence about the applicant.
+    Positioning is handled separately by get_active_positioning, which every
+    downstream artifact type (not only interview_prep) already reads."""
+    return {
+        artifact_type: get_active_artifact(cur, application_id, artifact_type)
+        for artifact_type in ("cv", "cover_letter", "supporting_statement")
+    }
 
 
 # --- fingerprint --------------------------------------------------------------
@@ -189,6 +227,7 @@ def _row_hash(row: dict, exclude: tuple[str, ...] = ()) -> str:
 
 def compute_fingerprint_for(
     bundle: EvidenceBundle, *, artifact_type: str, guidance: str | None, active_positioning: dict | None,
+    active_application_materials: dict | None = None,
 ) -> str:
     """Deterministic SHA-256 over exactly the material docs/35 §8 lists as
     staleness-relevant: application/role identity, accepted+legacy
@@ -202,7 +241,18 @@ def compute_fingerprint_for(
     when checking that artifact for staleness (never a hypothetical "current"
     guidance, which doesn't exist for anything but a fresh generate call) —
     see this module's own docstring for why that is what keeps a guidance
-    difference from ever masquerading as evidence drift, and vice versa."""
+    difference from ever masquerading as evidence drift, and vice versa.
+
+    For `interview_prep` only (docs/36 §9), the hash also folds in the
+    Application's current status, its lifecycle events (id + a content hash
+    of each, so an edited event — not just an added/removed one — is caught),
+    and the active cv/cover_letter/supporting_statement artifacts' id/version
+    alongside the active positioning every downstream type already reads.
+    Every other artifact_type's fingerprint is completely unaffected by this
+    branch — an ordinary CV/Positioning must never go stale merely because a
+    lifecycle event was recorded (build §9/§14 hardening note); the
+    fingerprint stays artifact-type-specific by construction, not by
+    convention."""
     parts = {
         "application_id": bundle.application_id,
         "role_instance_id": bundle.role_instance_id,
@@ -255,6 +305,18 @@ def compute_fingerprint_for(
         ),
         "guidance": guidance,
     }
+    if artifact_type == "interview_prep":
+        parts["application_status"] = bundle.application.get("status")
+        parts["events"] = sorted(
+            ({"id": str(e["id"]), "hash": _row_hash(e)} for e in bundle.events),
+            key=lambda x: x["id"],
+        )
+        parts["active_application_materials"] = {
+            material_type: (
+                {"id": str(row["id"]), "updated_at": row["updated_at"]} if row else None
+            )
+            for material_type, row in (active_application_materials or {}).items()
+        }
     canonical = json.dumps(parts, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -334,7 +396,73 @@ def _episode_text(ep: dict) -> str:
     return "\n".join(lines)
 
 
-def build_source_registry(bundle: EvidenceBundle, *, artifact_type: str, active_positioning: dict | None) -> list[SourceEntry]:
+_APPLICATION_MATERIAL_LABELS = {
+    "cv": "Adopted CV",
+    "cover_letter": "Adopted cover letter",
+    "supporting_statement": "Adopted supporting statement",
+}
+
+
+def _application_material_summary(artifact_type: str, content: dict) -> str:
+    if artifact_type == "cv":
+        return (content.get("profile_summary") or {}).get("text", "")
+    if artifact_type == "cover_letter":
+        parts = [(content.get("opening") or {}).get("text", ""), *((b.get("text", "")) for b in content.get("body") or [])]
+        return "\n".join(p for p in parts if p)
+    parts = [(content.get("opening") or {}).get("text", "")]
+    for section in content.get("sections") or []:
+        parts.append(section.get("heading", ""))
+        parts.extend((p.get("text", "")) for p in section.get("paragraphs") or [])
+    return "\n".join(p for p in parts if p)
+
+
+def _application_material_sources(materials: dict) -> list[SourceEntry]:
+    """Phase 5 (docs/36 §8): the current cv/cover_letter/supporting_statement
+    package, offered to Interview Prep only, as CATEGORY_APPLICATION_MATERIAL
+    — consistency/strategy context, never person-side evidence. Same
+    treatment `build_source_registry`'s own `active_positioning` block
+    already gives the adopted positioning brief (CATEGORY_STRATEGY), kept as
+    its own category so it reads distinctly in the source registry."""
+    out: list[SourceEntry] = []
+    for artifact_type, row in materials.items():
+        if not row:
+            continue
+        label = _APPLICATION_MATERIAL_LABELS[artifact_type]
+        summary = _truncate(_application_material_summary(artifact_type, row["content"]))
+        out.append(SourceEntry(
+            ref=f"application_material:{row['id']}", kind="application_material",
+            category=CATEGORY_APPLICATION_MATERIAL, label=label,
+            content=f"{label} (current application package — strategy/consistency context, NOT new evidence "
+                    f"the applicant did anything): {summary}",
+        ))
+    return out
+
+
+def _event_sources(events: list[dict]) -> list[SourceEntry]:
+    """Phase 5 (docs/36 §8): lifecycle events as user-supplied context —
+    never canonical evidence, exactly like an application_note. Stable
+    `application_event:<id>` refs so a question/caution can cite what
+    actually happened (e.g. a scheduled technical panel) without treating a
+    user's own recollection as verified."""
+    out: list[SourceEntry] = []
+    for e in events:
+        lines = [f"Lifecycle event: {e['event_type']} at {e['event_at']}"]
+        if e.get("label"):
+            lines.append(f"Label: {e['label']}")
+        if e.get("notes"):
+            lines.append(f"Notes (user-supplied, NOT verified evidence): {e['notes']}")
+        out.append(SourceEntry(
+            ref=f"application_event:{e['id']}", kind="application_event", category=CATEGORY_USER_SUPPLIED,
+            label=f"Lifecycle event: {e.get('label') or e['event_type'].replace('_', ' ')}",
+            content="\n".join(lines),
+        ))
+    return out
+
+
+def build_source_registry(
+    bundle: EvidenceBundle, *, artifact_type: str, active_positioning: dict | None,
+    active_application_materials: dict | None = None,
+) -> list[SourceEntry]:
     sources: list[SourceEntry] = []
 
     posting_text = bundle.role.get("source_document_text") or "\n".join(
@@ -390,6 +518,10 @@ def build_source_registry(bundle: EvidenceBundle, *, artifact_type: str, active_
                     f"{statement}\nThemes:\n{theme_lines}",
         ))
 
+    if artifact_type == "interview_prep":
+        sources.extend(_application_material_sources(active_application_materials or {}))
+        sources.extend(_event_sources(bundle.events))
+
     return sources
 
 
@@ -406,7 +538,7 @@ _INJECTION_GUARD = (
 )
 
 
-def render_prompt_text(bundle: EvidenceBundle, sources: list[SourceEntry], *, guidance: str | None) -> str:
+def render_prompt_text(bundle: EvidenceBundle, sources: list[SourceEntry], *, artifact_type: str, guidance: str | None) -> str:
     """The full `user_input` handed to `ai.run_json_task` — every source
     tagged with its SOURCE_REF so the model can cite it back, grouped by
     epistemic category so the model sees the accepted/partial/user-supplied/
@@ -419,11 +551,28 @@ def render_prompt_text(bundle: EvidenceBundle, sources: list[SourceEntry], *, gu
         f"Requirement review status: {bundle.role.get('requirement_review')}",
         "",
     ]
+    if artifact_type == "interview_prep":
+        # Lifecycle context (docs/36 §8) — plain header lines, not a
+        # source_refs-citable claim, since these describe the application's
+        # own state rather than anything to prove about the applicant.
+        upcoming = next_scheduled_interview(bundle.events)
+        lines.append(f"Application status (user-set workflow state, never a readiness judgment): {bundle.application.get('status')}")
+        lines.append(
+            "Upcoming scheduled interview: "
+            + (
+                f"{upcoming['event_type']} — {upcoming.get('label') or 'unlabelled'} at {upcoming['event_at']}"
+                if upcoming else "none currently recorded"
+            )
+        )
+        lines.append("")
     by_category: dict[str, list[SourceEntry]] = {}
     for s in sources:
         by_category.setdefault(s.category, []).append(s)
 
-    for category in (CATEGORY_ROLE_SIDE, CATEGORY_STRATEGY, CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED):
+    for category in (
+        CATEGORY_ROLE_SIDE, CATEGORY_STRATEGY, CATEGORY_APPLICATION_MATERIAL,
+        CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED,
+    ):
         entries = by_category.get(category) or []
         if not entries:
             continue
@@ -494,11 +643,18 @@ def build_application_generation_context(
     produce. Called once per POST .../generate — never on a GET."""
     bundle = gather_application_evidence(cur, application_id)
     active_positioning = get_active_positioning(cur, application_id) if artifact_type != "positioning" else None
-    sources = build_source_registry(bundle, artifact_type=artifact_type, active_positioning=active_positioning)
+    active_application_materials = (
+        get_active_application_materials(cur, application_id) if artifact_type == "interview_prep" else None
+    )
+    sources = build_source_registry(
+        bundle, artifact_type=artifact_type, active_positioning=active_positioning,
+        active_application_materials=active_application_materials,
+    )
     fingerprint = compute_fingerprint_for(
         bundle, artifact_type=artifact_type, guidance=guidance, active_positioning=active_positioning,
+        active_application_materials=active_application_materials,
     )
-    prompt_text = render_prompt_text(bundle, sources, guidance=guidance)
+    prompt_text = render_prompt_text(bundle, sources, artifact_type=artifact_type, guidance=guidance)
     return GenerationContext(
         bundle=bundle, artifact_type=artifact_type, active_positioning=active_positioning,
         sources=sources, guidance=guidance, input_fingerprint=fingerprint, prompt_text=prompt_text,
@@ -517,4 +673,31 @@ def generation_readiness_summary(bundle: EvidenceBundle) -> dict:
         "pending_unreviewed_excluded": (review.get("unreviewed", 0) + review.get("unresolved_proposals", 0) + review.get("needs_reextraction", 0)),
         "counts": bundle.comparison["counts"],
         "application_examples": sum(1 for n in bundle.notes if n["note_type"] == "evidence_example"),
+    }
+
+
+def interview_readiness_summary(
+    bundle: EvidenceBundle, *, active_positioning: dict | None, active_application_materials: dict | None,
+) -> dict:
+    """Deterministic, AI-free "what this prep will use" summary (build §14) —
+    everything `generation_readiness_summary` already reports, plus what's
+    specific to Interview Prep: which current Application package materials
+    are available to draw on as consistency context, and whether an upcoming
+    interview is recorded. No AI call, nothing computed here that isn't
+    already implied by the evidence bundle plus one active-artifact lookup
+    per material type."""
+    materials = active_application_materials or {}
+    upcoming = next_scheduled_interview(bundle.events)
+    return {
+        **generation_readiness_summary(bundle),
+        "active_positioning_available": active_positioning is not None,
+        "active_cv_available": materials.get("cv") is not None,
+        "active_cover_letter_available": materials.get("cover_letter") is not None,
+        "active_supporting_statement_available": materials.get("supporting_statement") is not None,
+        "lifecycle_events_count": len(bundle.events),
+        "upcoming_interview_available": upcoming is not None,
+        "upcoming_interview": (
+            {"event_type": upcoming["event_type"], "event_at": upcoming["event_at"], "label": upcoming.get("label")}
+            if upcoming else None
+        ),
     }

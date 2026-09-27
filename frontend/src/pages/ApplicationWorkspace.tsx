@@ -5,6 +5,9 @@ import {
   type ApplicationArtifact,
   type ApplicationArtifactsResponse,
   type ApplicationDetail,
+  type ApplicationEvent,
+  type ApplicationEventInput,
+  type ApplicationEventType,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
   type ApplicationNote,
@@ -16,6 +19,8 @@ import {
   type CoverLetterContent,
   type CVContent,
   type GapConcept,
+  type InterviewGenerationContextSummary,
+  type InterviewPrepContent,
   type PositioningContent,
   type SourceCategory,
   type SourceManifestEntry,
@@ -69,6 +74,41 @@ const ARTIFACT_LABELS: Record<ArtifactType, string> = {
   cv: 'CV',
   cover_letter: 'Cover letter',
   supporting_statement: 'Supporting statement',
+  interview_prep: 'Interview prep',
+}
+
+// Phase 5 (docs/36): lifecycle event types/labels — a plain user-recorded
+// timeline, never an AI judgment and never a status derivation.
+const EVENT_TYPE_LABEL: Record<ApplicationEventType, string> = {
+  submitted: 'Submitted',
+  interview_scheduled: 'Interview scheduled',
+  interview_completed: 'Interview completed',
+  offer_received: 'Offer received',
+  offer_accepted: 'Offer accepted',
+  offer_declined: 'Offer declined',
+  rejected: 'Rejected',
+  role_closed: 'Role closed',
+  withdrawn: 'Withdrawn',
+  closed: 'Closed',
+  other: 'Other',
+}
+
+function formatEventAt(value: string): string {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+
+function upcomingInterview(events: ApplicationEvent[]): ApplicationEvent | null {
+  const now = Date.now()
+  const upcoming = events.filter((e) => e.event_type === 'interview_scheduled' && new Date(e.event_at).getTime() >= now)
+  if (upcoming.length === 0) return null
+  return upcoming.reduce((soonest, e) => (new Date(e.event_at).getTime() < new Date(soonest.event_at).getTime() ? e : soonest))
+}
+
+function toLocalDateTimeInput(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
 }
 
 const CATEGORY_LABELS: Record<SourceCategory, string> = {
@@ -194,6 +234,237 @@ function NoteItem({
         </div>
       </div>
     </div>
+  )
+}
+
+// --- Phase 5: Lifecycle timeline (docs/36) ---------------------------------
+//
+// A plain, user-recorded timeline — submission, interviews, offers, closure.
+// Never an AI call, and recording an event never changes the Application
+// status above: the two are independent by design (build §3).
+
+function EventComposer({
+  initial,
+  defaultType,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  initial?: ApplicationEvent
+  defaultType: ApplicationEventType
+  busy: boolean
+  onSubmit: (input: ApplicationEventInput) => void
+  onCancel: () => void
+}) {
+  const [eventType, setEventType] = useState<ApplicationEventType>(initial?.event_type ?? defaultType)
+  const [eventAt, setEventAt] = useState(() => toLocalDateTimeInput(initial?.event_at ?? new Date().toISOString()))
+  const [label, setLabel] = useState(initial?.label ?? '')
+  const [notes, setNotes] = useState(initial?.notes ?? '')
+
+  return (
+    <div className="card" style={{ marginTop: 8, padding: 10 }}>
+      <label style={{ display: 'block', fontSize: 12 }}>
+        Event type
+        <select
+          value={eventType}
+          onChange={(e) => setEventType(e.target.value as ApplicationEventType)}
+          style={{ display: 'block', marginTop: 4 }}
+        >
+          {(Object.entries(EVENT_TYPE_LABEL) as [ApplicationEventType, string][]).map(([value, text]) => (
+            <option key={value} value={value}>
+              {text}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        Date/time
+        <input
+          type="datetime-local"
+          value={eventAt}
+          onChange={(e) => setEventAt(e.target.value)}
+          style={{ display: 'block', marginTop: 4 }}
+        />
+      </label>
+      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        Label (optional) — stage, format, etc.
+        <input
+          value={label ?? ''}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="e.g. Technical panel, video call"
+          style={{ width: '100%' }}
+        />
+      </label>
+      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        Notes (optional)
+        <textarea rows={3} value={notes ?? ''} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
+      </label>
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || !eventAt}
+          onClick={() => {
+            if (!eventAt) return
+            onSubmit({
+              event_type: eventType,
+              event_at: new Date(eventAt).toISOString(),
+              label: label.trim() || undefined,
+              notes: notes.trim() || undefined,
+            })
+          }}
+        >
+          {busy ? 'Saving…' : 'Save event'}
+        </button>
+        <button type="button" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function EventRow({
+  event,
+  busy,
+  onSave,
+  onDelete,
+}: {
+  event: ApplicationEvent
+  busy: boolean
+  onSave: (input: ApplicationEventInput) => void
+  onDelete: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  if (editing) {
+    return (
+      <EventComposer
+        initial={event}
+        defaultType={event.event_type}
+        busy={busy}
+        onSubmit={(input) => {
+          onSave(input)
+          setEditing(false)
+        }}
+        onCancel={() => setEditing(false)}
+      />
+    )
+  }
+  return (
+    <div className="card" style={{ marginTop: 8, padding: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div>
+          <strong style={{ fontSize: 13 }}>{EVENT_TYPE_LABEL[event.event_type]}</strong>
+          {event.label && <span className="secondary" style={{ fontSize: 13 }}> — {event.label}</span>}
+          <div className="muted" style={{ fontSize: 11 }}>
+            {formatEventAt(event.event_at)}
+          </div>
+          {event.notes && <p style={{ margin: '4px 0 0', fontSize: 13, whiteSpace: 'pre-wrap' }}>{event.notes}</p>}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button type="button" onClick={() => setEditing(true)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+            Edit
+          </button>
+          <button type="button" onClick={onDelete} disabled={busy} style={{ fontSize: 12, padding: '3px 8px', color: 'var(--critical)' }}>
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LifecycleSection({
+  status,
+  events,
+  eventsError,
+  busy,
+  actionError,
+  onAdd,
+  onSave,
+  onDelete,
+}: {
+  status: ApplicationStatus
+  events: ApplicationEvent[] | null
+  eventsError: string | null
+  busy: boolean
+  actionError: string | null
+  onAdd: (input: ApplicationEventInput) => void
+  onSave: (eventId: string, input: ApplicationEventInput) => void
+  onDelete: (eventId: string) => void
+}) {
+  const [composing, setComposing] = useState<ApplicationEventType | null>(null)
+  const upcoming = events ? upcomingInterview(events) : null
+
+  return (
+    <section className="card" aria-labelledby="lifecycle-h">
+      <h2 id="lifecycle-h" style={{ fontSize: 18, marginTop: 0 }}>
+        Lifecycle
+      </h2>
+      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        What happened with this application, recorded by you. This never changes the status above automatically.
+      </p>
+      <p className="secondary" style={{ fontSize: 13, marginTop: 4 }}>
+        Current status: <strong>{APPLICATION_STATUSES.find((s) => s.value === status)?.label ?? status}</strong>
+      </p>
+
+      {eventsError && (
+        <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+          Timeline couldn't be loaded: {eventsError}
+        </p>
+      )}
+      {actionError && (
+        <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+          {actionError}
+        </p>
+      )}
+
+      {events && upcoming && (
+        <p role="status" style={{ fontSize: 13, color: 'var(--series-1)', fontWeight: 600 }}>
+          Upcoming: {EVENT_TYPE_LABEL[upcoming.event_type]}
+          {upcoming.label ? ` — ${upcoming.label}` : ''} on {formatEventAt(upcoming.event_at)}
+        </p>
+      )}
+
+      {events === null && !eventsError && <p className="muted">Loading timeline…</p>}
+      {events && events.length === 0 && <p className="muted">No events recorded yet.</p>}
+      {events?.map((event) => (
+        <EventRow key={event.id} event={event} busy={busy} onSave={(input) => onSave(event.id, input)} onDelete={() => onDelete(event.id)} />
+      ))}
+
+      {composing ? (
+        <EventComposer
+          defaultType={composing}
+          busy={busy}
+          onSubmit={(input) => {
+            onAdd(input)
+            setComposing(null)
+          }}
+          onCancel={() => setComposing(null)}
+        />
+      ) : (
+        <div className="actions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => setComposing('submitted')}>
+            Record submission
+          </button>
+          <button type="button" onClick={() => setComposing('interview_scheduled')}>
+            Schedule interview
+          </button>
+          <button type="button" onClick={() => setComposing('interview_completed')}>
+            Record completed interview
+          </button>
+          <button type="button" onClick={() => setComposing('offer_received')}>
+            Record offer
+          </button>
+          <button type="button" onClick={() => setComposing('rejected')}>
+            Record rejection / role closed
+          </button>
+          <button type="button" onClick={() => setComposing('other')}>
+            Add another event
+          </button>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -522,13 +793,53 @@ function renderArtifactMarkdown(artifactType: ArtifactType, content: ArtifactCon
     lines.push(c.salutation, '', c.opening.text, '')
     c.body.forEach((b) => lines.push(b.text, ''))
     lines.push(c.closing.text, '', c.sign_off)
-  } else {
+  } else if (artifactType === 'supporting_statement') {
     const c = content as SupportingStatementContent
     lines.push('# Supporting statement', '', c.opening.text, '')
     c.sections.forEach((s) => {
       lines.push(`## ${s.heading}`, '')
       s.paragraphs.forEach((p) => lines.push(p.text, ''))
     })
+  } else {
+    const c = content as InterviewPrepContent
+    lines.push('# Interview preparation', '')
+    if (c.focus_areas.length) {
+      lines.push('## Focus areas', '')
+      c.focus_areas.forEach((f) => lines.push(`- **${f.title}** — ${f.why_it_matters}`))
+      lines.push('')
+    }
+    if (c.questions.length) {
+      lines.push('## Practice questions', '')
+      c.questions.forEach((q) => {
+        lines.push(`### ${q.question}`, `*${q.question_type} — a practice question, not a known employer question*`, '')
+        lines.push(`Approach: ${q.answer_plan.approach}`, '')
+        if (q.answer_plan.evidence_points.length) {
+          lines.push('Evidence to draw on:')
+          q.answer_plan.evidence_points.forEach((e) => lines.push(`- ${e.text}`))
+          lines.push('')
+        }
+        if (q.answer_plan.cautions.length) {
+          lines.push('Cautions:')
+          q.answer_plan.cautions.forEach((c2) => lines.push(`- ${c2.text}`))
+          lines.push('')
+        }
+      })
+    }
+    if (c.questions_to_ask.length) {
+      lines.push('## Questions to ask', '')
+      c.questions_to_ask.forEach((q) => lines.push(`- ${q.text}`))
+      lines.push('')
+    }
+    if (c.closing_points.length) {
+      lines.push('## Closing points', '')
+      c.closing_points.forEach((p) => lines.push(`- ${p.text}`))
+      lines.push('')
+    }
+    if (c.prep_checklist.length) {
+      lines.push('## Prep checklist', '')
+      c.prep_checklist.forEach((item) => lines.push(`- ${item}`))
+      lines.push('')
+    }
   }
   return lines.join('\n').trim() + '\n'
 }
@@ -655,21 +966,93 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
       </div>
     )
   }
-  const c = content as SupportingStatementContent
+  if (artifactType === 'supporting_statement') {
+    const c = content as SupportingStatementContent
+    return (
+      <div>
+        <SourcedBlock block={c.opening} manifest={manifest} />
+        {c.sections.map((s, i) => (
+          <div key={i} style={{ marginTop: 8 }}>
+            <strong style={{ fontSize: 13 }}>{s.heading}</strong>
+            {s.paragraphs.map((p, j) => (
+              <SourcedBlock key={j} block={p} manifest={manifest} />
+            ))}
+          </div>
+        ))}
+        {c.gaps_addressed.length > 0 && (
+          <p style={{ fontSize: 12, color: 'var(--warning)' }}>
+            <strong>Gaps addressed:</strong> {c.gaps_addressed.join(' · ')}
+          </p>
+        )}
+      </div>
+    )
+  }
+  const c = content as InterviewPrepContent
   return (
     <div>
-      <SourcedBlock block={c.opening} manifest={manifest} />
-      {c.sections.map((s, i) => (
-        <div key={i} style={{ marginTop: 8 }}>
-          <strong style={{ fontSize: 13 }}>{s.heading}</strong>
-          {s.paragraphs.map((p, j) => (
-            <SourcedBlock key={j} block={p} manifest={manifest} />
+      {c.focus_areas.length > 0 && (
+        <>
+          <strong style={{ fontSize: 12 }}>Focus areas</strong>
+          {c.focus_areas.map((f, i) => (
+            <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+              <strong>{f.title}:</strong> {f.why_it_matters}
+              <SourceRefs refs={f.source_refs} manifest={manifest} />
+            </p>
           ))}
-        </div>
-      ))}
-      {c.gaps_addressed.length > 0 && (
-        <p style={{ fontSize: 12, color: 'var(--warning)' }}>
-          <strong>Gaps addressed:</strong> {c.gaps_addressed.join(' · ')}
+        </>
+      )}
+      {c.questions.length > 0 && (
+        <>
+          <strong style={{ fontSize: 12 }}>Practice questions</strong>
+          <p className="muted" style={{ fontSize: 11, margin: '2px 0 6px' }}>
+            Practice questions based on this role's requirements — not known employer questions.
+          </p>
+          {c.questions.map((q, i) => (
+            <div key={i} style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              <p style={{ margin: '4px 0', fontSize: 13 }}>
+                <strong>{q.question}</strong> <span className="muted">({q.question_type})</span>
+                <SourceRefs refs={q.source_refs} manifest={manifest} />
+              </p>
+              <p style={{ fontSize: 13, margin: '4px 0' }}>{q.answer_plan.approach}</p>
+              {q.answer_plan.evidence_points.length > 0 && (
+                <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>
+                  {q.answer_plan.evidence_points.map((e, j) => (
+                    <li key={j}>
+                      {e.text}
+                      <SourceRefs refs={e.source_refs} manifest={manifest} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {q.answer_plan.cautions.map((caution, j) => (
+                <p key={j} style={{ fontSize: 12, margin: '4px 0', color: 'var(--warning)' }}>
+                  {caution.text}
+                  <SourceRefs refs={caution.source_refs} manifest={manifest} />
+                </p>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+      {c.questions_to_ask.length > 0 && (
+        <>
+          <strong style={{ fontSize: 12 }}>Questions to ask</strong>
+          {c.questions_to_ask.map((q, i) => (
+            <SourcedBlock key={i} block={q} manifest={manifest} />
+          ))}
+        </>
+      )}
+      {c.closing_points.length > 0 && (
+        <>
+          <strong style={{ fontSize: 12 }}>Closing points</strong>
+          {c.closing_points.map((p, i) => (
+            <SourcedBlock key={i} block={p} manifest={manifest} />
+          ))}
+        </>
+      )}
+      {c.prep_checklist.length > 0 && (
+        <p style={{ fontSize: 13 }}>
+          <strong>Prep checklist:</strong> {c.prep_checklist.join(' · ')}
         </p>
       )}
     </div>
@@ -835,31 +1218,125 @@ function ArtifactEditor({
       </div>
     )
   }
-  const c = draft as SupportingStatementContent
+  if (artifactType === 'supporting_statement') {
+    const c = draft as SupportingStatementContent
+    return (
+      <div>
+        <label style={{ display: 'block', fontSize: 12 }}>
+          Opening
+          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
+        </label>
+        {c.sections.map((s, i) => (
+          <div key={i} style={{ marginTop: 8 }}>
+            <input
+              style={{ width: '100%', fontSize: 13, fontWeight: 600 }}
+              value={s.heading}
+              onChange={(e) => onChange({ ...c, sections: c.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })}
+            />
+            {s.paragraphs.map((p, k) => (
+              <textarea
+                key={k}
+                rows={2}
+                style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+                value={p.text}
+                onChange={(e) =>
+                  onChange({
+                    ...c,
+                    sections: c.sections.map((x, si) =>
+                      si === i ? { ...x, paragraphs: x.paragraphs.map((px, pj) => (pj === k ? { ...px, text: e.target.value } : px)) } : x,
+                    ),
+                  })
+                }
+              />
+            ))}
+          </div>
+        ))}
+        <ListEditor label="Gaps addressed" value={c.gaps_addressed} onChange={(v) => onChange({ ...c, gaps_addressed: v })} />
+      </div>
+    )
+  }
+  const c = draft as InterviewPrepContent
   return (
     <div>
-      <label style={{ display: 'block', fontSize: 12 }}>
-        Opening
-        <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
-      </label>
-      {c.sections.map((s, i) => (
-        <div key={i} style={{ marginTop: 8 }}>
-          <input
-            style={{ width: '100%', fontSize: 13, fontWeight: 600 }}
-            value={s.heading}
-            onChange={(e) => onChange({ ...c, sections: c.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })}
+      {c.focus_areas.map((f, i) => (
+        <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          Focus area: {f.title}
+          <textarea
+            rows={2}
+            style={{ width: '100%', fontSize: 13 }}
+            value={f.why_it_matters}
+            onChange={(e) => onChange({ ...c, focus_areas: c.focus_areas.map((x, j) => (j === i ? { ...x, why_it_matters: e.target.value } : x)) })}
           />
-          {s.paragraphs.map((p, k) => (
+        </label>
+      ))}
+      {c.questions.map((q, i) => (
+        <div key={i} style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <label style={{ display: 'block', fontSize: 12 }}>
+            Question
+            <textarea
+              rows={2}
+              style={{ width: '100%', fontSize: 13 }}
+              value={q.question}
+              onChange={(e) => onChange({ ...c, questions: c.questions.map((x, j) => (j === i ? { ...x, question: e.target.value } : x)) })}
+            />
+          </label>
+          <label style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+            Approach
+            <textarea
+              rows={2}
+              style={{ width: '100%', fontSize: 13 }}
+              value={q.answer_plan.approach}
+              onChange={(e) =>
+                onChange({
+                  ...c,
+                  questions: c.questions.map((x, j) => (j === i ? { ...x, answer_plan: { ...x.answer_plan, approach: e.target.value } } : x)),
+                })
+              }
+            />
+          </label>
+          {q.answer_plan.evidence_points.map((ep, k) => (
             <textarea
               key={k}
               rows={2}
               style={{ width: '100%', fontSize: 13, marginTop: 4 }}
-              value={p.text}
+              value={ep.text}
               onChange={(e) =>
                 onChange({
                   ...c,
-                  sections: c.sections.map((x, si) =>
-                    si === i ? { ...x, paragraphs: x.paragraphs.map((px, pj) => (pj === k ? { ...px, text: e.target.value } : px)) } : x,
+                  questions: c.questions.map((x, j) =>
+                    j === i
+                      ? {
+                          ...x,
+                          answer_plan: {
+                            ...x.answer_plan,
+                            evidence_points: x.answer_plan.evidence_points.map((y, m) => (m === k ? { ...y, text: e.target.value } : y)),
+                          },
+                        }
+                      : x,
+                  ),
+                })
+              }
+            />
+          ))}
+          {q.answer_plan.cautions.map((caution, k) => (
+            <textarea
+              key={k}
+              rows={2}
+              style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+              value={caution.text}
+              onChange={(e) =>
+                onChange({
+                  ...c,
+                  questions: c.questions.map((x, j) =>
+                    j === i
+                      ? {
+                          ...x,
+                          answer_plan: {
+                            ...x.answer_plan,
+                            cautions: x.answer_plan.cautions.map((y, m) => (m === k ? { ...y, text: e.target.value } : y)),
+                          },
+                        }
+                      : x,
                   ),
                 })
               }
@@ -867,7 +1344,25 @@ function ArtifactEditor({
           ))}
         </div>
       ))}
-      <ListEditor label="Gaps addressed" value={c.gaps_addressed} onChange={(v) => onChange({ ...c, gaps_addressed: v })} />
+      {c.questions_to_ask.map((q, i) => (
+        <textarea
+          key={i}
+          rows={2}
+          style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+          value={q.text}
+          onChange={(e) => onChange({ ...c, questions_to_ask: c.questions_to_ask.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
+        />
+      ))}
+      {c.closing_points.map((p, i) => (
+        <textarea
+          key={i}
+          rows={2}
+          style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+          value={p.text}
+          onChange={(e) => onChange({ ...c, closing_points: c.closing_points.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
+        />
+      ))}
+      <ListEditor label="Prep checklist" value={c.prep_checklist} onChange={(v) => onChange({ ...c, prep_checklist: v })} />
     </div>
   )
 }
@@ -1138,13 +1633,89 @@ function ApplicationPackageSection({
   )
 }
 
-function InterviewStage() {
+// --- Phase 5: real Interview stage (docs/36), replacing the Phase 4 -------
+// placeholder -------------------------------------------------------------
+
+function InterviewContextCard({ events, status }: { events: ApplicationEvent[] | null; status: ApplicationStatus }) {
+  const upcoming = events ? upcomingInterview(events) : null
+  const latestWithNotes = events?.find((e) => e.notes)
   return (
-    <section className="card" aria-labelledby="interview-stage-h" style={{ marginTop: 16, opacity: 0.7 }}>
-      <h2 id="interview-stage-h" style={{ fontSize: 18, marginTop: 0 }}>
+    <div className="card" style={{ padding: 10, marginBottom: 12 }}>
+      <strong style={{ fontSize: 13 }}>Interview context</strong>
+      <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
+        Current status: {APPLICATION_STATUSES.find((s) => s.value === status)?.label ?? status}.{' '}
+        {upcoming
+          ? `Next: ${EVENT_TYPE_LABEL[upcoming.event_type]}${upcoming.label ? ` — ${upcoming.label}` : ''} on ${formatEventAt(upcoming.event_at)}.`
+          : 'No interview currently scheduled.'}
+      </p>
+      {latestWithNotes && (
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+          Latest note ({EVENT_TYPE_LABEL[latestWithNotes.event_type]}): {latestWithNotes.notes}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function InterviewReadinessCard({ ctx }: { ctx: InterviewGenerationContextSummary | null }) {
+  if (!ctx) return null
+  const materials = [
+    ctx.active_positioning_available && 'positioning',
+    ctx.active_cv_available && 'CV',
+    ctx.active_cover_letter_available && 'cover letter',
+    ctx.active_supporting_statement_available && 'supporting statement',
+  ].filter((x): x is string => Boolean(x))
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12 }}>
+      <strong style={{ fontSize: 13 }}>What this prep will use</strong>
+      <p className="secondary" style={{ margin: '4px 0 0' }}>
+        {pluralize(ctx.reviewed_requirements_used, 'reviewed requirement')} will be used
+        {ctx.pending_unreviewed_excluded > 0 ? ` · ${pluralize(ctx.pending_unreviewed_excluded, 'pending/unreviewed item')} excluded` : ''}
+        {ctx.legacy_requirements_excluded > 0
+          ? ` · ${pluralize(ctx.legacy_requirements_excluded, 'legacy role-side observation')} as legacy context only`
+          : ''}
+        {' · '}
+        {ctx.counts.evidenced} evidenced · {ctx.counts.partial} partial · {ctx.counts.user_asserted} asserted ·{' '}
+        {ctx.counts.not_found} not found
+        {ctx.application_examples > 0 ? ` · ${pluralize(ctx.application_examples, 'application-only example')}` : ''}
+        {' · '}
+        {materials.length > 0 ? `current ${materials.join(', ')} available` : 'no adopted application material yet'}
+        {' · '}
+        {ctx.upcoming_interview_available ? 'upcoming interview context available' : 'no upcoming interview recorded'}.
+      </p>
+    </div>
+  )
+}
+
+function InterviewStage({
+  applicationId,
+  status,
+  events,
+  artifactsData,
+  onChanged,
+}: {
+  applicationId: string
+  status: ApplicationStatus
+  events: ApplicationEvent[] | null
+  artifactsData: ApplicationArtifactsResponse | null
+  onChanged: () => void
+}) {
+  return (
+    <section aria-labelledby="interview-stage-h" style={{ marginTop: 16 }}>
+      <h2 id="interview-stage-h" style={{ fontSize: 18 }}>
         Interview
       </h2>
-      <p className="muted" style={{ fontSize: 13 }}>Interview preparation arrives in a later phase (Phase 5).</p>
+      <InterviewContextCard events={events} status={status} />
+      <InterviewReadinessCard ctx={artifactsData?.interview_generation_context ?? null} />
+      {artifactsData && (
+        <ArtifactStageCard
+          applicationId={applicationId}
+          artifactType="interview_prep"
+          active={artifactsData.artifacts.interview_prep.active}
+          draft={artifactsData.artifacts.interview_prep.draft}
+          onChanged={onChanged}
+        />
+      )}
     </section>
   )
 }
@@ -1213,11 +1784,15 @@ export default function ApplicationWorkspace() {
   const [evidenceError, setEvidenceError] = useState<string | null>(null)
   const [artifactsData, setArtifactsData] = useState<ApplicationArtifactsResponse | null>(null)
   const [artifactsError, setArtifactsError] = useState<string | null>(null)
+  const [events, setEvents] = useState<ApplicationEvent[] | null>(null)
+  const [eventsError, setEventsError] = useState<string | null>(null)
 
   const [statusBusy, setStatusBusy] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [noteBusy, setNoteBusy] = useState(false)
   const [noteError, setNoteError] = useState<string | null>(null)
+  const [eventBusy, setEventBusy] = useState(false)
+  const [eventActionError, setEventActionError] = useState<string | null>(null)
 
   const loadDetail = useCallback(() => {
     if (!id) return
@@ -1250,6 +1825,18 @@ export default function ApplicationWorkspace() {
       .catch((e) => { if (currentId.current === id) setArtifactsError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
+  // Phase 5 (docs/36 §4/§21): one bounded lifecycle-event request, never
+  // called per row and never blocking the rest of the workspace if it fails
+  // (see the Lifecycle section's own failure isolation below).
+  const loadEvents = useCallback(() => {
+    if (!id) return
+    setEventsError(null)
+    api
+      .listApplicationEvents(id)
+      .then((d) => { if (currentId.current === id) setEvents(d.events) })
+      .catch((e) => { if (currentId.current === id) setEventsError(e instanceof Error ? e.message : String(e)) })
+  }, [id])
+
   useEffect(() => {
     currentId.current = id
     setDetail(null)
@@ -1258,13 +1845,16 @@ export default function ApplicationWorkspace() {
     setEvidenceError(null)
     setArtifactsData(null)
     setArtifactsError(null)
+    setEvents(null)
+    setEventsError(null)
   }, [id])
 
-  // Three independent, parallel requests (build §13/§20) — never a waterfall,
-  // and generation never happens on load.
+  // Four independent, parallel requests (build §13/§20/§21) — never a
+  // waterfall, and generation never happens on load.
   useEffect(loadDetail, [loadDetail])
   useEffect(loadEvidence, [loadEvidence])
   useEffect(loadArtifacts, [loadArtifacts])
+  useEffect(loadEvents, [loadEvents])
 
   const handleStatusChange = async (status: ApplicationStatus) => {
     if (!id) return
@@ -1337,6 +1927,49 @@ export default function ApplicationWorkspace() {
     }
   }
 
+  const handleAddEvent = async (input: ApplicationEventInput) => {
+    if (!id) return
+    setEventBusy(true)
+    setEventActionError(null)
+    try {
+      await api.createApplicationEvent(id, input)
+      loadEvents()
+    } catch (e) {
+      setEventActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setEventBusy(false)
+    }
+  }
+
+  const handleSaveEvent = async (eventId: string, input: ApplicationEventInput) => {
+    if (!id) return
+    setEventBusy(true)
+    setEventActionError(null)
+    try {
+      await api.updateApplicationEvent(id, eventId, input)
+      loadEvents()
+    } catch (e) {
+      setEventActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setEventBusy(false)
+    }
+  }
+
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!id) return
+    if (!confirm('Delete this event?')) return
+    setEventBusy(true)
+    setEventActionError(null)
+    try {
+      await api.deleteApplicationEvent(id, eventId)
+      loadEvents()
+    } catch (e) {
+      setEventActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setEventBusy(false)
+    }
+  }
+
   if (detailError) return <p role="alert" style={{ color: 'var(--critical)' }}>{detailError}</p>
   if (!detail) return <p className="muted">Loading…</p>
 
@@ -1384,6 +2017,19 @@ export default function ApplicationWorkspace() {
         This status is set by you — it never changes automatically based on the preparation checks below.
       </p>
 
+      <div style={{ marginTop: 16 }}>
+        <LifecycleSection
+          status={application.status}
+          events={events}
+          eventsError={eventsError}
+          busy={eventBusy}
+          actionError={eventActionError}
+          onAdd={handleAddEvent}
+          onSave={handleSaveEvent}
+          onDelete={handleDeleteEvent}
+        />
+      </div>
+
       <div className="home-grid" style={{ marginTop: 16 }}>
         <PreparationChecks detail={detail} evidence={evidence} />
       </div>
@@ -1423,7 +2069,13 @@ export default function ApplicationWorkspace() {
         <ApplicationPackageSection applicationId={application.id} evidence={evidence} artifactsData={artifactsData} onChanged={loadArtifacts} />
       </div>
 
-      <InterviewStage />
+      <InterviewStage
+        applicationId={application.id}
+        status={application.status}
+        events={events}
+        artifactsData={artifactsData}
+        onChanged={loadArtifacts}
+      />
     </div>
   )
 }
