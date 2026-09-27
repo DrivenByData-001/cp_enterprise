@@ -2,14 +2,25 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   api,
+  type ApplicationArtifact,
+  type ApplicationArtifactsResponse,
   type ApplicationDetail,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
   type ApplicationNote,
   type ApplicationNoteType,
   type ApplicationStatus,
+  type ArtifactContent,
+  type ArtifactType,
   type ComparisonStatus,
+  type CoverLetterContent,
+  type CVContent,
   type GapConcept,
+  type PositioningContent,
+  type SourceCategory,
+  type SourceManifestEntry,
+  type SourcedText,
+  type SupportingStatementContent,
 } from '../lib/api'
 
 // Phase 3 (docs/34 §9): a guided preparation workspace, not another
@@ -49,6 +60,29 @@ function pluralize(n: number, noun: string, plural = `${noun}s`): string {
 function formatDateTime(value: string): string {
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+
+// --- Phase 4: grounded Application package generation (docs/35) -----------
+
+const ARTIFACT_LABELS: Record<ArtifactType, string> = {
+  positioning: 'Positioning',
+  cv: 'CV',
+  cover_letter: 'Cover letter',
+  supporting_statement: 'Supporting statement',
+}
+
+const CATEGORY_LABELS: Record<SourceCategory, string> = {
+  canonical_evidence: 'Accepted profile evidence',
+  partial_evidence: 'Partial evidence',
+  user_supplied_context: 'Application-only user input',
+  role_side_context: 'Role-side requirement/context',
+  strategy: 'Current positioning strategy',
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return 'present'
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
 }
 
 /** The strongest currently-available person-side evidence line for one
@@ -405,29 +439,712 @@ function GapsAndUncertainties({
   )
 }
 
-// --- Future stages -----------------------------------------------------
+// --- Phase 4: source provenance -------------------------------------------
 
-function FutureStages() {
-  const stages = [
-    { title: 'Positioning', text: 'Positioning and tailored document generation arrive in the next phase.' },
-    { title: 'CV / application material', text: 'Grounded CV and application-material generation arrive in the next phase.' },
-    { title: 'Interview preparation', text: 'Interview preparation arrives in a later phase.' },
-  ]
+function SourceRefs({ refs, manifest }: { refs: string[]; manifest: SourceManifestEntry[] }) {
+  const [open, setOpen] = useState(false)
+  if (refs.length === 0) return null
+  const entries = refs
+    .map((ref) => manifest.find((m) => m.ref === ref))
+    .filter((e): e is SourceManifestEntry => Boolean(e))
   return (
-    <section className="card" aria-labelledby="future-stages-h">
-      <h2 id="future-stages-h" style={{ fontSize: 18, marginTop: 0 }}>
-        Coming next
-      </h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {stages.map((s) => (
-          <div key={s.title} style={{ opacity: 0.7 }}>
-            <strong style={{ fontSize: 13 }}>{s.title}</strong>
-            <p className="muted" style={{ fontSize: 13, margin: '2px 0 0' }}>
-              {s.text}
-            </p>
+    <span>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{ fontSize: 11, padding: '1px 6px', marginLeft: 6, verticalAlign: 'middle' }}
+      >
+        {open ? 'Hide sources' : `Sources (${refs.length})`}
+      </button>
+      {open && (
+        <ul style={{ margin: '4px 0 4px 0', paddingLeft: 18, fontSize: 11 }}>
+          {entries.map((e) => (
+            <li key={e.ref}>
+              <span className="muted">{CATEGORY_LABELS[e.category]}:</span> {e.label}
+            </li>
+          ))}
+          {entries.length < refs.length && <li className="muted">(some cited sources are no longer available)</li>}
+        </ul>
+      )}
+    </span>
+  )
+}
+
+function SourcedBlock({ block, manifest }: { block: SourcedText; manifest: SourceManifestEntry[] }) {
+  return (
+    <p style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>
+      {block.text}
+      <SourceRefs refs={block.source_refs} manifest={manifest} />
+    </p>
+  )
+}
+
+// --- Phase 4: deterministic Markdown rendering (copy/download, build §18) --
+
+function renderArtifactMarkdown(artifactType: ArtifactType, content: ArtifactContent): string {
+  const lines: string[] = []
+  if (artifactType === 'positioning') {
+    const c = content as PositioningContent
+    lines.push('# Positioning brief', '', c.positioning_statement.text, '')
+    if (c.themes.length) {
+      lines.push('## Themes', '')
+      c.themes.forEach((t) => lines.push(`- **${t.title}** — ${t.message}`))
+      lines.push('')
+    }
+    if (c.requirements_to_lead_with.length) {
+      lines.push('## Requirements to lead with', '')
+      c.requirements_to_lead_with.forEach((r) => lines.push(`- ${r.reason}`))
+      lines.push('')
+    }
+    if (c.gaps_and_cautions.length) {
+      lines.push('## Gaps and cautions', '')
+      c.gaps_and_cautions.forEach((g) => lines.push(`- ${g.message}`))
+      lines.push('')
+    }
+    if (c.language_to_mirror.length) lines.push('## Language to mirror', '', c.language_to_mirror.map((l) => `- ${l}`).join('\n'), '')
+    if (c.avoid_claiming.length) lines.push('## Avoid claiming', '', c.avoid_claiming.map((l) => `- ${l}`).join('\n'), '')
+  } else if (artifactType === 'cv') {
+    const c = content as CVContent
+    lines.push('# CV', '', c.profile_summary.text, '')
+    if (c.experience.length) {
+      lines.push('## Experience', '')
+      c.experience.forEach((e) => {
+        lines.push(`### ${e.title ?? 'Unknown role'} — ${e.organisation ?? 'Unknown organisation'}`)
+        lines.push(`*${formatDate(e.start_date)} – ${formatDate(e.end_date)}*`, '')
+        e.bullets.forEach((b) => lines.push(`- ${b.text}`))
+        lines.push('')
+      })
+    }
+    if (c.skills.length) lines.push('## Skills', '', c.skills.map((s) => `- ${s.text}`).join('\n'), '')
+    if (c.omissions_or_cautions.length) lines.push('## Notes', '', c.omissions_or_cautions.map((l) => `- ${l}`).join('\n'), '')
+  } else if (artifactType === 'cover_letter') {
+    const c = content as CoverLetterContent
+    lines.push(c.salutation, '', c.opening.text, '')
+    c.body.forEach((b) => lines.push(b.text, ''))
+    lines.push(c.closing.text, '', c.sign_off)
+  } else {
+    const c = content as SupportingStatementContent
+    lines.push('# Supporting statement', '', c.opening.text, '')
+    c.sections.forEach((s) => {
+      lines.push(`## ${s.heading}`, '')
+      s.paragraphs.forEach((p) => lines.push(p.text, ''))
+    })
+  }
+  return lines.join('\n').trim() + '\n'
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function downloadText(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// --- Phase 4: read-only content viewers -----------------------------------
+
+function ArtifactContentView({ artifactType, content, manifest }: { artifactType: ArtifactType; content: ArtifactContent; manifest: SourceManifestEntry[] }) {
+  if (artifactType === 'positioning') {
+    const c = content as PositioningContent
+    return (
+      <div>
+        <SourcedBlock block={c.positioning_statement} manifest={manifest} />
+        {c.themes.length > 0 && (
+          <>
+            <strong style={{ fontSize: 12 }}>Themes</strong>
+            {c.themes.map((t, i) => (
+              <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+                <strong>{t.title}:</strong> {t.message}
+                <SourceRefs refs={t.source_refs} manifest={manifest} />
+              </p>
+            ))}
+          </>
+        )}
+        {c.requirements_to_lead_with.length > 0 && (
+          <>
+            <strong style={{ fontSize: 12 }}>Requirements to lead with</strong>
+            {c.requirements_to_lead_with.map((r, i) => (
+              <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+                {r.reason}
+                <SourceRefs refs={r.source_refs} manifest={manifest} />
+              </p>
+            ))}
+          </>
+        )}
+        {c.gaps_and_cautions.length > 0 && (
+          <>
+            <strong style={{ fontSize: 12 }}>Gaps and cautions</strong>
+            {c.gaps_and_cautions.map((g, i) => (
+              <p key={i} style={{ margin: '4px 0', fontSize: 13, color: 'var(--warning)' }}>
+                {g.message}
+                <SourceRefs refs={g.source_refs} manifest={manifest} />
+              </p>
+            ))}
+          </>
+        )}
+        {c.language_to_mirror.length > 0 && (
+          <p style={{ fontSize: 13 }}>
+            <strong>Language to mirror:</strong> {c.language_to_mirror.join(' · ')}
+          </p>
+        )}
+        {c.avoid_claiming.length > 0 && (
+          <p style={{ fontSize: 13, color: 'var(--critical)' }}>
+            <strong>Avoid claiming:</strong> {c.avoid_claiming.join(' · ')}
+          </p>
+        )}
+      </div>
+    )
+  }
+  if (artifactType === 'cv') {
+    const c = content as CVContent
+    return (
+      <div>
+        <SourcedBlock block={c.profile_summary} manifest={manifest} />
+        {c.experience.map((e, i) => (
+          <div key={i} style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <strong style={{ fontSize: 13 }}>
+              {e.title ?? 'Unknown role'} — {e.organisation ?? 'Unknown organisation'}
+            </strong>
+            {!e.episode_found && <span style={{ color: 'var(--critical)', fontSize: 11 }}> (episode no longer available)</span>}
+            <div className="muted" style={{ fontSize: 11 }}>
+              {formatDate(e.start_date)} – {formatDate(e.end_date)}
+            </div>
+            <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>
+              {e.bullets.map((b, j) => (
+                <li key={j}>
+                  {b.text}
+                  <SourceRefs refs={b.source_refs} manifest={manifest} />
+                </li>
+              ))}
+            </ul>
           </div>
         ))}
+        {c.skills.length > 0 && (
+          <p style={{ fontSize: 13, marginTop: 10 }}>
+            <strong>Skills:</strong> {c.skills.map((s) => s.text).join(' · ')}
+          </p>
+        )}
+        {c.omissions_or_cautions.length > 0 && (
+          <p style={{ fontSize: 12, color: 'var(--warning)' }}>{c.omissions_or_cautions.join(' · ')}</p>
+        )}
       </div>
+    )
+  }
+  if (artifactType === 'cover_letter') {
+    const c = content as CoverLetterContent
+    return (
+      <div>
+        <p style={{ fontSize: 13 }}>{c.salutation}</p>
+        <SourcedBlock block={c.opening} manifest={manifest} />
+        {c.body.map((b, i) => (
+          <SourcedBlock key={i} block={b} manifest={manifest} />
+        ))}
+        <SourcedBlock block={c.closing} manifest={manifest} />
+        <p style={{ fontSize: 13 }}>{c.sign_off}</p>
+      </div>
+    )
+  }
+  const c = content as SupportingStatementContent
+  return (
+    <div>
+      <SourcedBlock block={c.opening} manifest={manifest} />
+      {c.sections.map((s, i) => (
+        <div key={i} style={{ marginTop: 8 }}>
+          <strong style={{ fontSize: 13 }}>{s.heading}</strong>
+          {s.paragraphs.map((p, j) => (
+            <SourcedBlock key={j} block={p} manifest={manifest} />
+          ))}
+        </div>
+      ))}
+      {c.gaps_addressed.length > 0 && (
+        <p style={{ fontSize: 12, color: 'var(--warning)' }}>
+          <strong>Gaps addressed:</strong> {c.gaps_addressed.join(' · ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// --- Phase 4: minimal structural editors (build §17 — text fields only) ----
+
+function ListEditor({ label, value, onChange }: { label: string; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+      {label}
+      <textarea
+        rows={2}
+        style={{ width: '100%', fontSize: 13 }}
+        value={value.join('\n')}
+        onChange={(e) => onChange(e.target.value.split('\n'))}
+        placeholder="One per line"
+      />
+    </label>
+  )
+}
+
+function ArtifactEditor({
+  artifactType,
+  draft,
+  onChange,
+}: {
+  artifactType: ArtifactType
+  draft: ArtifactContent
+  onChange: (next: ArtifactContent) => void
+}) {
+  if (artifactType === 'positioning') {
+    const c = draft as PositioningContent
+    return (
+      <div>
+        <label style={{ display: 'block', fontSize: 12 }}>
+          Positioning statement
+          <textarea
+            rows={3}
+            style={{ width: '100%', fontSize: 13 }}
+            value={c.positioning_statement.text}
+            onChange={(e) => onChange({ ...c, positioning_statement: { ...c.positioning_statement, text: e.target.value } })}
+          />
+        </label>
+        {c.themes.map((t, i) => (
+          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+            Theme: {t.title}
+            <textarea
+              rows={2}
+              style={{ width: '100%', fontSize: 13 }}
+              value={t.message}
+              onChange={(e) => onChange({ ...c, themes: c.themes.map((x, j) => (j === i ? { ...x, message: e.target.value } : x)) })}
+            />
+          </label>
+        ))}
+        {c.requirements_to_lead_with.map((r, i) => (
+          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+            Reason to lead with this requirement
+            <textarea
+              rows={2}
+              style={{ width: '100%', fontSize: 13 }}
+              value={r.reason}
+              onChange={(e) =>
+                onChange({ ...c, requirements_to_lead_with: c.requirements_to_lead_with.map((x, j) => (j === i ? { ...x, reason: e.target.value } : x)) })
+              }
+            />
+          </label>
+        ))}
+        {c.gaps_and_cautions.map((g, i) => (
+          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+            Gap/caution
+            <textarea
+              rows={2}
+              style={{ width: '100%', fontSize: 13 }}
+              value={g.message}
+              onChange={(e) => onChange({ ...c, gaps_and_cautions: c.gaps_and_cautions.map((x, j) => (j === i ? { ...x, message: e.target.value } : x)) })}
+            />
+          </label>
+        ))}
+        <ListEditor label="Language to mirror" value={c.language_to_mirror} onChange={(v) => onChange({ ...c, language_to_mirror: v })} />
+        <ListEditor label="Avoid claiming" value={c.avoid_claiming} onChange={(v) => onChange({ ...c, avoid_claiming: v })} />
+      </div>
+    )
+  }
+  if (artifactType === 'cv') {
+    const c = draft as CVContent
+    return (
+      <div>
+        <label style={{ display: 'block', fontSize: 12 }}>
+          Profile summary
+          <textarea
+            rows={3}
+            style={{ width: '100%', fontSize: 13 }}
+            value={c.profile_summary.text}
+            onChange={(e) => onChange({ ...c, profile_summary: { ...c.profile_summary, text: e.target.value } })}
+          />
+        </label>
+        {c.experience.map((entry, i) => (
+          <div key={i} style={{ marginTop: 8 }}>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {entry.title} — {entry.organisation}
+            </div>
+            {entry.bullets.map((b, j) => (
+              <textarea
+                key={j}
+                rows={2}
+                style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+                value={b.text}
+                onChange={(e) =>
+                  onChange({
+                    ...c,
+                    experience: c.experience.map((x, ei) =>
+                      ei === i ? { ...x, bullets: x.bullets.map((bx, bj) => (bj === j ? { ...bx, text: e.target.value } : bx)) } : x,
+                    ),
+                  })
+                }
+              />
+            ))}
+          </div>
+        ))}
+        {c.skills.map((s, i) => (
+          <input
+            key={i}
+            style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+            value={s.text}
+            onChange={(e) => onChange({ ...c, skills: c.skills.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
+          />
+        ))}
+        <ListEditor label="Omissions/cautions" value={c.omissions_or_cautions} onChange={(v) => onChange({ ...c, omissions_or_cautions: v })} />
+      </div>
+    )
+  }
+  if (artifactType === 'cover_letter') {
+    const c = draft as CoverLetterContent
+    return (
+      <div>
+        <label style={{ display: 'block', fontSize: 12 }}>
+          Salutation
+          <input style={{ width: '100%', fontSize: 13 }} value={c.salutation} onChange={(e) => onChange({ ...c, salutation: e.target.value })} />
+        </label>
+        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          Opening
+          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
+        </label>
+        {c.body.map((b, i) => (
+          <textarea
+            key={i}
+            rows={3}
+            style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+            value={b.text}
+            onChange={(e) => onChange({ ...c, body: c.body.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
+          />
+        ))}
+        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          Closing
+          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.closing.text} onChange={(e) => onChange({ ...c, closing: { ...c.closing, text: e.target.value } })} />
+        </label>
+        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          Sign-off
+          <input style={{ width: '100%', fontSize: 13 }} value={c.sign_off} onChange={(e) => onChange({ ...c, sign_off: e.target.value })} />
+        </label>
+      </div>
+    )
+  }
+  const c = draft as SupportingStatementContent
+  return (
+    <div>
+      <label style={{ display: 'block', fontSize: 12 }}>
+        Opening
+        <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
+      </label>
+      {c.sections.map((s, i) => (
+        <div key={i} style={{ marginTop: 8 }}>
+          <input
+            style={{ width: '100%', fontSize: 13, fontWeight: 600 }}
+            value={s.heading}
+            onChange={(e) => onChange({ ...c, sections: c.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })}
+          />
+          {s.paragraphs.map((p, k) => (
+            <textarea
+              key={k}
+              rows={2}
+              style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+              value={p.text}
+              onChange={(e) =>
+                onChange({
+                  ...c,
+                  sections: c.sections.map((x, si) =>
+                    si === i ? { ...x, paragraphs: x.paragraphs.map((px, pj) => (pj === k ? { ...px, text: e.target.value } : px)) } : x,
+                  ),
+                })
+              }
+            />
+          ))}
+        </div>
+      ))}
+      <ListEditor label="Gaps addressed" value={c.gaps_addressed} onChange={(v) => onChange({ ...c, gaps_addressed: v })} />
+    </div>
+  )
+}
+
+// --- Phase 4: generation-context summary (build §19 — deterministic, no AI) --
+
+function GenerationContextCard({ evidence, hasAdoptedPositioning }: { evidence: ApplicationEvidence | null; hasAdoptedPositioning: boolean }) {
+  if (!evidence) return null
+  const reviewed = evidence.items.filter((i) => i.role_requirement_reviewed).length
+  const legacy = evidence.items.filter((i) => !i.role_requirement_reviewed).length
+  const review = evidence.review_summary
+  const pending = review ? review.unreviewed + review.unresolved_proposals + review.needs_reextraction : 0
+  const examples = evidence.notes.filter((n) => n.note_type === 'evidence_example').length
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12 }}>
+      <strong style={{ fontSize: 13 }}>What a new draft will use</strong>
+      <p className="secondary" style={{ margin: '4px 0 0' }}>
+        {pluralize(reviewed, 'reviewed requirement')} will be used
+        {pending > 0 ? ` · ${pluralize(pending, 'pending/unreviewed item')} excluded` : ''}
+        {legacy > 0 ? ` · ${pluralize(legacy, 'legacy role-side observation')} excluded from accepted tailoring` : ''}
+        {' · '}
+        {evidence.counts.evidenced} evidenced · {evidence.counts.partial} partial · {evidence.counts.user_asserted} asserted ·{' '}
+        {evidence.counts.not_found} not found
+        {examples > 0 ? ` · ${pluralize(examples, 'application-only example')}` : ''}
+        {' · '}
+        {hasAdoptedPositioning ? 'an adopted positioning brief will be used' : 'no adopted positioning brief yet'}.
+      </p>
+    </div>
+  )
+}
+
+// --- Phase 4: one lifecycle stage card (Positioning / CV / Cover letter / Supporting statement) --
+
+function StateBadge({ artifact }: { artifact: ApplicationArtifact }) {
+  if (artifact.status === 'active' && artifact.stale) {
+    return <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 600 }}>Current — but stale</span>
+  }
+  if (artifact.status === 'active') return <span style={{ fontSize: 11, color: 'var(--good)', fontWeight: 600 }}>Current</span>
+  return <span style={{ fontSize: 11, color: 'var(--series-1)', fontWeight: 600 }}>Draft awaiting review</span>
+}
+
+function ArtifactStageCard({
+  applicationId,
+  artifactType,
+  active,
+  draft,
+  onChanged,
+}: {
+  applicationId: string
+  artifactType: ArtifactType
+  active: ApplicationArtifact | null
+  draft: ApplicationArtifact | null
+  onChanged: () => void
+}) {
+  const [guidance, setGuidance] = useState('')
+  const [targetWords, setTargetWords] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [editDraft, setEditDraft] = useState<ArtifactContent | null>(null)
+  const [viewing, setViewing] = useState<'active' | 'draft'>(draft ? 'draft' : 'active')
+  const [copyStatus, setCopyStatus] = useState<string | null>(null)
+
+  const shown = viewing === 'draft' && draft ? draft : active
+
+  const runAction = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleGenerate = () =>
+    runAction(async () => {
+      const words = targetWords.trim() ? Number(targetWords) : undefined
+      await api.generateApplicationArtifact(applicationId, artifactType, {
+        guidance: guidance.trim() || undefined,
+        target_words: words,
+      })
+      setViewing('draft')
+    })
+
+  const handleAdopt = (artifactId: string) => runAction(async () => { await api.adoptApplicationArtifact(applicationId, artifactId); setViewing('active') })
+  const handleDiscard = (artifactId: string) => runAction(async () => { await api.discardApplicationArtifact(applicationId, artifactId); setViewing('active') })
+  const handleSaveEdit = (artifactId: string) =>
+    runAction(async () => {
+      if (!editDraft) return
+      await api.editApplicationArtifact(applicationId, artifactId, editDraft)
+      setEditing(false)
+      setViewing('draft')
+    })
+
+  const startEdit = (artifact: ApplicationArtifact) => {
+    setEditDraft(JSON.parse(JSON.stringify(artifact.content)))
+    setEditing(true)
+  }
+
+  return (
+    <section className="card" aria-labelledby={`stage-${artifactType}-h`} style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <h3 id={`stage-${artifactType}-h`} style={{ fontSize: 16, margin: 0 }}>
+          {ARTIFACT_LABELS[artifactType]}
+        </h3>
+        {shown ? <StateBadge artifact={shown} /> : <span className="muted" style={{ fontSize: 11 }}>Not generated</span>}
+      </div>
+
+      {(active || draft) && (
+        <div className="actions" style={{ marginTop: 6 }}>
+          {active && (
+            <button type="button" onClick={() => setViewing('active')} disabled={viewing === 'active'} style={{ fontSize: 12, padding: '3px 8px' }}>
+              View current
+            </button>
+          )}
+          {draft && (
+            <button type="button" onClick={() => setViewing('draft')} disabled={viewing === 'draft'} style={{ fontSize: 12, padding: '3px 8px' }}>
+              View draft
+            </button>
+          )}
+        </div>
+      )}
+
+      {shown && shown.grounding_status === 'user_edited_not_revalidated' && (
+        <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          User edited — source trace has not been automatically revalidated after this edit.
+        </p>
+      )}
+      {shown && shown.status === 'active' && shown.stale && (
+        <p role="status" style={{ fontSize: 12, color: 'var(--warning)', marginTop: 6 }}>
+          Evidence or application context has changed since this version was generated. You can keep using it or regenerate.
+        </p>
+      )}
+
+      {shown && !editing && (
+        <div style={{ marginTop: 8 }}>
+          <ArtifactContentView artifactType={artifactType} content={shown.content} manifest={shown.source_manifest} />
+        </div>
+      )}
+      {shown && editing && editDraft && (
+        <div style={{ marginTop: 8 }}>
+          <ArtifactEditor artifactType={artifactType} draft={editDraft} onChange={setEditDraft} />
+        </div>
+      )}
+
+      {!shown && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Not generated yet.</p>}
+
+      {error && <p role="alert" style={{ color: 'var(--critical)', fontSize: 12, marginTop: 8 }}>{error}</p>}
+
+      <div className="actions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+        {shown && !editing && (
+          <>
+            <button type="button" onClick={() => startEdit(shown)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+              Edit
+            </button>
+            {viewing === 'draft' && draft && (
+              <>
+                <button type="button" className="primary" onClick={() => handleAdopt(draft.id)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+                  Adopt
+                </button>
+                <button type="button" onClick={() => handleDiscard(draft.id)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+                  Discard
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={async () => { setCopyStatus((await copyToClipboard(renderArtifactMarkdown(artifactType, shown.content))) ? 'Copied' : 'Copy failed'); setTimeout(() => setCopyStatus(null), 2000) }}
+              style={{ fontSize: 12, padding: '3px 8px' }}
+            >
+              {copyStatus ?? 'Copy as Markdown'}
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadText(`${artifactType}.md`, renderArtifactMarkdown(artifactType, shown.content))}
+              style={{ fontSize: 12, padding: '3px 8px' }}
+            >
+              Download .md
+            </button>
+          </>
+        )}
+        {editing && shown && (
+          <>
+            <button type="button" className="primary" disabled={busy} onClick={() => handleSaveEdit(shown.id)} style={{ fontSize: 12, padding: '3px 8px' }}>
+              {busy ? 'Saving…' : 'Save edit'}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setEditing(false)} style={{ fontSize: 12, padding: '3px 8px' }}>
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+
+      {!editing && (
+        <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <details>
+            <summary style={{ fontSize: 12, cursor: 'pointer' }}>{active || draft ? 'Regenerate' : 'Generate'} with optional guidance</summary>
+            <div style={{ marginTop: 6 }}>
+              <textarea
+                rows={2}
+                placeholder="Optional guidance — tone, emphasis, specific instructions…"
+                style={{ width: '100%', fontSize: 13 }}
+                value={guidance}
+                onChange={(e) => setGuidance(e.target.value)}
+              />
+              <input
+                type="number"
+                placeholder="Target words (optional)"
+                min={50}
+                max={5000}
+                style={{ width: 180, fontSize: 13, marginTop: 6 }}
+                value={targetWords}
+                onChange={(e) => setTargetWords(e.target.value)}
+              />
+              <div className="actions" style={{ marginTop: 6 }}>
+                <button type="button" className="primary" disabled={busy} onClick={handleGenerate} style={{ fontSize: 12, padding: '3px 8px' }}>
+                  {busy ? 'Generating…' : active || draft ? 'Regenerate' : 'Generate'}
+                </button>
+              </div>
+            </div>
+          </details>
+        </div>
+      )}
+    </section>
+  )
+}
+
+// --- Phase 4: Application package section ----------------------------------
+
+function ApplicationPackageSection({
+  applicationId,
+  evidence,
+  artifactsData,
+  onChanged,
+}: {
+  applicationId: string
+  evidence: ApplicationEvidence | null
+  artifactsData: ApplicationArtifactsResponse | null
+  onChanged: () => void
+}) {
+  if (!artifactsData) return <p className="muted">Loading application package…</p>
+  const { artifacts } = artifactsData
+  return (
+    <section aria-labelledby="app-package-h">
+      <h2 id="app-package-h" style={{ fontSize: 18 }}>
+        Application package
+      </h2>
+      <GenerationContextCard evidence={evidence} hasAdoptedPositioning={Boolean(artifacts.positioning.active)} />
+      <ArtifactStageCard applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onChanged={onChanged} />
+      <ArtifactStageCard applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onChanged={onChanged} />
+      <h3 style={{ fontSize: 15, marginTop: 16 }}>Supporting material</h3>
+      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        Optional — generate either or both only if this application needs them.
+      </p>
+      <ArtifactStageCard applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onChanged={onChanged} />
+      <ArtifactStageCard
+        applicationId={applicationId}
+        artifactType="supporting_statement"
+        active={artifacts.supporting_statement.active}
+        draft={artifacts.supporting_statement.draft}
+        onChanged={onChanged}
+      />
+    </section>
+  )
+}
+
+function InterviewStage() {
+  return (
+    <section className="card" aria-labelledby="interview-stage-h" style={{ marginTop: 16, opacity: 0.7 }}>
+      <h2 id="interview-stage-h" style={{ fontSize: 18, marginTop: 0 }}>
+        Interview
+      </h2>
+      <p className="muted" style={{ fontSize: 13 }}>Interview preparation arrives in a later phase (Phase 5).</p>
     </section>
   )
 }
@@ -494,6 +1211,8 @@ export default function ApplicationWorkspace() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [evidence, setEvidence] = useState<ApplicationEvidence | null>(null)
   const [evidenceError, setEvidenceError] = useState<string | null>(null)
+  const [artifactsData, setArtifactsData] = useState<ApplicationArtifactsResponse | null>(null)
+  const [artifactsError, setArtifactsError] = useState<string | null>(null)
 
   const [statusBusy, setStatusBusy] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
@@ -518,17 +1237,34 @@ export default function ApplicationWorkspace() {
       .catch((e) => { if (currentId.current === id) setEvidenceError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
+  // Phase 4 (docs/35 §13/§20): one bounded, AI-free artifact-state request —
+  // never generates anything itself, just reports current draft/active/stale
+  // state so the workspace can render the package section without a
+  // request-per-artifact-type or a request-per-source.
+  const loadArtifacts = useCallback(() => {
+    if (!id) return
+    setArtifactsError(null)
+    api
+      .getApplicationArtifacts(id)
+      .then((d) => { if (currentId.current === id) setArtifactsData(d) })
+      .catch((e) => { if (currentId.current === id) setArtifactsError(e instanceof Error ? e.message : String(e)) })
+  }, [id])
+
   useEffect(() => {
     currentId.current = id
     setDetail(null)
     setDetailError(null)
     setEvidence(null)
     setEvidenceError(null)
+    setArtifactsData(null)
+    setArtifactsError(null)
   }, [id])
 
-  // Two independent, parallel requests (build §13) — never a waterfall.
+  // Three independent, parallel requests (build §13/§20) — never a waterfall,
+  // and generation never happens on load.
   useEffect(loadDetail, [loadDetail])
   useEffect(loadEvidence, [loadEvidence])
+  useEffect(loadArtifacts, [loadArtifacts])
 
   const handleStatusChange = async (status: ApplicationStatus) => {
     if (!id) return
@@ -677,9 +1413,17 @@ export default function ApplicationWorkspace() {
         />
       </div>
 
+      {artifactsError && (
+        <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>
+          Application package couldn't be loaded: {artifactsError}
+        </p>
+      )}
+
       <div style={{ marginTop: 16 }}>
-        <FutureStages />
+        <ApplicationPackageSection applicationId={application.id} evidence={evidence} artifactsData={artifactsData} onChanged={loadArtifacts} />
       </div>
+
+      <InterviewStage />
     </div>
   )
 }

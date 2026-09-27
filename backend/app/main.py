@@ -10,6 +10,7 @@ from . import config
 from .auth import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, require_auth
 from .db import reset_pool, run_migrations
 from .routes import (
+    application_artifacts,
     applications,
     archetype_context,
     archetypes,
@@ -131,6 +132,7 @@ app.include_router(market_data.router, dependencies=_protected)
 app.include_router(role_economics.router, dependencies=_protected)
 app.include_router(pathways.router, dependencies=_protected)
 app.include_router(applications.router, dependencies=_protected)
+app.include_router(application_artifacts.router, dependencies=_protected)
 
 
 @app.get("/api/health")

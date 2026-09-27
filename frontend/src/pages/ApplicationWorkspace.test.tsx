@@ -5,16 +5,21 @@ import ApplicationWorkspace from './ApplicationWorkspace'
 import {
   api,
   type Application,
+  type ApplicationArtifact,
+  type ApplicationArtifactsResponse,
   type ApplicationDetail,
   type ApplicationDetailRole,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
   type ApplicationNote,
+  type ArtifactType,
 } from '../lib/api'
 
-// Phase 3 (docs/34 §9): the Application workspace — preparation checks,
-// evidence presentation, the gap workflow, application-local notes, status
-// controls and the future-stage placeholders.
+// Phase 3 (docs/34 §9): preparation checks, evidence presentation, the gap
+// workflow, application-local notes, status controls.
+// Phase 4 (docs/35): the real Positioning/CV/Supporting-material stages that
+// replace the old "Coming next" placeholders, plus the Interview placeholder
+// that's still honestly future.
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -24,6 +29,12 @@ vi.mock('../lib/api', () => ({
     createApplicationNote: vi.fn(),
     updateApplicationNote: vi.fn(),
     deleteApplicationNote: vi.fn(),
+    getApplicationArtifacts: vi.fn(),
+    getApplicationArtifactHistory: vi.fn(),
+    generateApplicationArtifact: vi.fn(),
+    editApplicationArtifact: vi.fn(),
+    adoptApplicationArtifact: vi.fn(),
+    discardApplicationArtifact: vi.fn(),
   },
 }))
 
@@ -90,10 +101,50 @@ function makeEvidence(overrides: Partial<ApplicationEvidence> = {}): Application
   }
 }
 
-function renderWorkspace(detail: ApplicationDetail, evidence: ApplicationEvidence | Error) {
+function makeArtifactsResponse(overrides: Partial<ApplicationArtifactsResponse['artifacts']> = {}): ApplicationArtifactsResponse {
+  const empty = { active: null, draft: null, history_count: 0 }
+  return {
+    application_id: 'app-1',
+    artifacts: { positioning: empty, cv: empty, cover_letter: empty, supporting_statement: empty, ...overrides },
+    generation_context: { reviewed_requirements_used: 1, legacy_requirements_excluded: 0, pending_unreviewed_excluded: 0, counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 1 }, application_examples: 0 },
+  }
+}
+
+function makePositioningArtifact(overrides: Partial<ApplicationArtifact> = {}): ApplicationArtifact {
+  return {
+    id: 'artifact-1',
+    application_id: 'app-1',
+    artifact_type: 'positioning' as ArtifactType,
+    status: 'draft',
+    origin: 'ai',
+    generator_version: '1',
+    model: 'test-model',
+    prompt_name: 'application_positioning.md',
+    prompt_version: 'v1',
+    guidance: null,
+    source_manifest: [{ ref: 'role_requirement:c1', kind: 'role_requirement', label: 'Python (reviewed role requirement)', category: 'role_side_context' }],
+    content: {
+      positioning_statement: { text: 'A strong fit for this role.', source_refs: ['role_requirement:c1'] },
+      themes: [],
+      requirements_to_lead_with: [],
+      gaps_and_cautions: [],
+      language_to_mirror: [],
+      avoid_claiming: [],
+    },
+    grounding_status: 'grounded_generation',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    superseded_at: null,
+    stale: false,
+    ...overrides,
+  }
+}
+
+function renderWorkspace(detail: ApplicationDetail, evidence: ApplicationEvidence | Error, artifacts: ApplicationArtifactsResponse = makeArtifactsResponse()) {
   vi.mocked(api.getApplication).mockResolvedValue(detail)
   if (evidence instanceof Error) vi.mocked(api.getApplicationEvidence).mockRejectedValue(evidence)
   else vi.mocked(api.getApplicationEvidence).mockResolvedValue(evidence)
+  vi.mocked(api.getApplicationArtifacts).mockResolvedValue(artifacts)
   return render(
     <MemoryRouter initialEntries={['/applications/app-1']}>
       <Routes>
@@ -216,6 +267,7 @@ describe('Gaps and uncertainties', () => {
     })
     vi.mocked(api.getApplication).mockResolvedValue(makeDetail())
     vi.mocked(api.getApplicationEvidence).mockResolvedValueOnce(withoutNote).mockResolvedValueOnce(withNote)
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>
         <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
@@ -249,6 +301,7 @@ describe('Application notes', () => {
     vi.mocked(api.createApplicationNote).mockResolvedValue(noteObj)
     vi.mocked(api.updateApplicationNote).mockResolvedValue({ ...noteObj, note_text: 'Ask about hybrid policy in the first call.' })
     vi.mocked(api.deleteApplicationNote).mockResolvedValue({ status: 'deleted' })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
 
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>
@@ -300,12 +353,178 @@ describe('Status controls', () => {
   })
 })
 
-describe('Future stages', () => {
-  it('shows restrained placeholders that never pretend the features exist', async () => {
+describe('Application package (Phase 4, docs/35)', () => {
+  it('never generates anything on page load', async () => {
     renderWorkspace(makeDetail(), makeEvidence())
-    expect(await screen.findByText('Positioning')).toBeTruthy()
-    expect(screen.getByText('CV / application material')).toBeTruthy()
-    expect(screen.getByText('Interview preparation')).toBeTruthy()
-    expect(screen.getAllByText(/arrive in the next phase|arrives in a later phase/).length).toBe(3)
+    await screen.findByRole('heading', { name: 'Application package' })
+    expect(api.getApplicationArtifacts).toHaveBeenCalledWith('app-1')
+    expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
+  })
+
+  it('shows Positioning, CV and Supporting material stages, and Interview as a future placeholder', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    await screen.findByRole('heading', { name: 'Application package' })
+    expect(screen.getByRole('heading', { name: 'Positioning' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'CV' })).toBeTruthy()
+    expect(screen.getByText('Supporting material')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Cover letter' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Supporting statement' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Interview' })).toBeTruthy()
+    expect(screen.getByText(/arrives in a later phase/)).toBeTruthy()
+    // nothing generates just by the section being present
+    expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
+  })
+
+  it('shows a deterministic generation-context summary with no AI call', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    expect(await screen.findByText(/What a new draft will use/)).toBeTruthy()
+    expect(screen.getByText(/no adopted positioning brief yet/)).toBeTruthy()
+  })
+
+  it('shows incomplete requirement review as a warning without blocking generation', async () => {
+    renderWorkspace(
+      makeDetail(),
+      makeEvidence({ review_summary: { accepted: 1, unreviewed: 2, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 0, complete: false } }),
+    )
+    await screen.findByRole('heading', { name: 'Positioning' })
+    const positioningCard = screen.getByRole('heading', { name: 'Positioning' }).closest('section') as HTMLElement
+    expect(within(positioningCard).getByText('Generate')).toBeTruthy()
+    expect((within(positioningCard).getByText('Generate') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('a fresh Generate shows a busy state, prevents double-submit, and lands as a Draft (never automatically Current)', async () => {
+    let resolveGenerate: (v: { created: boolean; artifact: ApplicationArtifact }) => void = () => {}
+    vi.mocked(api.generateApplicationArtifact).mockReturnValue(new Promise((resolve) => { resolveGenerate = resolve }))
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText(/Generate with optional guidance/))
+    const generateButton = within(card).getByText('Generate')
+    fireEvent.click(generateButton)
+    expect(await within(card).findByText('Generating…')).toBeTruthy()
+    fireEvent.click(within(card).getByText('Generating…')) // double-click while busy
+    expect(api.generateApplicationArtifact).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: { active: null, draft: makePositioningArtifact(), history_count: 0 } }))
+    resolveGenerate({ created: true, artifact: makePositioningArtifact() })
+    await waitFor(() => expect(within(card).getByText('Draft awaiting review')).toBeTruthy())
+    expect(within(card).queryByText('Current')).toBeNull()
+  })
+
+  it('generation failure leaves existing current content usable', async () => {
+    vi.mocked(api.generateApplicationArtifact).mockRejectedValue(new Error('503 model unavailable'))
+    const active = makeArtifactsResponse({ positioning: { active: makePositioningArtifact({ status: 'active', id: 'active-1' }), draft: null, history_count: 0 } })
+    renderWorkspace(makeDetail(), makeEvidence(), active)
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Current')).toBeTruthy()
+    fireEvent.click(within(card).getByText(/Regenerate with optional guidance/))
+    fireEvent.click(within(card).getByText('Regenerate'))
+    await waitFor(() => expect(within(card).getByText(/503 model unavailable/)).toBeTruthy())
+    expect(within(card).getByText('A strong fit for this role.')).toBeTruthy()
+    expect(within(card).getByText('Current')).toBeTruthy()
+  })
+
+  it('Adopt makes a draft Current; Regenerate leaves Current stable until adoption', async () => {
+    const draft = makePositioningArtifact()
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active: null, draft, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+
+    const adopted = makePositioningArtifact({ status: 'active' })
+    vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: adopted })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: { active: adopted, draft: null, history_count: 0 } }))
+    fireEvent.click(within(card).getByText('Adopt'))
+    await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalledWith('app-1', 'artifact-1'))
+    await waitFor(() => expect(within(card).getByText('Current')).toBeTruthy())
+  })
+
+  it('Discard removes only the draft, leaving Current untouched', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    const draft = makePositioningArtifact({ id: 'draft-2', content: { ...makePositioningArtifact().content, positioning_statement: { text: 'A newer draft.', source_refs: ['role_requirement:c1'] } } })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active, draft, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('View draft'))
+    expect(within(card).getByText('A newer draft.')).toBeTruthy()
+
+    vi.mocked(api.discardApplicationArtifact).mockResolvedValue({ status: 'discarded' })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: { active, draft: null, history_count: 1 } }))
+    fireEvent.click(within(card).getByText('Discard'))
+    await waitFor(() => expect(api.discardApplicationArtifact).toHaveBeenCalledWith('app-1', 'draft-2'))
+    await waitFor(() => expect(within(card).getByText('A strong fit for this role.')).toBeTruthy())
+  })
+
+  it('manual edit creates a user-edited draft, labelled as not automatically revalidated', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('Edit'))
+    const textarea = within(card).getByDisplayValue('A strong fit for this role.')
+    fireEvent.change(textarea, { target: { value: 'A user-rewritten statement.' } })
+
+    const edited = makePositioningArtifact({
+      id: 'edited-1', origin: 'user_edit', grounding_status: 'user_edited_not_revalidated',
+      content: { ...active.content, positioning_statement: { text: 'A user-rewritten statement.', source_refs: ['role_requirement:c1'] } },
+    })
+    vi.mocked(api.editApplicationArtifact).mockResolvedValue({ artifact: edited })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: { active, draft: edited, history_count: 0 } }))
+    fireEvent.click(within(card).getByText('Save edit'))
+    await waitFor(() => expect(api.editApplicationArtifact).toHaveBeenCalled())
+    await waitFor(() => expect(within(card).getByText(/source trace has not been automatically revalidated/)).toBeTruthy())
+  })
+
+  it('shows a stale banner for a current artifact whose evidence has since changed', async () => {
+    const stale = makePositioningArtifact({ status: 'active', stale: true })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active: stale, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Current — but stale')).toBeTruthy()
+    expect(within(card).getByText(/Evidence or application context has changed/)).toBeTruthy()
+  })
+
+  it('expands source trace for a generated block', async () => {
+    const active = makePositioningArtifact({ status: 'active' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('Sources (1)'))
+    expect(within(card).getByText(/Python \(reviewed role requirement\)/)).toBeTruthy()
+    expect(within(card).getByText(/Role-side requirement\/context/)).toBeTruthy()
+  })
+
+  it('offers copy and download actions for a current artifact', async () => {
+    const active = makePositioningArtifact({ status: 'active' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    expect(within(card).getByText('Copy as Markdown')).toBeTruthy()
+    expect(within(card).getByText('Download .md')).toBeTruthy()
+  })
+
+  it('supporting material is optional — neither cover letter nor supporting statement generate on their own', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    await screen.findByText('Supporting material')
+    expect(screen.getByText(/Optional — generate either or both/)).toBeTruthy()
+    expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
+  })
+
+  it('CV renders authoritative episode title/organisation/dates resolved server-side', async () => {
+    const cv = makePositioningArtifact({
+      id: 'cv-1', artifact_type: 'cv' as ArtifactType, status: 'active',
+      content: {
+        profile_summary: { text: 'Experienced professional.', source_refs: [] },
+        experience: [{ episode_id: 'ep-1', bullets: [{ text: 'Led delivery.', source_refs: [] }], title: 'Senior Actuary', organisation: 'PrevCo', start_date: '2020-01-01', end_date: null, episode_found: true }],
+        skills: [], omissions_or_cautions: [],
+      },
+    })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ cv: { active: cv, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'CV' })).closest('section') as HTMLElement
+    expect(within(card).getByText(/Senior Actuary — PrevCo/)).toBeTruthy()
+  })
+
+  it('application status is never changed by generation or adoption', async () => {
+    const draft = makePositioningArtifact()
+    vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: makePositioningArtifact({ status: 'active' }) })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: { active: null, draft, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+    fireEvent.click(within(card).getByText('Adopt'))
+    await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalled())
+    expect(api.updateApplicationStatus).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
   })
 })
