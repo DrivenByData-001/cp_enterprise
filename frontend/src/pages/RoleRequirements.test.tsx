@@ -261,7 +261,7 @@ describe('SavedRoleBanner', () => {
     renderPage()
     await screen.findByText('Saved to Roles')
     const backLink = screen.getByText('Back to Roles') as HTMLAnchorElement
-    expect(backLink.getAttribute('href')).toBe('/?period=current')
+    expect(backLink.getAttribute('href')).toBe('/opportunities?period=current')
   })
 
   it('re-fetches the saved role after Save details commits a metadata correction, so Saved details never goes stale', async () => {

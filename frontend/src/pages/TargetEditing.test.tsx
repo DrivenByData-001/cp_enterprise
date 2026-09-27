@@ -16,7 +16,8 @@ it('preserves an imagined target and requirement priority when editing without l
   vi.mocked(api.updateTarget).mockResolvedValue({ id: 'target', status: 'updated' })
   vi.mocked(api.resolveTargetRequirements).mockResolvedValue([{ name: 'Python', concept_id: 'python', canonical_name: 'Python', mapping_status: 'mapped' }])
   render(<MemoryRouter initialEntries={['/roles/target/edit']}><Routes>
-    <Route path="/roles/:id/edit" element={<RoleEdit />} /><Route path="/roles/:id" element={<p>Saved target</p>} />
+    <Route path="/roles/:id/edit" element={<RoleEdit />} />
+    <Route path="/targets/:id" element={<p>Saved target</p>} />
   </Routes></MemoryRouter>)
   await screen.findByText('Review and edit your target')
   fireEvent.change(screen.getByLabelText('Target title'), { target: { value: 'Edited title' } })
@@ -26,4 +27,8 @@ it('preserves an imagined target and requirement priority when editing without l
       career_track: 'Risk', seniority_level: 'Senior', grounding_note: 'Existing assumptions', is_plausible: false }),
     skills: [expect.objectContaining({ name: 'Python', requirement_type: 'preferred', concept_id: 'python', importance: 3 })],
   })))
+  // Phase 1 cleanup: a target's own detail page is /targets/:id, not
+  // /roles/:id, so its primary-nav context stays Explore my future rather
+  // than flipping to Opportunities.
+  await screen.findByText('Saved target')
 })

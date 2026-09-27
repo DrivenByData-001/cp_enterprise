@@ -382,3 +382,29 @@ describe('Role Detail separates reviewed requirements from legacy skills', () =>
     expect(screen.queryByText('Legacy skills')).toBeNull()
   })
 })
+
+// Phase 1 cleanup: a target's own detail page is /targets/:id, so opening it
+// from Explore my future (Targets list, Add target, Save target changes)
+// never flips the primary-nav context to Opportunities. Role Detail itself
+// is unchanged — isTarget comes from role.node_type, not the URL — this just
+// proves the new route wires up to the same component correctly.
+describe('Target detail route (/targets/:id)', () => {
+  it('renders a target and keeps Back pointed at Targets, not Opportunities', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      id: 'target-1', node_type: 'target_imagined', title: 'Head of Risk', organisation: null, location: null,
+      country: null, remote_type: null, employment_type: null, posting_date: null, captured_at: null,
+      career_track: null, seniority_level: null, salary_min: null, salary_max: null, currency: null,
+      summary: null, description: null, requirements: null, responsibilities: null, key_skills_summary: null,
+      top_adjacent_roles: null, extraction_status: null, extraction_notes: null, similarity: null, url: null,
+    } as Role)
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'target-1', enrichment: null })
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    render(<MemoryRouter initialEntries={['/targets/target-1']}><Routes>
+      <Route path="/targets/:id" element={<RoleDetail />} />
+    </Routes></MemoryRouter>)
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Head of Risk' })).toBeTruthy()
+    const back = screen.getByText(/← Back to/).closest('a') as HTMLAnchorElement
+    expect(back.getAttribute('href')).toBe('/targets')
+  })
+})
