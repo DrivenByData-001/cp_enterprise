@@ -1,7 +1,7 @@
 from datetime import date as _date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, model_validator, field_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from uuid import UUID
 
 
@@ -838,3 +838,131 @@ class ConceptDossierManualEdit(BaseModel):
     weaker_expressions: Optional[list[str]] = None
     boundaries_and_overlaps: Optional[str] = None
     caveats: Optional[str] = None
+
+
+# --- Phase 4: grounded Application Package generation ----------------------
+# (backend/app/application_generation.py, backend/app/application_artifacts.py, docs/35)
+#
+# Output schemas for the four generated artifact types: positioning, cv,
+# cover_letter, supporting_statement. The one invariant every shape below
+# shares: every factual block carries `source_refs`, a list of ids from the
+# stable source registry `application_generation.build_application_generation_context`
+# assembles for that generation call. This is what makes "do not invent
+# evidence" (docs/35 grounding policy) enforceable rather than aspirational —
+# `application_artifacts.py` rejects a response containing a source_ref,
+# episode_id, or concept_id that wasn't actually offered to the model, before
+# any of it is persisted. A model cannot establish grounding merely by
+# inventing a plausible-looking id.
+
+
+class SourcedText(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class PositioningTheme(BaseModel):
+    title: str
+    message: str
+    source_refs: list[str] = []
+
+
+class PositioningRequirementToLead(BaseModel):
+    concept_id: str
+    reason: str
+    source_refs: list[str] = []
+
+
+class PositioningGapOrCaution(BaseModel):
+    concept_id: Optional[str] = None
+    message: str
+    source_refs: list[str] = []
+
+
+class ApplicationPositioningGeneration(BaseModel):
+    """Internal strategy brief, not a cover letter (docs/35 §9): strongest
+    defensible positioning, role language worth mirroring, concrete evidence
+    to lead with, gaps/uncertainties, and things the application should not
+    claim."""
+
+    positioning_statement: SourcedText
+    themes: list[PositioningTheme] = []
+    requirements_to_lead_with: list[PositioningRequirementToLead] = []
+    gaps_and_cautions: list[PositioningGapOrCaution] = []
+    # Role-side language/phrasing worth echoing — grounded in role-side
+    # context, not a claim about the user, so this deliberately carries no
+    # source_refs field (nothing person-side to cite).
+    language_to_mirror: list[str] = []
+    avoid_claiming: list[str] = []
+
+
+class CVExperienceBullet(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class CVExperienceEntry(BaseModel):
+    """The model returns only `episode_id` — never employer/title/dates
+    (docs/35 §10 chronology safeguard). The backend resolves and renders
+    title/organisation/start/end date from the authoritative Profile360
+    episode row; a response naming an episode_id outside the context's own
+    episode set is rejected before persistence."""
+
+    episode_id: str
+    bullets: list[CVExperienceBullet] = []
+
+
+class CVSkillLine(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class ApplicationCVGeneration(BaseModel):
+    profile_summary: SourcedText
+    experience: list[CVExperienceEntry] = []
+    skills: list[CVSkillLine] = []
+    omissions_or_cautions: list[str] = []
+
+
+class CoverLetterBlock(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class ApplicationCoverLetterGeneration(BaseModel):
+    salutation: str
+    opening: CoverLetterBlock
+    body: list[CoverLetterBlock] = []
+    closing: CoverLetterBlock
+    sign_off: str = "Yours sincerely,"
+
+
+class SupportingStatementSection(BaseModel):
+    heading: str
+    concept_id: Optional[str] = None
+    paragraphs: list[CoverLetterBlock] = []
+
+
+class ApplicationSupportingStatementGeneration(BaseModel):
+    opening: CoverLetterBlock
+    sections: list[SupportingStatementSection] = []
+    gaps_addressed: list[str] = []
+
+
+class ApplicationArtifactGenerateRequest(BaseModel):
+    """Body for POST .../artifacts/{artifact_type}/generate. `guidance` is a
+    writing instruction (tone/emphasis/specific instructions), never
+    evidence — it can never override the grounding rules (docs/35 §6/§11)."""
+
+    guidance: Optional[str] = Field(default=None, max_length=4000)
+    target_words: Optional[int] = Field(default=None, ge=50, le=5000)
+
+
+class ApplicationArtifactEditRequest(BaseModel):
+    """Body for POST .../artifacts/{artifact_id}/edit — a user's direct edit
+    of a draft or active artifact's content. `content` must still satisfy the
+    shape of the artifact's own artifact_type (application_artifacts.py
+    re-validates it through the matching Generation model above, structure
+    only — a manual edit is never re-checked against the source registry;
+    see ApplicationArtifact.grounding_status)."""
+
+    content: dict

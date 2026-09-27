@@ -1143,6 +1143,105 @@ export type ApplicationEvidence = {
 export type ApplicationNoteInput = { concept_id?: string | null; note_type: ApplicationNoteType; note_text: string }
 export type ApplicationNoteUpdateInput = Partial<ApplicationNoteInput>
 
+// --- Phase 4: grounded Application package generation (docs/35) ------------
+//
+// Four artifact types share one active/draft/superseded lifecycle
+// (jobber.application_artifact) — generation always creates a *draft*, and
+// only an explicit Adopt makes it *active*; history is retained. Every
+// factual block in `content` carries `source_refs` into `source_manifest`,
+// and `grounding_status` distinguishes a straight AI generation from a
+// version the user has since hand-edited (no longer machine-revalidated).
+
+export type ArtifactType = 'positioning' | 'cv' | 'cover_letter' | 'supporting_statement'
+export type ArtifactStatus = 'draft' | 'active' | 'superseded'
+export type ArtifactOrigin = 'ai' | 'user_edit'
+export type GroundingStatus = 'grounded_generation' | 'user_edited_not_revalidated'
+export type SourceCategory = 'canonical_evidence' | 'partial_evidence' | 'user_supplied_context' | 'role_side_context' | 'strategy'
+
+export type SourceManifestEntry = { ref: string; kind: string; label: string; category: SourceCategory }
+export type SourcedText = { text: string; source_refs: string[] }
+
+export type PositioningContent = {
+  positioning_statement: SourcedText
+  themes: { title: string; message: string; source_refs: string[] }[]
+  requirements_to_lead_with: { concept_id: string; reason: string; source_refs: string[] }[]
+  gaps_and_cautions: { concept_id: string | null; message: string; source_refs: string[] }[]
+  language_to_mirror: string[]
+  avoid_claiming: string[]
+}
+
+export type CVExperienceEntry = {
+  episode_id: string
+  bullets: SourcedText[]
+  title: string | null
+  organisation: string | null
+  start_date: string | null
+  end_date: string | null
+  episode_found: boolean
+}
+
+export type CVContent = {
+  profile_summary: SourcedText
+  experience: CVExperienceEntry[]
+  skills: SourcedText[]
+  omissions_or_cautions: string[]
+}
+
+export type CoverLetterContent = {
+  salutation: string
+  opening: SourcedText
+  body: SourcedText[]
+  closing: SourcedText
+  sign_off: string
+}
+
+export type SupportingStatementContent = {
+  opening: SourcedText
+  sections: { heading: string; concept_id: string | null; paragraphs: SourcedText[] }[]
+  gaps_addressed: string[]
+}
+
+export type ArtifactContent = PositioningContent | CVContent | CoverLetterContent | SupportingStatementContent
+
+export type ApplicationArtifact = {
+  id: string
+  application_id: string
+  artifact_type: ArtifactType
+  status: ArtifactStatus
+  origin: ArtifactOrigin
+  generator_version: string
+  model: string | null
+  prompt_name: string | null
+  prompt_version: string | null
+  guidance: string | null
+  source_manifest: SourceManifestEntry[]
+  content: ArtifactContent
+  grounding_status: GroundingStatus
+  created_at: string
+  updated_at: string
+  superseded_at: string | null
+  stale?: boolean
+}
+
+export type ArtifactTypeState = { active: ApplicationArtifact | null; draft: ApplicationArtifact | null; history_count: number }
+
+export type GenerationContextSummary = {
+  reviewed_requirements_used: number
+  legacy_requirements_excluded: number
+  pending_unreviewed_excluded: number
+  counts: Record<ComparisonStatus, number>
+  application_examples: number
+}
+
+export type ApplicationArtifactsResponse = {
+  application_id: string
+  artifacts: Record<ArtifactType, ArtifactTypeState>
+  generation_context: GenerationContextSummary
+}
+
+export type ArtifactHistoryResponse = { application_id: string; artifact_type: ArtifactType; history: ApplicationArtifact[] }
+export type ArtifactGenerateInput = { guidance?: string; target_words?: number }
+
 export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
 
 export type PreferenceObservation = {
@@ -3036,4 +3135,23 @@ export const api = {
     req<ApplicationNote>(`/applications/${id}/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteApplicationNote: (id: string, noteId: string) =>
     req<{ status: string }>(`/applications/${id}/notes/${noteId}`, { method: 'DELETE' }),
+
+  // --- Phase 4: grounded Application package generation (docs/35) --------
+  getApplicationArtifacts: (id: string) => req<ApplicationArtifactsResponse>(`/applications/${id}/artifacts`),
+  getApplicationArtifactHistory: (id: string, artifactType: ArtifactType) =>
+    req<ArtifactHistoryResponse>(`/applications/${id}/artifacts/${artifactType}/history`),
+  generateApplicationArtifact: (id: string, artifactType: ArtifactType, payload: ArtifactGenerateInput = {}) =>
+    req<{ created: boolean; artifact: ApplicationArtifact }>(`/applications/${id}/artifacts/${artifactType}/generate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  editApplicationArtifact: (id: string, artifactId: string, content: ArtifactContent) =>
+    req<{ artifact: ApplicationArtifact }>(`/applications/${id}/artifacts/${artifactId}/edit`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  adoptApplicationArtifact: (id: string, artifactId: string) =>
+    req<{ artifact: ApplicationArtifact }>(`/applications/${id}/artifacts/${artifactId}/adopt`, { method: 'POST' }),
+  discardApplicationArtifact: (id: string, artifactId: string) =>
+    req<{ status: string }>(`/applications/${id}/artifacts/${artifactId}/discard`, { method: 'POST' }),
 }

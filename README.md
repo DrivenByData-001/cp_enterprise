@@ -20,8 +20,11 @@ Four primary destinations:
 - **Applications** (`/applications`) — persistent workspaces for roles
   you've decided to pursue: preparation checks, evidence to use, gaps and
   application-local notes, all grounded in the existing comparison/Profile360
-  machinery (see "Product phases" below). CV/cover-letter/interview-prep
-  generation is not built yet.
+  machinery, plus an **Application package** stage that generates a grounded
+  Positioning brief, tailored CV, and optional cover letter/supporting
+  statement — every generated draft explicitly reviewed and adopted before it
+  becomes current (see "Product phases" below). Interview-prep generation is
+  not built yet.
 
 Two secondary areas hold supporting tools without cluttering the primary
 journeys: **My profile & evidence** (Profile overview, Evidence & mappings,
@@ -63,7 +66,7 @@ engine, and application-local notes that are never auto-promoted into
 Profile360 evidence — see
 [`docs/34-phase3-application-workspace-backbone.md`](docs/34-phase3-application-workspace-backbone.md).
 No CV, cover letter, positioning brief or interview-prep generation yet, and
-no new score — that stays out of scope until Phase 4. A Phase 3 addendum adds
+no new score — that stayed out of scope until Phase 4. A Phase 3 addendum adds
 manual (unquoted, after-the-fact) posting compensation entry through the same
 `compensation_observation` model, redefines observed-posting deletion as
 deletion of the capture and its owned, unshared document (never a shared
@@ -71,6 +74,31 @@ document, never a target, never global vocabulary), and fixes a
 `role_context_enrichment` foreign-key gap that used to block deleting a
 posting that ever had Day-in-the-Life generated — see the same doc's
 addendum section.
+
+Phase 4 turns that backbone into a real **grounded Application package
+workflow**: an explicitly user-triggered Positioning brief, a tailored CV,
+and optional Cover letter/Supporting statement, each persisted as a versioned
+`jobber.application_artifact` (draft → active → superseded, history
+retained — the same lifecycle discipline `jobber.concept_dossier` and
+`jobber.role_context_enrichment` already established). Generation reads
+exactly one grounded context (`backend/app/application_generation.py`) built
+from *reviewed* role requirements only (a legacy, unreviewed role-side
+observation is shown as context but never treated as an accepted
+requirement), accepted/partial Profile360 evidence, application-local notes
+(always labelled application-only, never Profile360 evidence), and — for
+CV/cover letter/supporting statement — the adopted positioning brief as
+strategy input. Every generated factual sentence carries a validated
+`source_ref`; a response citing an unknown source, an unknown Profile360
+episode, or a non-accepted requirement concept is rejected outright, never
+persisted. A CV's employer/title/dates always come from the authoritative
+Profile360 episode row, never the model. Generated output always lands as a
+draft the user must explicitly adopt — nothing here changes application
+status automatically — and a deterministic input fingerprint flags a current
+artifact `stale` the moment the evidence behind it changes, without silently
+regenerating it. See
+[`docs/35-phase4-grounded-application-package.md`](docs/35-phase4-grounded-application-package.md).
+Interview preparation and richer application-lifecycle outcomes remain
+Phase 5.
 
 ## Technical architecture
 
