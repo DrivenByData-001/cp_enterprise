@@ -2111,6 +2111,22 @@ export type CompensationAcceptInput = {
   note?: string | null
 }
 
+// Manually-recorded compensation (Phase 3 addendum) — the no-quote
+// counterpart to CompensationAcceptInput. No evidence_span: this is for
+// salary discovered after the posting was captured, with no passage in the
+// source document to quote.
+export type ManualCompensationInput = {
+  amount_min?: number | null
+  amount_max?: number | null
+  bonus_pct?: number | null
+  currency?: string | null
+  component: string
+  pay_period: string
+  employment_basis?: string | null
+  note?: string | null
+  observed_at?: string | null
+}
+
 export type CompensationAcceptResult = {
   // A correction creates a *new* accepted observation rather than rewriting
   // the old one, so this is not necessarily the id that was corrected — the
@@ -2119,7 +2135,9 @@ export type CompensationAcceptResult = {
   created?: boolean
   status: string
   review_status?: string
+  market_id?: string | null
   market_unassigned_reason?: string | null
+  basis?: string
   corrected_from_observation_id?: string
   // Accepting a corrected figure retires the one it corrects, so a role never
   // carries two accepted stated figures for the same component.
@@ -2508,6 +2526,19 @@ export const api = {
   reacceptRoleCompensation: (roleId: string, observationId: string) =>
     req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/${observationId}/reaccept`, {
       method: 'POST',
+    }),
+  // Manually-recorded compensation (Phase 3 addendum): salary discovered
+  // after the posting was captured, with no evidence_span to quote — the
+  // "Add/update compensation" section of the posting edit workflow.
+  acceptManualRoleCompensation: (roleId: string, payload: ManualCompensationInput) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/manual`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  correctManualRoleCompensation: (roleId: string, observationId: string, payload: Partial<ManualCompensationInput>) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/manual/${observationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     }),
   getRoleArchetype: (id: string) => req<RoleArchetypeSummary>(`/role-instances/${id}/archetype`),
   getArchetypeCatalogue: () => req<ArchetypeCatalogueEntry[]>('/role-instances/archetype-catalogue'),

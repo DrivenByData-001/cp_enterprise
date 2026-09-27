@@ -182,6 +182,130 @@ in this phase — application deletion is out of scope entirely
 (`No destructive application deletion in this phase` — brief §1). A role
 with no application still deletes exactly as it always has.
 
+**This safeguard is deliberately independent of the "true posting deletion"
+addendum below.** Deleting the posting and deciding what to do about an
+application on it are two different decisions: the application-exists check
+in `db.delete_role_instance` runs (and, when it fires, fails the whole
+delete) before any of the new document-ownership cleanup is ever reached, so
+an application — active *or* closed/withdrawn — still blocks deletion
+exactly as before, with the same 409. The user can close or withdraw an
+application at any time; whether a closed/withdrawn application should ever
+permit full posting deletion is an open question for a later phase, not
+something this addendum changes either way.
+
+---
+
+## Addendum: manually-recorded compensation, true posting deletion, and a deletion FK-chain fix
+
+Three follow-on pieces, folded into this same phase rather than given their
+own numbered phase:
+
+### Manually-recorded compensation ("Add/update compensation")
+
+The posting edit workflow (`/roles/:id/edit`, postings only) gained an
+**Add/update compensation** section for salary discovered *after* a posting
+was captured — a recruiter conversation, a separate disclosure, research
+elsewhere — where there is no passage in the captured document to quote.
+
+This reuses the real `jobber.compensation_observation` model exactly as
+every other compensation path does (never the legacy
+`role_instance.salary_min/salary_max` columns), and the same
+component/pay-period/amount/currency shape validation
+(`app/posting_compensation.py::_value_problems`) the source-backed review
+path already enforces — a manual entry can be exactly as malformed-figure-
+proof as a reviewed one. What it deliberately skips is source corroboration
+(`validate_span`, the amount/period/kind/currency-vs-quote checks, the
+`provenance_quality == 'original'` requirement): none of that applies when
+there was never a quote to begin with, and requiring one would either reject
+every genuinely after-the-fact figure or invite a fabricated "quote" that
+isn't really one.
+
+It is still recorded as `basis='posting_stated'` — the same tier a
+source-quoted figure or the legacy `salary_min/max` backfill projection
+reaches — rather than `curator_asserted`, because `compensation_resolver.py`
+tier 1 (a role's own headline "Advert salary" figure) only ever reads
+`posting_stated` observations for that role; `curator_asserted` is read only
+at the archetype/market level and would never surface as this specific
+posting's own resolved compensation. `evidence_span` is left `NULL` and a
+plain free-text `source_note` is recorded instead — the same shape the 0013
+legacy backfill's own mechanical projection already uses, just written live
+through a reviewed action instead of migrated. A manual figure supersedes
+(non-destructively, via the same `_supersede_prior_accepted`) a prior manual
+figure for the same (component, pay_period), so a role can never end up with
+two accepted manual headlines; it never touches a source-quoted observation,
+which is edited through the standard review endpoint instead.
+
+New functions in `app/posting_compensation.py`:
+`accept_manual_posting_compensation`, `correct_manual_posting_compensation`.
+New routes in `app/routes/role_economics.py`:
+`POST /api/role-instances/{id}/compensation/manual`,
+`PATCH /api/role-instances/{id}/compensation/manual/{observation_id}`
+(the latter refuses with `409` if pointed at an observation that actually
+carries a quote). Rejecting a manual observation uses the existing, already
+basis-agnostic `POST .../compensation/{id}/reject` — no change needed there.
+
+### True posting deletion
+
+Deleting an **observed posting** (never a target) now means deleting the
+capture, not merely the `role_instance` row: its own owned, uploaded/
+captured `jobber.document` — and every row that exists only to describe that
+document — is deleted along with it, provided nothing else still needs it:
+
+- **A shared document is never touched.** "Shared" is decided the direct
+  way: does any *other* `role_instance.document_id` still equal this
+  document, after the one being deleted is already gone? If so, the
+  document, and everything still legitimately attached to it, is left
+  completely alone. This covers a document that was re-associated, or a
+  genuine duplicate capture that ended up pointing at the same row.
+- **A target's document is never touched**, regardless of sharing — this
+  reclassification is posting-only. Deleting a target keeps exactly its
+  pre-existing behavior.
+- **Global vocabulary is never collateral damage.** A `jobber.concept_proposal`
+  this document ever contributed to is a curation candidate about a
+  *vocabulary term*, not about this document or the posting that surfaced
+  it — accepted concepts and pending proposals alike survive regardless;
+  only their now-dangling `document_id`/`extraction_run_id` pointers are
+  cleared, the same "keep the row, null the reference" treatment the
+  role-subject cleanup already gave proposals tied to a deleted role's own
+  extraction history.
+- **What actually gets deleted**, once a document is confirmed unshared:
+  every remaining `extraction_run` row pointing at it (`job_posting_extract`
+  and any other document-subject attempt — role-subject runs for the posting
+  itself are already gone by this point), then the document row itself.
+  `requirement_claim`/`requirement_evidence`/`compensation_observation`/
+  `concept_proposal_occurrence`/`role_context_enrichment`/`d_embedding` rows
+  scoped to the posting are already gone by the time this runs, via the
+  existing explicit-delete/cascade chain `db.delete_role_instance` already
+  had — see that function's own docstring for the full, exact ordering.
+
+Implementation: `db._delete_owned_document_if_unshared`, called from
+`db.delete_role_instance` only when the just-deleted role was
+`instance_type == 'observed_posting'` and had a `document_id`. No route or
+API contract changed — `DELETE /api/roles/{id}` behaves exactly as before
+from the caller's point of view, just deletes more.
+
+### Deletion FK-chain fix: `role_context_enrichment.extraction_run_id`
+
+A role that ever had Day-in-the-Life generated for it (`POST
+/api/roles/{id}/context/generate` or `/regenerate`) used to fail to delete
+at all: every `role_context_enrichment` row — not only the active one,
+a superseded version keeps its own reference too — carries an
+`extraction_run_id` pointing at the role-subject `role_context_generate` run
+that produced it, with no `ON DELETE` behavior of its own. `role_instance`'s
+`DELETE` cascades `role_context_enrichment` away, but only *after* the
+role-subject `extraction_run` cleanup that already ran, deleting the very
+row `role_context_enrichment.extraction_run_id` still pointed at — a
+`ForeignKeyViolation` on every such delete. `db.delete_role_instance` now
+explicitly deletes `role_context_enrichment` rows for the role being
+deleted, one step ahead of the role-subject `extraction_run` cleanup,
+closing the gap. Covered by
+`test_true_posting_deletion.py::test_posting_generate_day_in_life_delete_leaves_no_residue`
+(the exact scenario: posting → generate Day in the Life → delete posting →
+succeeds, no posting/context/source-document residue) and
+`test_role_with_superseded_day_in_life_versions_still_deletes_cleanly`
+(regenerated at least once, so two enrichment rows/two extraction runs are
+both exercised).
+
 ## Structural preparation, not a score
 
 The workspace's "Preparation checks" section is plain states and counts —

@@ -65,7 +65,7 @@ see `compensation_resolver.py`.
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -1043,3 +1043,173 @@ def reject_role_observation(cur, role_instance_id: str, observation_id: str) -> 
     )
     return {"id": observation_id, "status": "rejected", "review_status": "rejected",
             "superseded_observation_ids": []}
+
+
+# --- Manually-recorded compensation (Phase 3 addendum) ----------------------
+#
+# The case the acceptance path above cannot serve: salary discovered *after*
+# a posting was captured — a recruiter conversation, a separate disclosure,
+# research elsewhere — where there is no passage in the captured document to
+# quote at all. `evidence_span`/source-corroboration is what makes the
+# acceptance path above trustworthy as a verbatim record of what the advert
+# says, and none of that machinery applies when there was never a quote to
+# begin with; requiring one here would either reject every genuinely
+# after-the-fact figure or invite a fabricated "quote" that isn't really one.
+#
+# What still applies, unconditionally: the same component/pay-period/amount/
+# currency shape rules (`_value_problems`) every other acceptance path
+# shares, so a manual entry can be exactly as malformed-figure-proof as a
+# reviewed one — just not exactly as source-proof, which is inherent to what
+# it is. It is still recorded with `basis='posting_stated'` (not
+# 'curator_asserted', which the compensation resolver's tier 1 never reads
+# for a specific role's own headline — see compensation_resolver.py's module
+# docstring) so it becomes this role's own resolved compensation, the same
+# tier a reviewed quote or the legacy salary_min/max backfill projection
+# reaches, just with `evidence_span` left NULL and a plain source note
+# instead — exactly the shape the 0013 backfill's own mechanical projection
+# already uses, just recorded live instead of migrated. Non-destructively
+# superseded exactly like a reviewed figure, via the same
+# `_supersede_prior_accepted` (which matches only on basis='posting_stated',
+# so a manual figure and a quoted one for the same component/pay_period
+# still cannot coexist as two accepted headlines).
+
+
+def _manual_source_key(role_instance_id: str, validated: dict) -> str:
+    """Content-addressed on the figure only (not the note or the date it was
+    recorded) — editing the note without changing the amount is still the
+    same fact, not a new one. Deliberately distinct from `_source_key`
+    (which hashes in `evidence_span`) so a manual entry and a quoted one can
+    never collide on identity even if their figures happen to match."""
+    parts = [
+        str(validated["component"]), str(validated["pay_period"]), str(validated["currency"]),
+        _canonical_amount(validated["amount_min"]), _canonical_amount(validated["amount_max"]),
+        _canonical_amount(validated["bonus_pct"]),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    return f"posting_stated_manual:{role_instance_id}:{digest}"
+
+
+def _validate_manual(item: dict, *, fallback_currency: str | None) -> dict:
+    """The shape half of `_validate_accept`, without anything that depends on
+    a source document — no provenance check, no `validate_span`, no
+    `_corroboration_problems`. Raises `PostingCompensationValidationError`
+    naming the first failing rule, exactly like the source-backed path."""
+    employment_basis = item.get("employment_basis")
+    if employment_basis is not None and employment_basis not in VALID_EMPLOYMENT_BASES:
+        raise PostingCompensationValidationError(
+            f"employment_basis must be one of {list(VALID_EMPLOYMENT_BASES)} or omitted"
+        )
+
+    problems = _value_problems(item, fallback_currency=fallback_currency)
+    if problems:
+        raise PostingCompensationValidationError(problems[0])
+
+    component = item["component"]
+    is_bonus = component == "bonus_pct"
+    currency = (item.get("currency") or (fallback_currency if is_bonus else "") or "").strip().upper()
+    return {
+        "evidence_span": None,
+        "currency": currency,
+        "component": component,
+        "pay_period": item["pay_period"],
+        "employment_basis": employment_basis,
+        "amount_min": None if is_bonus else item.get("amount_min"),
+        "amount_max": None if is_bonus else item.get("amount_max"),
+        "bonus_pct": item.get("bonus_pct") if is_bonus else None,
+        "source_note": item.get("note"),
+        "observed_at": item.get("observed_at") or date.today(),
+    }
+
+
+def accept_manual_posting_compensation(cur, role_instance_id: str, item: dict) -> dict:
+    """Create (or, resubmitted unchanged, idempotently no-op) a manually
+    recorded, accepted `posting_stated` observation with no source quote.
+    Requires only that the role exists — unlike the source-backed path, a
+    role with no linked document at all can still receive a manual figure."""
+    cur.execute("SELECT id, country, currency FROM jobber.role_instance WHERE id = %s", (role_instance_id,))
+    role = cur.fetchone()
+    if not role:
+        raise PostingCompensationSubjectError("role_instance not found")
+    role = dict(role)
+
+    fallback_currency = _role_currency(cur, role_instance_id, role)
+    validated = _validate_manual(item, fallback_currency=fallback_currency)
+    market_id = get_or_create_market_by_country(cur, role["country"])
+    source_key = _manual_source_key(role_instance_id, validated)
+
+    cur.execute(
+        """
+        INSERT INTO jobber.compensation_observation
+            (source_key, role_instance_id, market_id, component, pay_period, employment_basis,
+             currency, amount_min, amount_max, bonus_pct, basis, review_status, observed_at,
+             source_note, reviewed_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'posting_stated', 'accepted', %s, %s, now())
+        ON CONFLICT (source_key) DO UPDATE SET
+            review_status = 'accepted', reviewed_at = now()
+        RETURNING id, (xmax = 0) AS inserted
+        """,
+        (
+            source_key, role_instance_id, market_id, validated["component"], validated["pay_period"],
+            validated["employment_basis"], validated["currency"], validated["amount_min"], validated["amount_max"],
+            validated["bonus_pct"], validated["observed_at"], validated["source_note"],
+        ),
+    )
+    row = cur.fetchone()
+    observation_id = str(row["id"])
+    superseded = _supersede_prior_accepted(cur, role_instance_id, observation_id, validated)
+    return {
+        "id": observation_id,
+        "created": bool(row["inserted"]),
+        "status": "accepted",
+        "market_id": market_id,
+        "market_unassigned_reason": (
+            None if market_id else
+            "this role's country could not be resolved to a single market, so the observation is unassigned"
+        ),
+        "basis": "posting_stated",
+        "review_status": "accepted",
+        "superseded_observation_ids": superseded,
+    }
+
+
+def correct_manual_posting_compensation(cur, role_instance_id: str, observation_id: str, patch: dict) -> dict:
+    """Correct a manually-recorded figure — the no-quote counterpart to
+    `correct_role_observation`, sharing its non-destructive
+    correct-by-superseding shape but re-validating through
+    `accept_manual_posting_compensation` instead of the source-backed path,
+    so a quote-less observation is never asked to suddenly produce one.
+    Refuses outright if the stored observation actually carries a quote —
+    that one is corrected through the standard endpoint instead, which keeps
+    re-anchoring it against the source quote it does have."""
+    cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_instance_id,))
+    if not cur.fetchone():
+        raise PostingCompensationSubjectError("role_instance not found")
+
+    stored = _load_role_observation(cur, role_instance_id, observation_id)
+    if stored["evidence_span"] is not None:
+        raise PostingCompensationObservationError(
+            "this observation carries a source quote — correct it via the standard compensation endpoint, "
+            "not the manual one"
+        )
+    item = _observation_as_item(stored, patch)
+
+    result = accept_manual_posting_compensation(cur, role_instance_id, item)
+    corrected_id = result["id"]
+
+    if corrected_id != observation_id:
+        cur.execute(
+            """
+            UPDATE jobber.compensation_observation
+            SET review_status = 'rejected', reviewed_at = now(),
+                source_note = COALESCE(source_note || ' | ', '') || %s
+            WHERE id = %s AND role_instance_id = %s AND review_status != 'rejected'
+            RETURNING id
+            """,
+            (f"corrected; superseded by reviewed observation {corrected_id}", observation_id, role_instance_id),
+        )
+        if cur.fetchone() is not None and observation_id not in result["superseded_observation_ids"]:
+            result["superseded_observation_ids"] = [*result["superseded_observation_ids"], observation_id]
+
+    result["corrected_from_observation_id"] = observation_id
+    result["status"] = "corrected" if corrected_id != observation_id else "unchanged"
+    return result

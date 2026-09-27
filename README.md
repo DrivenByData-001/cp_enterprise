@@ -63,7 +63,14 @@ engine, and application-local notes that are never auto-promoted into
 Profile360 evidence — see
 [`docs/34-phase3-application-workspace-backbone.md`](docs/34-phase3-application-workspace-backbone.md).
 No CV, cover letter, positioning brief or interview-prep generation yet, and
-no new score — that stays out of scope until Phase 4.
+no new score — that stays out of scope until Phase 4. A Phase 3 addendum adds
+manual (unquoted, after-the-fact) posting compensation entry through the same
+`compensation_observation` model, redefines observed-posting deletion as
+deletion of the capture and its owned, unshared document (never a shared
+document, never a target, never global vocabulary), and fixes a
+`role_context_enrichment` foreign-key gap that used to block deleting a
+posting that ever had Day-in-the-Life generated — see the same doc's
+addendum section.
 
 ## Technical architecture
 

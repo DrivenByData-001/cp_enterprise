@@ -11,6 +11,8 @@ Nothing here runs during raw capture. Every AI-backed endpoint below
 triggers; every GET is a pure read that makes no model call.
 """
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -30,7 +32,9 @@ from ..posting_compensation import (
     PostingCompensationObservationError,
     PostingCompensationSubjectError,
     PostingCompensationValidationError,
+    accept_manual_posting_compensation,
     accept_posting_compensation,
+    correct_manual_posting_compensation,
     correct_role_observation,
     list_role_compensation_observations,
     propose_posting_compensation,
@@ -89,6 +93,40 @@ class CompensationCorrectInput(BaseModel):
     employment_basis: str | None = None
     evidence_span: str | None = Field(default=None, min_length=1)
     note: str | None = Field(default=None, max_length=1000)
+
+
+class ManualCompensationInput(BaseModel):
+    """Compensation discovered for this posting after initial capture — no
+    `evidence_span`, deliberately: there is no passage in the captured
+    document to quote, so none is asked for. Everything else takes the same
+    shape validation the source-backed path uses (`_value_problems`, shared
+    server-side — see app/posting_compensation.py)."""
+
+    amount_min: float | None = None
+    amount_max: float | None = None
+    bonus_pct: float | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    component: str
+    pay_period: str
+    employment_basis: str | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    observed_at: date | None = None
+
+
+class ManualCompensationCorrectInput(BaseModel):
+    """Every field optional — only what the reviewer changed is sent, the
+    rest is read back off the stored row, same convention as
+    CompensationCorrectInput."""
+
+    amount_min: float | None = None
+    amount_max: float | None = None
+    bonus_pct: float | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    component: str | None = None
+    pay_period: str | None = None
+    employment_basis: str | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    observed_at: date | None = None
 
 
 class ArchetypeAssignInput(BaseModel):
@@ -196,6 +234,44 @@ def reaccept_compensation(role_id: str, observation_id: str):
     with db_cursor() as cur:
         try:
             return reaccept_role_observation(cur, role_id, observation_id)
+        except PostingCompensationSubjectError as e:
+            raise HTTPException(404, str(e)) from e
+        except PostingCompensationObservationError as e:
+            raise HTTPException(404 if "not found" in str(e) else 409, str(e)) from e
+        except PostingCompensationValidationError as e:
+            raise HTTPException(400, str(e)) from e
+
+
+# --- Manually-recorded compensation (Phase 3 addendum) ----------------------
+#
+# The "Add/update compensation" section of the posting edit workflow: salary
+# discovered after the posting was initially captured, with no passage in
+# the source document to quote. See posting_compensation.py's own module
+# note above `accept_manual_posting_compensation` for why this still writes
+# a `posting_stated` observation (so it becomes this role's own resolved
+# compensation) rather than 'curator_asserted' (which the resolver never
+# reads for a specific role's headline at all).
+
+
+@router.post("/{role_id}/compensation/manual")
+def accept_manual_compensation(role_id: str, payload: ManualCompensationInput):
+    with db_cursor() as cur:
+        try:
+            return accept_manual_posting_compensation(cur, role_id, payload.model_dump())
+        except PostingCompensationSubjectError as e:
+            raise HTTPException(404, str(e)) from e
+        except PostingCompensationValidationError as e:
+            raise HTTPException(400, str(e)) from e
+
+
+@router.patch("/{role_id}/compensation/manual/{observation_id}")
+def correct_manual_compensation(role_id: str, observation_id: str, payload: ManualCompensationCorrectInput):
+    patch = payload.model_dump(exclude_unset=True)
+    if not patch:
+        raise HTTPException(400, "nothing to correct — supply at least one field")
+    with db_cursor() as cur:
+        try:
+            return correct_manual_posting_compensation(cur, role_id, observation_id, patch)
         except PostingCompensationSubjectError as e:
             raise HTTPException(404, str(e)) from e
         except PostingCompensationObservationError as e:

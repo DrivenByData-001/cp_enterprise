@@ -625,10 +625,11 @@ def build_role_view(cur, role_id: str) -> dict | None:
 # naive DELETE FROM role_instance fails outright whenever any extraction was
 # ever attempted against that role — which is the normal case for anything
 # that went through source-aware ingest + extract-requirements. And
-# extraction_run itself is referenced (NO ACTION) by requirement_claim and
-# concept_proposal, which blocks *it* from being cleaned up in turn unless
-# those are handled first. See delete_role_instance's own docstring for the
-# full chain and why each reference needs a different treatment.
+# extraction_run itself is referenced (NO ACTION) by requirement_claim,
+# concept_proposal AND role_context_enrichment (Day-in-the-Life), which
+# blocks *it* from being cleaned up in turn unless those are handled first.
+# See delete_role_instance's own docstring for the full chain and why each
+# reference needs a different treatment.
 
 _ROLE_METADATA_COLUMNS = {
     "title", "organisation", "location", "country", "remote_type",
@@ -636,9 +637,58 @@ _ROLE_METADATA_COLUMNS = {
 }
 
 
+def _delete_owned_document_if_unshared(cur, document_id: str) -> bool:
+    """The other half of *true* posting deletion (Phase 3 addendum): an
+    observed posting's own captured/uploaded `jobber.document` is deleted
+    along with it — but only when no other role_instance still owns it. A
+    document is "shared" exactly when some other role_instance.document_id
+    still equals it (re-association, or a genuine duplicate capture that
+    ended up pointing at the same row); such a document, and everything
+    still legitimately attached to it, is left completely untouched.
+
+    Vocabulary is never collateral damage. `jobber.concept_proposal` rows
+    this document ever contributed to are curation candidates about a
+    *vocabulary term*, not about this document or the role that surfaced
+    them — they are kept regardless, exactly like the role-subject case
+    above; only their now-dangling `extraction_run_id`/`document_id`
+    pointers are cleared. `jobber.concept_proposal_occurrence` rows are
+    role-scoped (CASCADE on role_instance_id) and so are already gone for
+    any role actually being deleted; the same defensive
+    extraction_run_id-nulling is applied to them too, in case some other
+    (never normally possible, but not schema-enforced) row still pointed at
+    one of the document-subject runs being removed here.
+
+    Once vocabulary is protected, every extraction_run row still pointing at
+    this document (job_posting_extract and any other document-subject
+    attempt — role-subject runs for *this* role are already gone by the time
+    this is called) is deleted, and finally the document itself.
+
+    Returns True if the document was actually deleted."""
+    cur.execute("SELECT 1 FROM jobber.role_instance WHERE document_id = %s LIMIT 1", (document_id,))
+    if cur.fetchone():
+        return False  # still owned by at least one surviving role — never touched
+
+    cur.execute(
+        "UPDATE jobber.concept_proposal SET extraction_run_id = NULL "
+        "WHERE extraction_run_id IN (SELECT id FROM jobber.extraction_run WHERE document_id = %s)",
+        (document_id,),
+    )
+    cur.execute(
+        "UPDATE jobber.concept_proposal_occurrence SET extraction_run_id = NULL "
+        "WHERE extraction_run_id IN (SELECT id FROM jobber.extraction_run WHERE document_id = %s)",
+        (document_id,),
+    )
+    cur.execute("UPDATE jobber.concept_proposal SET document_id = NULL WHERE document_id = %s", (document_id,))
+    cur.execute("DELETE FROM jobber.extraction_run WHERE document_id = %s", (document_id,))
+    cur.execute("DELETE FROM jobber.document WHERE id = %s", (document_id,))
+    return cur.rowcount > 0
+
+
 def delete_role_instance(cur, role_id: str) -> bool:
     """Deletes one jobber.role_instance row and everything that exists only
-    to describe it. extraction_run needs two different treatments, not one:
+    to describe it — including, for an *observed posting* (never a target),
+    its own owned source document. extraction_run needs two different
+    treatments, not one:
 
     - `result_role_instance_id` is an *output* linkage (which role a
       document-subject job_posting_extract run produced) — the row is about
@@ -654,10 +704,10 @@ def delete_role_instance(cur, role_id: str) -> bool:
       tied to a deleted duplicate" the user already accepts for its
       requirement_claim rows, which cascade the same way).
 
-    Deleting those role-subject extraction_run rows in turn requires two
-    things to happen first, in this order, both confirmed against the live
+    Deleting those role-subject extraction_run rows in turn requires three
+    things to happen first, in this order, all confirmed against the live
     schema (not just the pre-Phase-2 migration set, which turned out to
-    still be missing one):
+    still be missing some):
 
     1. `jobber.requirement_claim.extraction_run_id` (NO ACTION) still points
        at them for as long as the claim rows exist — and those rows only
@@ -680,6 +730,24 @@ def delete_role_instance(cur, role_id: str) -> bool:
        the run reference needs nulling here, and only so that cascade can
        still happen — the same dangling-NO-ACTION-reference problem as
        requirement_claim's above, just one step further removed.
+    4. `jobber.role_context_enrichment.extraction_run_id` (also NO ACTION,
+       added by the Day-in-the-Life build and missed by every treatment
+       above): every enrichment version ever generated for this role — not
+       only the active one, superseded versions keep their own run
+       reference too — still points at the role-subject run that produced
+       it, and role_context_enrichment's own `role_instance_id` CASCADE only
+       fires once role_instance itself is deleted, same ordering problem as
+       point 3. Unlike concept_proposal_occurrence there is no cascade to
+       lean on yet at this point in the function, so these rows are deleted
+       explicitly, one step ahead of the role-subject extraction_run
+       cleanup that would otherwise raise a ForeignKeyViolation the first
+       time a role that ever had Day-in-the-Life generated for it was
+       deleted.
+
+    Finally, for an observed posting only, its own captured document is
+    deleted too if nothing else still owns it — see
+    `_delete_owned_document_if_unshared`. A target's linked narrative
+    document is left completely alone; this reclassification is posting-only.
 
     Returns False (nothing deleted) if role_id doesn't exist."""
     cur.execute(
@@ -700,6 +768,10 @@ def delete_role_instance(cur, role_id: str) -> bool:
         """,
         (role_id,),
     )
+    # Point 4 above — must run before the role-subject extraction_run
+    # DELETE below, and before role_instance's own CASCADE could otherwise
+    # have taken care of it.
+    cur.execute("DELETE FROM jobber.role_context_enrichment WHERE role_instance_id = %s", (role_id,))
     cur.execute("DELETE FROM jobber.requirement_claim WHERE role_instance_id = %s", (role_id,))
     cur.execute(
         "DELETE FROM jobber.extraction_run WHERE subject_type = 'role_instance' AND role_instance_id = %s",
@@ -709,6 +781,13 @@ def delete_role_instance(cur, role_id: str) -> bool:
         "UPDATE jobber.extraction_run SET result_role_instance_id = NULL WHERE result_role_instance_id = %s",
         (role_id,),
     )
+
+    cur.execute("SELECT instance_type, document_id FROM jobber.role_instance WHERE id = %s", (role_id,))
+    role_row = cur.fetchone()
+    if role_row is None:
+        return False
+    instance_type, document_id = role_row["instance_type"], role_row["document_id"]
+
     cur.execute("DELETE FROM jobber.role_instance WHERE id = %s", (role_id,))
     deleted = cur.rowcount > 0
     if deleted:
@@ -716,6 +795,8 @@ def delete_role_instance(cur, role_id: str) -> bool:
             "DELETE FROM jobber.d_embedding WHERE owner_kind = 'role_instance' AND owner_id = %s",
             (role_id,),
         )
+        if instance_type == "observed_posting" and document_id:
+            _delete_owned_document_if_unshared(cur, str(document_id))
     return deleted
 
 
