@@ -19,7 +19,12 @@ vi.mock('../lib/api', () => ({ api: {
   acceptRequirement: vi.fn(), rejectRequirement: vi.fn(), reopenRequirement: vi.fn(),
   editRequirement: vi.fn(), addRequirement: vi.fn(), listConcepts: vi.fn(),
   proposeRoleMetadata: vi.fn(), updateRoleMetadata: vi.fn(),
-  compareRole: vi.fn(), listDevelopmentActions: vi.fn(), getRoleContext: vi.fn(),
+  // Role Detail's Decision Summary (docs/33) fetches this in parallel with
+  // compensation once a posting loads — `resetAllMocks` below means every
+  // test rendering a posting's Role Detail (or Comparison) must mock this
+  // itself; see EMPTY_COMPARISON.
+  compareRole: vi.fn(),
+  listDevelopmentActions: vi.fn(), getRoleContext: vi.fn(),
   // Role Detail's economics block (build §14) loads compensation and the
   // archetype catalogue on mount. Both are plain reads that make no AI call.
   getRoleCompensation: vi.fn(), proposeRoleCompensation: vi.fn(), acceptRoleCompensation: vi.fn(),
@@ -50,6 +55,24 @@ export const NO_COMPENSATION = {
     notes: [], fingerprint: 'none',
   },
   observations: [],
+}
+// Role Detail's Decision Summary (docs/33) compares evidence for every
+// posting it renders. `resetAllMocks` below wipes any factory-level default
+// after each test, so every test that renders a posting's Role Detail must
+// mock this itself — this fixture is the honest "nothing extracted yet" case.
+export const EMPTY_COMPARISON: ComparisonResult = {
+  role: { id: 'role', title: 'role', kind: 'posting' },
+  items: [],
+  counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 0 },
+  blocking_gaps: [],
+  unverified_required: [],
+  fit_score: null,
+  embedding_similarity: null,
+  engine_version: 'test',
+  review_summary: {
+    accepted: 0, unreviewed: 0, rejected: 0, unresolved_proposals: 0,
+    extraction_attempted: false, needs_reextraction: 0, complete: true,
+  },
 }
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 function Location() { return <output aria-label="Location">{useLocation().pathname + useLocation().search}</output> }
@@ -279,6 +302,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     })
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     const notice = await screen.findByText(/Requirements review pending/)
     expect(notice.textContent).toContain('2 item')
@@ -311,6 +335,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     })
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     const notice = await screen.findByText(/Requirements review pending/)
     expect(notice.textContent).toContain('1 item')
@@ -354,6 +379,7 @@ describe('Role Detail separates reviewed requirements from legacy skills', () =>
     })
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
 
     await screen.findByText('Reviewed requirements')
@@ -377,6 +403,7 @@ describe('Role Detail separates reviewed requirements from legacy skills', () =>
     })
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     await screen.findByText('Reviewed requirements')
     expect(screen.queryByText('Legacy skills')).toBeNull()
