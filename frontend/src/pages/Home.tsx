@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Profile, type Role } from '../lib/api'
+import { api, type Application, type ApplicationRoleSummary, type Profile, type Role } from '../lib/api'
 
 const OPPORTUNITIES_PREVIEW_LIMIT = 5
+const APPLICATIONS_PREVIEW_LIMIT = 3
+const ACTIVE_STATUSES = ['preparing', 'ready', 'submitted', 'interviewing']
 
 // Career Cockpit (Phase 1 product shell). Deliberately built from existing,
 // bounded data only — no selected-direction/application-workspace state, no
@@ -17,6 +19,10 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile>(null)
   const [profileLoading, setProfileLoading] = useState(true)
   const [profileError, setProfileError] = useState<string | null>(null)
+
+  const [activeApplications, setActiveApplications] = useState<(Application & { role: ApplicationRoleSummary })[] | null>(null)
+  const [applicationsLoading, setApplicationsLoading] = useState(true)
+  const [applicationsError, setApplicationsError] = useState<string | null>(null)
 
   useEffect(() => {
     let current = true
@@ -35,6 +41,23 @@ export default function Home() {
       .then((p) => { if (current) setProfile(p) })
       .catch((e) => { if (current) setProfileError(e instanceof Error ? e.message : String(e)) })
       .finally(() => { if (current) setProfileLoading(false) })
+    return () => { current = false }
+  }, [])
+
+  // Bounded, not a whole-table fetch (build §11): a small recent page,
+  // narrowed to active applications client-side — this card's own failure
+  // must never blank Opportunities/Profile above it (each card here already
+  // has independent loading/error state).
+  useEffect(() => {
+    let current = true
+    api
+      .listApplications({ limit: 20 })
+      .then((res) => {
+        if (!current) return
+        setActiveApplications(res.items.filter((a) => ACTIVE_STATUSES.includes(a.status)).slice(0, APPLICATIONS_PREVIEW_LIMIT))
+      })
+      .catch((e) => { if (current) setApplicationsError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (current) setApplicationsLoading(false) })
     return () => { current = false }
   }, [])
 
@@ -116,13 +139,31 @@ export default function Home() {
 
         <section className="card" aria-labelledby="home-applications-h">
           <h2 id="home-applications-h" style={{ fontSize: 16, marginTop: 0 }}>Applications</h2>
-          <p style={{ fontWeight: 600, margin: '4px 0' }}>No application workspaces yet</p>
-          <p className="secondary" style={{ fontSize: 13 }}>
-            Application workspaces will turn a chosen opportunity into evidence, positioning, CV and interview
-            preparation. For now, start from an opportunity.
-          </p>
+          {applicationsLoading && <p className="muted">Loading…</p>}
+          {applicationsError && <p role="alert" style={{ fontSize: 13 }}>Could not load applications: {applicationsError}</p>}
+          {!applicationsLoading && !applicationsError && activeApplications && activeApplications.length === 0 && (
+            <>
+              <p style={{ fontWeight: 600, margin: '4px 0' }}>No applications yet</p>
+              <p className="secondary" style={{ fontSize: 13 }}>
+                Choose an opportunity when you decide you want to pursue it.
+              </p>
+            </>
+          )}
+          {!applicationsLoading && !applicationsError && activeApplications && activeApplications.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0' }}>
+              {activeApplications.map((a) => (
+                <Link key={a.id} to={`/applications/${a.id}`} style={{ textDecoration: 'none' }}>
+                  <strong>{a.role.title ?? 'Untitled role'}</strong>
+                  <div className="secondary" style={{ fontSize: 12 }}>
+                    {a.role.organisation ?? 'Unknown org'} · {a.status}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
           <div className="actions" style={{ marginTop: 12 }}>
-            <Link to="/opportunities" className="button">Browse opportunities</Link>
+            <Link to="/applications" className="button primary">View applications</Link>
+            <Link to="/opportunities">Browse opportunities</Link>
           </div>
         </section>
       </div>

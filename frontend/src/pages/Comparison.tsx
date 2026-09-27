@@ -128,7 +128,7 @@ export default function Comparison() {
       )}
       {data.target_mapping && <div className="card">
         <p>{data.target_mapping.mapped} of {data.target_mapping.total} target requirements mapped and included. Counts below cover included requirements only.</p>
-        {!data.target_mapping.complete && <p role="alert">Target mapping is incomplete; this comparison cannot establish overall target readiness. <Link to={`/roles/${data.role.id}/edit`}>Review target requirements</Link></p>}
+        {!data.target_mapping.complete && <p role="alert">Target mapping is incomplete; this comparison cannot establish overall target readiness. <Link to={`/targets/${data.role.id}/edit`}>Review target requirements</Link></p>}
         <ul>{data.target_mapping.items.map((item, i) => <li key={i}>{item.name}: {item.mapping_status === 'mapped' ? `Mapped → ${item.canonical_name}` : item.mapping_status === 'excluded' ? 'Excluded by requirement review — needs review' : 'Unmapped — needs review'}</li>)}</ul>
       </div>}
       <p className="secondary">

@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { AuthContext } from './useAuth'
-import { api, type Profile360Row, type Role, type RoleListResponse } from './lib/api'
+import { api, type ApplicationListItem, type Profile360Row, type Role, type RoleListResponse } from './lib/api'
 
 vi.mock('./lib/api', () => ({
   api: {
@@ -12,8 +12,17 @@ vi.mock('./lib/api', () => ({
     getProfile: vi.fn(),
     getProfileHistory: vi.fn(),
     listTargets: vi.fn(),
+    listApplications: vi.fn(),
+    getRole: vi.fn(),
   },
 }))
+
+// Home and Applications both fetch applications on mount; most of these
+// navigation-focused tests don't care about that response, so a shared
+// empty-page default keeps them from having to know about it individually.
+function applicationsResponse(items: ApplicationListItem[] = []) {
+  return { items, total: items.length, limit: 100, offset: 0 }
+}
 
 function rolesResponse(items: Role[] = [], total = items.length): RoleListResponse {
   return { items, total, limit: 20, offset: 0, period: 'current', year_range: { min: 2008, max: 2026 } }
@@ -28,6 +37,10 @@ function renderApp(url: string) {
     </AuthContext.Provider>,
   )
 }
+
+beforeEach(() => {
+  vi.mocked(api.listApplications).mockResolvedValue(applicationsResponse())
+})
 
 afterEach(() => {
   cleanup()
@@ -97,6 +110,18 @@ describe('Primary navigation active state', () => {
     renderApp('/applications')
     const link = await screen.findByRole('link', { name: 'Applications' })
     expect(link.className).toContain('active')
+  })
+
+  it('keeps Explore my future active on /targets/:id/edit, not Opportunities (docs/34 §12)', async () => {
+    vi.mocked(api.getRole).mockResolvedValue({
+      id: 'target-1', node_type: 'target_real', title: 'Head of Risk', raw_json: null,
+    } as Role)
+    renderApp('/targets/target-1/edit')
+    await screen.findByText(/Edit "Head of Risk"/)
+    const explore = screen.getByRole('link', { name: 'Explore my future' })
+    expect(explore.className).toContain('active')
+    const opportunities = screen.getByRole('link', { name: 'Opportunities' })
+    expect(opportunities.className).not.toContain('active')
   })
 })
 

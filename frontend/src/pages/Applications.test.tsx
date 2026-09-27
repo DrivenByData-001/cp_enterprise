@@ -1,20 +1,94 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Applications from './Applications'
+import { api, type ApplicationListItem, type ApplicationListResponse } from '../lib/api'
 
-afterEach(() => cleanup())
+// Phase 3 (docs/34 §8): a real, persisted Applications index — replaces the
+// Phase 1 placeholder. Covers the empty state, the populated active/
+// historical split, and that role metadata renders straight from the one
+// bounded list call (never a per-row fetch).
 
-describe('Applications placeholder', () => {
-  it('is an honest empty state that never implies persisted application workspaces', () => {
-    render(<MemoryRouter><Applications /></MemoryRouter>)
-    expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeTruthy()
-    expect(screen.getByText('No application workspaces yet')).toBeTruthy()
-  })
+vi.mock('../lib/api', () => ({
+  api: { listApplications: vi.fn() },
+}))
 
-  it('directs the user to Opportunities', () => {
-    render(<MemoryRouter><Applications /></MemoryRouter>)
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+
+function item(overrides: Partial<ApplicationListItem> = {}): ApplicationListItem {
+  return {
+    id: 'app-1',
+    role_instance_id: 'role-1',
+    status: 'preparing',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+    role: { id: 'role-1', title: 'Head of Capital', organisation: 'An insurer', location: 'London', posting_date: '2026-01-01' },
+    ...overrides,
+  }
+}
+
+function listResponse(items: ApplicationListItem[]): ApplicationListResponse {
+  return { items, total: items.length, limit: 200, offset: 0 }
+}
+
+function renderPage() {
+  return render(<MemoryRouter><Applications /></MemoryRouter>)
+}
+
+describe('Applications index — empty state', () => {
+  it('shows an honest empty state pointing to Opportunities', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(listResponse([]))
+    renderPage()
+    expect(await screen.findByText(/No applications yet\. Choose an opportunity/)).toBeTruthy()
     const link = screen.getByText('Browse opportunities').closest('a') as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('/opportunities')
+  })
+})
+
+describe('Applications index — populated', () => {
+  it('uses exactly one bounded list call, with role metadata already attached', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(listResponse([item()]))
+    renderPage()
+    expect(await screen.findByText('Head of Capital')).toBeTruthy()
+    expect(screen.getByText(/An insurer/)).toBeTruthy()
+    expect(api.listApplications).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows active applications under Active and closed/withdrawn under Past attempts', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(
+      listResponse([
+        item({ id: 'active-1', status: 'submitted', role: { id: 'r1', title: 'Active Role', organisation: null, location: null, posting_date: null } }),
+        item({ id: 'closed-1', status: 'withdrawn', role: { id: 'r2', title: 'Withdrawn Role', organisation: null, location: null, posting_date: null } }),
+      ]),
+    )
+    renderPage()
+    await screen.findByText('Active Role')
+    const activeSection = screen.getByRole('heading', { name: 'Active' }).closest('section') as HTMLElement
+    const pastSection = screen.getByRole('heading', { name: 'Past attempts' }).closest('section') as HTMLElement
+    expect(activeSection.textContent).toContain('Active Role')
+    expect(activeSection.textContent).not.toContain('Withdrawn Role')
+    expect(pastSection.textContent).toContain('Withdrawn Role')
+  })
+
+  it('provides Open application, View opportunity and Browse opportunities', async () => {
+    vi.mocked(api.listApplications).mockResolvedValue(listResponse([item()]))
+    renderPage()
+    await screen.findByText('Head of Capital')
+    const open = screen.getByText('Open application').closest('a') as HTMLAnchorElement
+    expect(open.getAttribute('href')).toBe('/applications/app-1')
+    const view = screen.getByText('View opportunity').closest('a') as HTMLAnchorElement
+    expect(view.getAttribute('href')).toBe('/roles/role-1')
+    expect(screen.getByText('Browse opportunities').closest('a')?.getAttribute('href')).toBe('/opportunities')
+  })
+})
+
+describe('Applications index — failure', () => {
+  it('shows a clear error rather than a blank page', async () => {
+    vi.mocked(api.listApplications).mockRejectedValue(new Error('service unavailable'))
+    renderPage()
+    expect(await screen.findByText(/Applications couldn't be loaded/)).toBeTruthy()
   })
 })

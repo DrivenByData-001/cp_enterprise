@@ -1048,6 +1048,101 @@ export type ComparisonResult = {
   review_summary: RequirementReviewSummary
 }
 
+// --- Phase 3: persistent application workspace (docs/34) -------------------
+//
+// `status` is a plain user workflow state — never a derived/AI verdict (see
+// docs/34). An application always ties to exactly one observed posting; a
+// target can never become one. Notes are application-local and are never
+// promoted into Profile360/comparison evidence automatically.
+
+export type ApplicationStatus = 'preparing' | 'ready' | 'submitted' | 'interviewing' | 'closed' | 'withdrawn'
+export type ApplicationNoteType = 'general' | 'evidence_example'
+
+export type Application = {
+  id: string
+  role_instance_id: string
+  status: ApplicationStatus
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationCreateResult = Application & {
+  // true when this call created a brand-new application; false when an
+  // existing active one was found and returned instead ("reopened").
+  created: boolean
+}
+
+export type ApplicationRoleSummary = {
+  id: string
+  title: string | null
+  organisation: string | null
+  location: string | null
+  posting_date: string | null
+}
+
+export type ApplicationListItem = Application & { role: ApplicationRoleSummary }
+
+export type ApplicationListResponse = {
+  items: ApplicationListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type ApplicationNote = {
+  id: string
+  application_id: string
+  concept_id: string | null
+  note_type: ApplicationNoteType
+  note_text: string
+  created_at: string
+  updated_at: string
+}
+
+export type ApplicationDetailRole = {
+  id: string
+  title: string | null
+  organisation: string | null
+  location: string | null
+  country: string | null
+  remote_type: string | null
+  posting_date: string | null
+  instance_type: string
+  url: string | null
+}
+
+export type ApplicationDetail = {
+  application: Application
+  role: ApplicationDetailRole
+  notes: ApplicationNote[]
+}
+
+// Every comparison item plus the two things only an application evidence
+// pack adds: whether the role-side requirement is a human-reviewed claim or
+// legacy fallback extraction (build §5), and this application's own notes
+// linked to that concept (never treated as accepted evidence — see
+// `ApplicationNote` above).
+export type ApplicationEvidenceItem = ComparisonItem & {
+  role_requirement_reviewed: boolean
+  notes: ApplicationNote[]
+}
+
+export type ApplicationEvidence = {
+  application_id: string
+  role_instance_id: string
+  role: { id: string; title: string; kind: string }
+  review_summary: RequirementReviewSummary
+  counts: Record<ComparisonStatus, number>
+  blocking_gaps: GapConcept[]
+  unverified_required: (GapConcept & { status: ComparisonStatus })[]
+  items: ApplicationEvidenceItem[]
+  notes: ApplicationNote[]
+  engine_version: string
+}
+
+export type ApplicationNoteInput = { concept_id?: string | null; note_type: ApplicationNoteType; note_text: string }
+export type ApplicationNoteUpdateInput = Partial<ApplicationNoteInput>
+
 export type PreferenceDimension = { code: string; label: string; definition: string; sort_order: number }
 
 export type PreferenceObservation = {
@@ -2016,6 +2111,22 @@ export type CompensationAcceptInput = {
   note?: string | null
 }
 
+// Manually-recorded compensation (Phase 3 addendum) — the no-quote
+// counterpart to CompensationAcceptInput. No evidence_span: this is for
+// salary discovered after the posting was captured, with no passage in the
+// source document to quote.
+export type ManualCompensationInput = {
+  amount_min?: number | null
+  amount_max?: number | null
+  bonus_pct?: number | null
+  currency?: string | null
+  component: string
+  pay_period: string
+  employment_basis?: string | null
+  note?: string | null
+  observed_at?: string | null
+}
+
 export type CompensationAcceptResult = {
   // A correction creates a *new* accepted observation rather than rewriting
   // the old one, so this is not necessarily the id that was corrected — the
@@ -2024,7 +2135,9 @@ export type CompensationAcceptResult = {
   created?: boolean
   status: string
   review_status?: string
+  market_id?: string | null
   market_unassigned_reason?: string | null
+  basis?: string
   corrected_from_observation_id?: string
   // Accepting a corrected figure retires the one it corrects, so a role never
   // carries two accepted stated figures for the same component.
@@ -2413,6 +2526,19 @@ export const api = {
   reacceptRoleCompensation: (roleId: string, observationId: string) =>
     req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/${observationId}/reaccept`, {
       method: 'POST',
+    }),
+  // Manually-recorded compensation (Phase 3 addendum): salary discovered
+  // after the posting was captured, with no evidence_span to quote — the
+  // "Add/update compensation" section of the posting edit workflow.
+  acceptManualRoleCompensation: (roleId: string, payload: ManualCompensationInput) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/manual`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  correctManualRoleCompensation: (roleId: string, observationId: string, payload: Partial<ManualCompensationInput>) =>
+    req<CompensationAcceptResult>(`/role-instances/${roleId}/compensation/manual/${observationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     }),
   getRoleArchetype: (id: string) => req<RoleArchetypeSummary>(`/role-instances/${id}/archetype`),
   getArchetypeCatalogue: () => req<ArchetypeCatalogueEntry[]>('/role-instances/archetype-catalogue'),
@@ -2888,4 +3014,26 @@ export const api = {
 
   // --- Phase 4: accepted vocabulary overview -----------------------------------
   getAcceptedVocabularyOverview: () => req<AcceptedVocabularyOverview>('/vocabulary/accepted-overview'),
+
+  // --- Phase 3: persistent application workspace (docs/34) -----------------
+  createOrReopenApplication: (role_instance_id: string) =>
+    req<ApplicationCreateResult>('/applications', { method: 'POST', body: JSON.stringify({ role_instance_id }) }),
+  listApplications: (params: { status?: ApplicationStatus; limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    if (params.offset !== undefined) qs.set('offset', String(params.offset))
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<ApplicationListResponse>(`/applications${suffix}`)
+  },
+  getApplication: (id: string) => req<ApplicationDetail>(`/applications/${id}`),
+  updateApplicationStatus: (id: string, status: ApplicationStatus) =>
+    req<Application>(`/applications/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  getApplicationEvidence: (id: string) => req<ApplicationEvidence>(`/applications/${id}/evidence`),
+  createApplicationNote: (id: string, payload: ApplicationNoteInput) =>
+    req<ApplicationNote>(`/applications/${id}/notes`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateApplicationNote: (id: string, noteId: string, payload: ApplicationNoteUpdateInput) =>
+    req<ApplicationNote>(`/applications/${id}/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteApplicationNote: (id: string, noteId: string) =>
+    req<{ status: string }>(`/applications/${id}/notes/${noteId}`, { method: 'DELETE' }),
 }

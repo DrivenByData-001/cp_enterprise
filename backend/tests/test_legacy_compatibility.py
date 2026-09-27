@@ -192,9 +192,18 @@ def test_delete_role_with_extraction_run_history_succeeds(client, monkeypatch):
 def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, monkeypatch):
     """The other non-cascading extraction_run reference: result_role_instance_id
     (set by the job_posting_extract/native-import pipeline, distinct from
-    the subject-side role_instance_id above) must also not block deletion —
-    exactly the shape of the retained production role's own extraction
-    history."""
+    the subject-side role_instance_id above) must also not block deletion.
+
+    Before the Phase 3 "true posting deletion" addendum, this run row
+    survived deletion with result_role_instance_id merely nulled — the
+    document it described was never deleted at all, so its own extraction
+    history stayed meaningful. Since that addendum, deleting an observed
+    posting also deletes its own owned (unshared) source document, and a
+    job_posting_extract run is *about* that document — so it is now deleted
+    along with it rather than preserved nulled. What this test still proves
+    is unchanged: deletion must not fail with a ForeignKeyViolation merely
+    because a job_posting_extract run's result_role_instance_id points at
+    the role being deleted."""
     from app import ai, document_processing
     from app.models import Analysis, Job, JobPostingImport, Metadata
 
@@ -215,6 +224,8 @@ def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, m
     role_id = client.post("/api/import/native", json={"text": "Pricing Actuary. Requires IFRS 17."}).json()["id"]
 
     with db.db_cursor() as cur:
+        cur.execute("SELECT document_id FROM jobber.role_instance WHERE id = %s", (role_id,))
+        document_id = cur.fetchone()["document_id"]
         cur.execute(
             "SELECT count(*) AS n FROM jobber.extraction_run WHERE result_role_instance_id = %s", (role_id,),
         )
@@ -223,10 +234,12 @@ def test_delete_role_with_result_role_instance_extraction_run_succeeds(client, m
     assert client.delete(f"/api/roles/{role_id}").status_code == 200
 
     with db.db_cursor() as cur:
-        cur.execute(
-            "SELECT count(*) AS n FROM jobber.extraction_run WHERE task = 'job_posting_extract' AND result_role_instance_id IS NULL",
-        )
-        assert cur.fetchone()["n"] > 0
+        # The owned, unshared document — and the job_posting_extract run
+        # describing it — are genuinely gone now, not merely unlinked.
+        cur.execute("SELECT count(*) AS n FROM jobber.document WHERE id = %s", (document_id,))
+        assert cur.fetchone()["n"] == 0
+        cur.execute("SELECT count(*) AS n FROM jobber.extraction_run WHERE document_id = %s", (document_id,))
+        assert cur.fetchone()["n"] == 0
 
 
 def test_target_import_listing_and_path(client):

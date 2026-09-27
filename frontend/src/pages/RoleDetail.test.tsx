@@ -31,6 +31,7 @@ vi.mock('../lib/api', () => ({
     rejectRoleCompensation: vi.fn(),
     reacceptRoleCompensation: vi.fn(),
     deleteRole: vi.fn(),
+    createOrReopenApplication: vi.fn(),
   },
 }))
 
@@ -337,10 +338,74 @@ describe('Opportunity Decision Workspace — posting', () => {
     expect(comparisonLinks.some((l) => l.getAttribute('href') === '/comparison/role')).toBe(true)
   })
 
-  it('does not add an application call-to-action', async () => {
+})
+
+describe('Opportunity → Application (docs/34 §7)', () => {
+  function renderPostingWithApplicationsRoute() {
+    vi.mocked(api.getRole).mockResolvedValue(basePosting)
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: basePosting.id, enrichment: null })
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(emptyComparison())
+    return render(
+      <MemoryRouter initialEntries={['/roles/role']}>
+        <Routes>
+          <Route path="/roles/:id" element={<RoleDetail />} />
+          <Route path="/applications/:id" element={<p>Application workspace</p>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('shows a prominent primary "I want to apply" action', async () => {
     renderPosting()
-    await screen.findByRole('heading', { name: 'Next actions' })
-    expect(screen.queryByText(/i want to apply/i)).toBeNull()
+    const button = await screen.findByRole('button', { name: 'I want to apply' })
+    expect(button.className).toContain('primary')
+  })
+
+  it('creates/reopens the application and navigates to its workspace on click', async () => {
+    vi.mocked(api.createOrReopenApplication).mockResolvedValue({
+      id: 'app-1', role_instance_id: 'role', status: 'preparing', created_at: 't', updated_at: 't', created: true,
+    })
+    renderPostingWithApplicationsRoute()
+    const button = await screen.findByRole('button', { name: 'I want to apply' })
+    fireEvent.click(button)
+    expect(await screen.findByText('Application workspace')).toBeTruthy()
+    expect(api.createOrReopenApplication).toHaveBeenCalledWith('role')
+  })
+
+  it('reopens (rather than duplicates) an existing active application the same way', async () => {
+    vi.mocked(api.createOrReopenApplication).mockResolvedValue({
+      id: 'existing-app', role_instance_id: 'role', status: 'submitted', created_at: 't', updated_at: 't', created: false,
+    })
+    renderPostingWithApplicationsRoute()
+    const button = await screen.findByRole('button', { name: 'I want to apply' })
+    fireEvent.click(button)
+    expect(await screen.findByText('Application workspace')).toBeTruthy()
+    expect(api.createOrReopenApplication).toHaveBeenCalledTimes(1)
+  })
+
+  it('prevents double-submit while the request is in flight', async () => {
+    let resolveCall: (v: { id: string; role_instance_id: string; status: 'preparing'; created_at: string; updated_at: string; created: boolean }) => void = () => {}
+    vi.mocked(api.createOrReopenApplication).mockReturnValue(
+      new Promise((resolve) => { resolveCall = resolve }),
+    )
+    renderPostingWithApplicationsRoute()
+    const button = await screen.findByRole('button', { name: 'I want to apply' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(api.createOrReopenApplication).toHaveBeenCalledTimes(1)
+    resolveCall({ id: 'app-1', role_instance_id: 'role', status: 'preparing', created_at: 't', updated_at: 't', created: true })
+    await screen.findByText('Application workspace')
+  })
+
+  it('shows a focused error without breaking the rest of the page when the call fails', async () => {
+    vi.mocked(api.createOrReopenApplication).mockRejectedValue(new Error('network down'))
+    renderPostingWithApplicationsRoute()
+    const button = await screen.findByRole('button', { name: 'I want to apply' })
+    fireEvent.click(button)
+    expect(await screen.findByText(/Couldn't open the application/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Decision summary' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'I want to apply' })).toBeTruthy()
   })
 })
 
