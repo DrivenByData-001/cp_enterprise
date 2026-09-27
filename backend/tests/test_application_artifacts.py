@@ -143,12 +143,17 @@ def _grounded_role(cur):
 def _legacy_only_role(cur):
     """A role with only a legacy role_skill_observation and zero accepted
     requirement_claim rows, so the fallback path is actually exercised (see
-    `_grounded_role`'s docstring for why it can't carry both)."""
+    `_grounded_role`'s docstring for why it can't carry both). Also seeds one
+    Profile360 episode with no claim mapping at all — `build_source_registry`
+    always offers every episode as `canonical_evidence` regardless of
+    mapping, so this gives tests a genuine person-side ref to pair with the
+    role-only one, without granting this role any accepted requirement."""
     legacy_concept_id = _concept(cur, "Prophet")
     role_id = _posting(cur, title="Legacy-only Role")
     _legacy_observation(cur, role_id, legacy_concept_id, "Prophet")
+    episode_id = _episode(cur)
     application_id = _application(cur, role_id)
-    return {"application_id": application_id, "role_id": role_id, "legacy_concept_id": legacy_concept_id}
+    return {"application_id": application_id, "role_id": role_id, "legacy_concept_id": legacy_concept_id, "episode_id": episode_id}
 
 
 def _fake_run_json_task(output, raise_error: Exception | None = None):
@@ -165,12 +170,20 @@ def _fake_run_json_task(output, raise_error: Exception | None = None):
     return _dispatch
 
 
-def _positioning_output(*, ref: str, concept_id: str | None = None, gap_concept_id=None) -> ApplicationPositioningGeneration:
+def _positioning_output(
+    *, ref: str, person_ref: str | None = None, concept_id: str | None = None, gap_concept_id=None,
+) -> ApplicationPositioningGeneration:
+    """`person_ref` (a canonical/partial-evidence or user-supplied-context
+    ref) is paired with the role-only `ref` on every block the hardening note
+    requires person-side backing for. `gaps_and_cautions` deliberately never
+    gets `person_ref` — a gap/caution is the one exempt block and may be
+    grounded in role-side context alone."""
+    refs = [ref, person_ref] if person_ref else [ref]
     return ApplicationPositioningGeneration(
-        positioning_statement=SourcedText(text="Strong fit for this role.", source_refs=[ref]),
-        themes=[PositioningTheme(title="Track record", message="Relevant delivery experience.", source_refs=[ref])],
+        positioning_statement=SourcedText(text="Strong fit for this role.", source_refs=refs),
+        themes=[PositioningTheme(title="Track record", message="Relevant delivery experience.", source_refs=refs)],
         requirements_to_lead_with=(
-            [PositioningRequirementToLead(concept_id=concept_id, reason="Directly evidenced.", source_refs=[ref])] if concept_id else []
+            [PositioningRequirementToLead(concept_id=concept_id, reason="Directly evidenced.", source_refs=refs)] if concept_id else []
         ),
         gaps_and_cautions=([PositioningGapOrCaution(concept_id=gap_concept_id, message="Some uncertainty.", source_refs=[ref])] if gap_concept_id else []),
         language_to_mirror=["stakeholder management"],
@@ -179,6 +192,9 @@ def _positioning_output(*, ref: str, concept_id: str | None = None, gap_concept_
 
 
 def _cv_output(*, ref: str, episode_id: str) -> ApplicationCVGeneration:
+    # `ref` is always a profile_episode:<id> ref at every call site — already
+    # canonical_evidence, so every block here already satisfies the
+    # person-side hardening rule with no separate person_ref needed.
     return ApplicationCVGeneration(
         profile_summary=SourcedText(text="Experienced actuarial professional.", source_refs=[ref]),
         experience=[CVExperienceEntry(episode_id=episode_id, bullets=[CVExperienceBullet(text="Led Solvency II reporting.", source_refs=[ref])])],
@@ -187,15 +203,19 @@ def _cv_output(*, ref: str, episode_id: str) -> ApplicationCVGeneration:
     )
 
 
-def _cover_letter_output(*, ref: str) -> ApplicationCoverLetterGeneration:
-    block = CoverLetterBlock(text="Relevant experience.", source_refs=[ref])
+def _cover_letter_output(*, ref: str, person_ref: str) -> ApplicationCoverLetterGeneration:
+    block = CoverLetterBlock(text="Relevant experience.", source_refs=[ref, person_ref])
     return ApplicationCoverLetterGeneration(salutation="Dear Hiring Manager,", opening=block, body=[block], closing=block)
 
 
-def _supporting_statement_output(*, ref: str, concept_id: str | None = None) -> ApplicationSupportingStatementGeneration:
-    block = CoverLetterBlock(text="Directly relevant experience.", source_refs=[ref])
+def _supporting_statement_output(
+    *, ref: str, person_ref: str, concept_id: str | None = None, is_gap_or_caution: bool = False,
+) -> ApplicationSupportingStatementGeneration:
+    block = CoverLetterBlock(text="Directly relevant experience.", source_refs=[ref, person_ref])
     return ApplicationSupportingStatementGeneration(
-        opening=block, sections=[SupportingStatementSection(heading="Solvency II", concept_id=concept_id, paragraphs=[block])], gaps_addressed=[],
+        opening=block,
+        sections=[SupportingStatementSection(heading="Solvency II", concept_id=concept_id, is_gap_or_caution=is_gap_or_caution, paragraphs=[block])],
+        gaps_addressed=[],
     )
 
 
@@ -364,7 +384,7 @@ def test_generate_creates_a_draft_never_active(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
 
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={"guidance": "Be concise."})
     assert resp.status_code == 200
@@ -385,7 +405,7 @@ def test_regenerate_supersedes_only_prior_draft_never_active(client, monkeypatch
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
 
     first = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     adopted = client.post(f"/api/applications/{setup['application_id']}/artifacts/{first['artifact']['id']}/adopt").json()
@@ -410,7 +430,7 @@ def test_adopt_supersedes_prior_active(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
 
     d1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     a1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/{d1['artifact']['id']}/adopt").json()
@@ -427,7 +447,7 @@ def test_discard_leaves_active_untouched(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
 
     d1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     a1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/{d1['artifact']['id']}/adopt").json()
@@ -454,7 +474,7 @@ def test_manual_edit_creates_user_edit_draft_preserves_generated_history(client,
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
 
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     generated_id = generated["artifact"]["id"]
@@ -481,7 +501,7 @@ def test_manual_edit_rejects_wrong_shape(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
 
     resp = client.post(
@@ -495,7 +515,7 @@ def test_edit_on_superseded_version_is_409(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     d1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{d1['artifact']['id']}/adopt")  # d1 -> active
     d2 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
@@ -512,7 +532,7 @@ def test_history_endpoint_retains_every_version(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     d1 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{d1['artifact']['id']}/adopt")
     client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
@@ -555,9 +575,13 @@ def test_gaps_and_cautions_accepts_a_known_legacy_concept(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _legacy_only_role(cur)
         ref = f"role_requirement_legacy:{setup['legacy_concept_id']}"
+        person_ref = f"profile_episode:{setup['episode_id']}"
     # no accepted concept exists on this role at all, so requirements_to_lead_with
     # must stay empty — only gaps_and_cautions may cite the legacy concept.
-    ok = _positioning_output(ref=ref, gap_concept_id=setup["legacy_concept_id"])
+    # gaps_and_cautions itself is deliberately given only the role-only `ref`
+    # (never person_ref) — a gap is exempt from the person-side requirement
+    # (docs/35 hardening note) and this proves that exemption still works.
+    ok = _positioning_output(ref=ref, person_ref=person_ref, gap_concept_id=setup["legacy_concept_id"])
     monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(ok))
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
     assert resp.status_code == 200
@@ -579,10 +603,12 @@ def test_supporting_statement_rejects_unknown_section_concept(client, monkeypatc
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    bad = _supporting_statement_output(ref=ref, concept_id=str(uuid.uuid4()))
+        person_ref = f"profile_claim:{setup['claim_id']}"
+    bad = _supporting_statement_output(ref=ref, person_ref=person_ref, concept_id=str(uuid.uuid4()))
     monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/supporting_statement/generate", json={})
     assert resp.status_code == 422
+    assert "concept_id" in resp.text
 
 
 # --- CV chronology safeguard -------------------------------------------------
@@ -640,7 +666,7 @@ def test_fresh_artifact_is_not_stale(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{generated['artifact']['id']}/adopt")
 
@@ -652,7 +678,7 @@ def test_artifact_becomes_stale_when_application_note_changes(client, monkeypatc
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{generated['artifact']['id']}/adopt")
 
@@ -667,7 +693,7 @@ def test_artifact_becomes_stale_when_profile_claim_mapping_changes(client, monke
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{generated['artifact']['id']}/adopt")
 
@@ -685,7 +711,7 @@ def test_cv_becomes_stale_when_active_positioning_changes(client, monkeypatch):
         pref = f"role_requirement:{setup['concept_id']}"
         cvref = f"profile_episode:{setup['episode_id']}"
 
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=pref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=pref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     pos_draft = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{pos_draft['artifact']['id']}/adopt")
 
@@ -695,7 +721,7 @@ def test_cv_becomes_stale_when_active_positioning_changes(client, monkeypatch):
     assert cv_active["artifact"]["stale"] is False
 
     # adopt a freshly generated (superseding) positioning draft
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=pref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=pref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     pos_draft2 = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{pos_draft2['artifact']['id']}/adopt")
 
@@ -710,7 +736,7 @@ def test_guidance_alone_does_not_make_a_prior_version_look_stale(client, monkeyp
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(
         f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={"guidance": "Keep it formal."}
     ).json()
@@ -734,7 +760,7 @@ def test_generation_never_writes_profile360_or_assertions_or_requirement_claims(
         cur.execute("SELECT COUNT(*) AS n FROM jobber.requirement_claim")
         requirement_claims_before = cur.fetchone()["n"]
 
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
 
     with db.db_cursor() as cur:
@@ -750,7 +776,7 @@ def test_generation_never_changes_application_status(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     client.post(f"/api/applications/{setup['application_id']}/artifacts/{generated['artifact']['id']}/adopt")
 
@@ -763,7 +789,7 @@ def test_application_note_used_in_generation_remains_a_plain_note(client, monkey
         setup = _grounded_role(cur)
         note_id = _note(cur, setup["application_id"], concept_id=setup["concept_id"], note_type="evidence_example", text="Shipped an ORSA once.")
         ref = f"application_note:{note_id}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
     assert resp.status_code == 200
 
@@ -779,7 +805,7 @@ def test_raw_output_never_returned_by_normal_read(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ref = f"role_requirement:{setup['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup['claim_id']}", concept_id=setup["concept_id"])))
     generated = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={}).json()
     assert "raw_output" not in generated["artifact"]
 
@@ -795,7 +821,7 @@ def test_adopt_on_another_applications_artifact_is_rejected(client, monkeypatch)
         setup_a = _grounded_role(cur)
         setup_b = _grounded_role(cur)
         ref = f"role_requirement:{setup_a['concept_id']}"
-    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, concept_id=setup_a["concept_id"])))
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(_positioning_output(ref=ref, person_ref=f"profile_claim:{setup_a['claim_id']}", concept_id=setup_a["concept_id"])))
     draft = client.post(f"/api/applications/{setup_a['application_id']}/artifacts/positioning/generate", json={}).json()
 
     resp = client.post(f"/api/applications/{setup_b['application_id']}/artifacts/{draft['artifact']['id']}/adopt")
@@ -812,3 +838,139 @@ def test_generate_on_unknown_artifact_type_is_404(client):
         setup = _grounded_role(cur)
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/not_a_real_type/generate", json={})
     assert resp.status_code == 404
+
+
+# --- hardening: grounding sufficiency (see docs/35 hardening note) ----------
+#
+# Rejecting an *unknown* ref/id (tested above) isn't the whole story: a
+# response can cite only ids that genuinely exist and still be a problem —
+# an empty source_refs list, or an applicant-facing claim backed only by
+# role-side/strategy context with nothing person-side behind it at all.
+
+
+def test_empty_source_refs_is_rejected(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    bad = ApplicationPositioningGeneration(
+        positioning_statement=SourcedText(text="Strong fit for this role.", source_refs=[]),
+        themes=[], requirements_to_lead_with=[], gaps_and_cautions=[], language_to_mirror=[], avoid_claiming=[],
+    )
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
+    assert resp.status_code == 422
+    assert "no source_refs" in resp.text
+    with db.db_cursor() as cur:
+        assert artifacts._draft_row(cur, setup["application_id"], "positioning") is None
+
+
+def test_positioning_statement_with_only_role_side_source_is_rejected(client, monkeypatch):
+    """A claim about the applicant ('Strong fit for this role') citing only a
+    role_requirement ref — never anything person-side — must be rejected: a
+    role requirement may supplement such a claim, but can't be its sole
+    source."""
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+        ref = f"role_requirement:{setup['concept_id']}"
+    bad = _positioning_output(ref=ref, concept_id=setup["concept_id"])  # no person_ref
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
+    assert resp.status_code == 422
+    assert "person-side source" in resp.text
+    with db.db_cursor() as cur:
+        assert artifacts._draft_row(cur, setup["application_id"], "positioning") is None
+
+
+def test_cv_bullet_with_only_role_side_source_is_rejected(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+        role_ref = f"role_requirement:{setup['concept_id']}"
+    bad = ApplicationCVGeneration(
+        profile_summary=SourcedText(text="Summary.", source_refs=[f"profile_episode:{setup['episode_id']}"]),
+        experience=[CVExperienceEntry(episode_id=setup["episode_id"], bullets=[CVExperienceBullet(text="Did the thing.", source_refs=[role_ref])])],
+        skills=[], omissions_or_cautions=[],
+    )
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/cv/generate", json={})
+    assert resp.status_code == 422
+    assert "person-side source" in resp.text
+
+
+def test_gaps_and_cautions_remains_exempt_from_person_side_requirement(client, monkeypatch):
+    """The one deliberate exception: a gap/caution describes an *absence* of
+    applicant evidence, so it may be grounded in role-side context alone."""
+    with db.db_cursor() as cur:
+        setup = _legacy_only_role(cur)
+        ref = f"role_requirement_legacy:{setup['legacy_concept_id']}"
+        person_ref = f"profile_episode:{setup['episode_id']}"
+    ok = _positioning_output(ref=ref, person_ref=person_ref, gap_concept_id=setup["legacy_concept_id"])
+    assert ok.gaps_and_cautions[0].source_refs == [ref]  # role-side only, by construction
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(ok))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
+    assert resp.status_code == 200
+
+
+def test_supporting_statement_section_rejects_legacy_concept_when_not_marked_gap(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _legacy_only_role(cur)
+        ref = f"role_requirement_legacy:{setup['legacy_concept_id']}"
+        person_ref = f"profile_episode:{setup['episode_id']}"
+    bad = _supporting_statement_output(ref=ref, person_ref=person_ref, concept_id=setup["legacy_concept_id"], is_gap_or_caution=False)
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/supporting_statement/generate", json={})
+    assert resp.status_code == 422
+    assert "is_gap_or_caution" in resp.text
+    with db.db_cursor() as cur:
+        assert artifacts._draft_row(cur, setup["application_id"], "supporting_statement") is None
+
+
+def test_supporting_statement_section_accepts_legacy_concept_when_marked_gap(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _legacy_only_role(cur)
+        ref = f"role_requirement_legacy:{setup['legacy_concept_id']}"
+        person_ref = f"profile_episode:{setup['episode_id']}"
+    ok = _supporting_statement_output(ref=ref, person_ref=person_ref, concept_id=setup["legacy_concept_id"], is_gap_or_caution=True)
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(ok))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/supporting_statement/generate", json={})
+    assert resp.status_code == 200
+
+
+def test_supporting_statement_section_still_accepts_an_accepted_concept_without_the_gap_flag(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+        ref = f"role_requirement:{setup['concept_id']}"
+        person_ref = f"profile_claim:{setup['claim_id']}"
+    ok = _supporting_statement_output(ref=ref, person_ref=person_ref, concept_id=setup["concept_id"], is_gap_or_caution=False)
+    monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(ok))
+    resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/supporting_statement/generate", json={})
+    assert resp.status_code == 200
+
+
+def test_partial_capability_coverage_is_categorised_as_partial_evidence():
+    """Regression for the categorisation bug the hardening note fixed: a
+    'partial' coverage status used to be grouped with 'evidenced' under
+    canonical_evidence — only a fully-met coverage may read as canonical."""
+    person_side = {
+        "mappings": [], "assertion": None,
+        "coverage": {
+            "capability_concept_id": "cap-1", "status": "partial",
+            "trace": {"status_reason": {"code": "partial", "message": "Some but not all core components evidenced."}},
+        },
+    }
+    sources = gen._mapping_sources("Capital Management", person_side)
+    coverage_sources = [s for s in sources if s.kind == "profile_capability_coverage"]
+    assert len(coverage_sources) == 1
+    assert coverage_sources[0].category == gen.CATEGORY_PARTIAL_EVIDENCE
+
+
+def test_evidenced_capability_coverage_remains_canonical_evidence():
+    person_side = {
+        "mappings": [], "assertion": None,
+        "coverage": {
+            "capability_concept_id": "cap-1", "status": "evidenced",
+            "trace": {"status_reason": {"code": "evidenced", "message": "All core components evidenced."}},
+        },
+    }
+    sources = gen._mapping_sources("Capital Management", person_side)
+    coverage_sources = [s for s in sources if s.kind == "profile_capability_coverage"]
+    assert len(coverage_sources) == 1
+    assert coverage_sources[0].category == gen.CATEGORY_CANONICAL_EVIDENCE

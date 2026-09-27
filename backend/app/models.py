@@ -939,6 +939,13 @@ class ApplicationCoverLetterGeneration(BaseModel):
 class SupportingStatementSection(BaseModel):
     heading: str
     concept_id: Optional[str] = None
+    # Marks a section that exists to address a gap/uncertainty rather than to
+    # lead with a met requirement. A gap section's concept_id may name any
+    # concept the applicant was shown (including a legacy/unreviewed one, or
+    # one with no evidence at all) — a non-gap section's concept_id must be a
+    # reviewed, accepted requirement (application_artifacts.py validates
+    # this distinction; see docs/35's hardening note).
+    is_gap_or_caution: bool = False
     paragraphs: list[CoverLetterBlock] = []
 
 

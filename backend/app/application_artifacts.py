@@ -30,6 +30,9 @@ from fastapi import HTTPException
 from . import profile360_reader as p360
 from .ai import AITaskError, run_json_task
 from .application_generation import (
+    CATEGORY_CANONICAL_EVIDENCE,
+    CATEGORY_PARTIAL_EVIDENCE,
+    CATEGORY_USER_SUPPLIED,
     ApplicationGenerationSubjectError,
     GenerationContext,
     build_application_generation_context,
@@ -38,6 +41,12 @@ from .application_generation import (
     generation_readiness_summary,
     get_active_positioning,
 )
+
+# A claim about the applicant must be backed by at least one source in one of
+# these categories — role-side context (the role's own requirements/posting
+# text) and strategy (the adopted positioning brief) may supplement such a
+# claim but can never be its *only* source (docs/35 hardening note).
+_PERSON_SIDE_CATEGORIES = {CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED}
 from .db import db_cursor, to_json_param
 from .models import (
     ApplicationCoverLetterGeneration,
@@ -341,11 +350,31 @@ def _collect_by_key(node, key: str) -> set[str]:
     return found
 
 
+def _require_grounded(label: str, source_refs: list, ctx: GenerationContext, *, require_person_side: bool) -> None:
+    """Every generated factual block must cite at least one source — an
+    empty `source_refs` list is rejected exactly like an invented ref, never
+    silently accepted as "just prose" (docs/35 hardening note). When
+    `require_person_side` is set (every applicant-facing claim), at least one
+    of those refs must fall in `_PERSON_SIDE_CATEGORIES` — a role requirement
+    or the positioning strategy may supplement the claim, but citing only
+    role-side/strategy sources for something asserted *about the applicant*
+    is rejected."""
+    if not source_refs:
+        raise ApplicationArtifactValidationError(f"{label} has no source_refs — every generated factual block must cite at least one source")
+    if require_person_side and not ({ctx.category_for_ref(ref) for ref in source_refs} & _PERSON_SIDE_CATEGORIES):
+        raise ApplicationArtifactValidationError(
+            f"{label} cites only role-side/strategy sources — a claim about the applicant needs at least one "
+            "person-side source (accepted/partial evidence or application/user input)"
+        )
+
+
 def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> dict:
     """Rejects (raises, never silently filters) any source_ref, episode_id,
     or concept_id the model returned that wasn't actually offered to it —
     the model cannot establish grounding merely by inventing a
-    plausible-looking id (docs/35 §7)."""
+    plausible-looking id (docs/35 §7) — and, per the hardening note, rejects
+    an ungrounded or applicant-side-unsupported factual block even when
+    every id it cites is individually valid."""
     data = output.model_dump()
 
     used_refs = _collect_by_key(data, "source_refs")
@@ -359,6 +388,13 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
         if unknown_episodes:
             raise ApplicationArtifactValidationError(f"response cited unknown episode_id(s): {sorted(unknown_episodes)}")
 
+        _require_grounded("profile_summary", data["profile_summary"]["source_refs"], ctx, require_person_side=True)
+        for entry in data.get("experience", []):
+            for bullet in entry.get("bullets", []):
+                _require_grounded(f"bullet for episode {entry['episode_id']!r}", bullet["source_refs"], ctx, require_person_side=True)
+        for skill in data.get("skills", []):
+            _require_grounded(f"skill {skill['text']!r}", skill["source_refs"], ctx, require_person_side=True)
+
     if artifact_type == "positioning":
         lead_ids = {r["concept_id"] for r in data.get("requirements_to_lead_with", [])}
         unknown_lead = lead_ids - ctx.accepted_concept_ids()
@@ -371,11 +407,39 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
         if unknown_gap:
             raise ApplicationArtifactValidationError(f"gaps_and_cautions cited unknown concept_id(s): {sorted(unknown_gap)}")
 
+        _require_grounded("positioning_statement", data["positioning_statement"]["source_refs"], ctx, require_person_side=True)
+        for theme in data.get("themes", []):
+            _require_grounded(f"theme {theme['title']!r}", theme["source_refs"], ctx, require_person_side=True)
+        for req in data.get("requirements_to_lead_with", []):
+            _require_grounded(f"requirement_to_lead_with {req['concept_id']!r}", req["source_refs"], ctx, require_person_side=True)
+        for gap in data.get("gaps_and_cautions", []):
+            # A gap/caution describes an absence of applicant evidence, so —
+            # unlike every other block above — it may legitimately be
+            # grounded in role-side context alone; it must still cite
+            # *something* (rule 1 still applies).
+            _require_grounded("gaps_and_cautions entry", gap["source_refs"], ctx, require_person_side=False)
+
+    if artifact_type == "cover_letter":
+        _require_grounded("opening", data["opening"]["source_refs"], ctx, require_person_side=True)
+        for i, block in enumerate(data.get("body", [])):
+            _require_grounded(f"body paragraph {i + 1}", block["source_refs"], ctx, require_person_side=True)
+        _require_grounded("closing", data["closing"]["source_refs"], ctx, require_person_side=True)
+
     if artifact_type == "supporting_statement":
-        section_ids = {s["concept_id"] for s in data.get("sections", []) if s.get("concept_id")}
-        unknown_sections = section_ids - ctx.known_concept_ids()
-        if unknown_sections:
-            raise ApplicationArtifactValidationError(f"sections cited unknown concept_id(s): {sorted(unknown_sections)}")
+        _require_grounded("opening", data["opening"]["source_refs"], ctx, require_person_side=True)
+        for section in data.get("sections", []):
+            concept_id = section.get("concept_id")
+            if concept_id:
+                if section.get("is_gap_or_caution"):
+                    if concept_id not in ctx.known_concept_ids():
+                        raise ApplicationArtifactValidationError(f"section cited unknown concept_id: {concept_id!r}")
+                elif concept_id not in ctx.accepted_concept_ids():
+                    raise ApplicationArtifactValidationError(
+                        f"section concept_id {concept_id!r} is not a reviewed/accepted requirement — mark "
+                        "is_gap_or_caution=true to reference a legacy or unevidenced concept"
+                    )
+            for i, paragraph in enumerate(section.get("paragraphs", [])):
+                _require_grounded(f"section {section['heading']!r} paragraph {i + 1}", paragraph["source_refs"], ctx, require_person_side=True)
 
     return data
 

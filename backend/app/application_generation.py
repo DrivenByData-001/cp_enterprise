@@ -307,7 +307,11 @@ def _mapping_sources(concept_label: str, person_side: dict) -> list[SourceEntry]
         message = status_reason.get("message")
         if message:
             concept_id_for_ref = coverage.get("capability_concept_id")
-            category = CATEGORY_CANONICAL_EVIDENCE if coverage.get("status") in ("evidenced", "partial") else CATEGORY_PARTIAL_EVIDENCE
+            # Only a fully-met ('evidenced') coverage is canonical evidence —
+            # 'partial' (and anything weaker) must read as partial_evidence,
+            # never be handed to a generator as if it were fully established
+            # (docs/35 hardening note).
+            category = CATEGORY_CANONICAL_EVIDENCE if coverage.get("status") == "evidenced" else CATEGORY_PARTIAL_EVIDENCE
             out.append(SourceEntry(
                 ref=f"profile_capability_coverage:{concept_id_for_ref}", kind="profile_capability_coverage",
                 category=category, label=f"{concept_label}: capability coverage ({coverage.get('status')})",
@@ -453,6 +457,16 @@ class GenerationContext:
 
     def known_source_refs(self) -> set[str]:
         return {s.ref for s in self.sources}
+
+    def category_for_ref(self, ref: str) -> str | None:
+        """The epistemic category of a ref already known to be in this
+        context's own registry (see `known_source_refs`) — used to check that
+        an applicant-facing claim cites at least one person-side source
+        (canonical/partial evidence or user-supplied context), never only
+        role-side context or positioning strategy (docs/35 hardening note)."""
+        if not hasattr(self, "_category_by_ref"):
+            self._category_by_ref = {s.ref: s.category for s in self.sources}
+        return self._category_by_ref.get(ref)
 
     def known_episode_ids(self) -> set[str]:
         return {str(e["id"]) for e in self.bundle.episodes}

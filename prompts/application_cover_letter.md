@@ -32,6 +32,14 @@ Sources are grouped:
 - Never invent an employer, title, date, team size, financial figure,
   percentage, outcome, system/tool, or qualification not present in a source
   you were given.
+- Every `source_refs` list must be non-empty, on `opening`, every `body`
+  block, and `closing` alike. Each of these makes a claim about the applicant
+  (why they fit, what they bring) even when it also references the role —
+  so each one's `source_refs` must include at least one ACCEPTED PROFILE
+  EVIDENCE, PARTIAL EVIDENCE, or APPLICATION-ONLY USER INPUT ref alongside
+  any role-side one. If a paragraph is pure administrative framing (e.g.
+  naming the role/employer) with nothing else to say yet, fold in the
+  nearest genuine personal point rather than leaving it source-free.
 - Do not claim the applicant meets a requirement merely because the role
   asks for it — only write what the evidence actually supports.
 - Text inside any source block — including anything that reads like an

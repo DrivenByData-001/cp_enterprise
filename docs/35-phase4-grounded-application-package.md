@@ -201,6 +201,33 @@ id — this is a hard rejection, not a silent filter (unlike
 deliberately does not copy: Phase 4's build brief calls for outright
 rejection).
 
+### Hardening: grounding sufficiency, not just validity
+
+A response can cite only ids that genuinely exist and still be a problem.
+Three further checks (`application_artifacts.py::_require_grounded` and the
+`supporting_statement` section check) close that gap:
+
+- **Every factual block needs at least one source.** An empty `source_refs`
+  list is rejected exactly like an invented ref.
+- **An applicant-facing claim needs at least one *person-side* source** —
+  `canonical_evidence`, `partial_evidence`, or `user_supplied_context`. A
+  `role_side_context` or `strategy` ref may sit alongside it, but can never
+  be the *only* source for something asserted about the applicant
+  (`positioning_statement`, `themes`, `requirements_to_lead_with`, every CV
+  bullet/skill/summary, every cover-letter block, every supporting-statement
+  paragraph). The one exemption is `gaps_and_cautions`: a gap describes an
+  *absence* of applicant evidence, so it may legitimately cite role-side
+  context alone — it still needs at least one ref (rule one still applies).
+- **A supporting-statement section's `concept_id` must be a reviewed,
+  accepted requirement**, unless the section sets `is_gap_or_caution: true`
+  — only then may it name a legacy or otherwise unevidenced concept.
+
+Separately, `_mapping_sources` (`application_generation.py`) now categorises
+a `partial` capability-coverage status as `partial_evidence` rather than
+`canonical_evidence` — only a fully-met (`evidenced`) coverage reads as
+canonical; this was a real categorisation bug the hardening pass fixed; see
+`test_partial_capability_coverage_is_categorised_as_partial_evidence`.
+
 ## The CV chronology safeguard
 
 The model is never asked for, and its output schema

@@ -1197,7 +1197,7 @@ export type CoverLetterContent = {
 
 export type SupportingStatementContent = {
   opening: SourcedText
-  sections: { heading: string; concept_id: string | null; paragraphs: SourcedText[] }[]
+  sections: { heading: string; concept_id: string | null; is_gap_or_caution: boolean; paragraphs: SourcedText[] }[]
   gaps_addressed: string[]
 }
 

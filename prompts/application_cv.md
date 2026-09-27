@@ -44,6 +44,12 @@ information in a bullet's text either.
 - Never invent an employer, title, date, team size, financial figure,
   percentage, outcome, system/tool, or qualification not present in a source
   you were given.
+- Every `source_refs` list must be non-empty. Every one of `profile_summary`,
+  every bullet, and every skill is a claim *about the applicant*, so each
+  one's `source_refs` must include at least one ACCEPTED PROFILE EVIDENCE or
+  PARTIAL EVIDENCE ref (a `profile_episode`/`profile_claim`/`profile_snapshot`
+  ref, or an APPLICATION-ONLY USER INPUT ref) — a role requirement alone is
+  never enough to source a CV claim.
 - Do not add a metric (a number, a percentage, a scale) to a bullet merely
   because strong CV prose usually has one. If the evidence only supports a
   qualitative statement, write it qualitatively.
