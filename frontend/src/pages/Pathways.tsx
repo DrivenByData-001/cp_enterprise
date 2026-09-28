@@ -20,6 +20,7 @@ import {
 import { PlanningAssumptionEditor } from '../components/economics/PlanningAssumption'
 import { DayInTheLife } from '../components/economics/DayInTheLife'
 import { AlignmentFullSection, AlignmentOpportunityHeader, RelationshipBadge } from '../components/opportunity/AlignmentSection'
+import { ArchetypeEvidenceInline } from '../components/market/ArchetypeEvidencePanel'
 import { formatMoney } from '../lib/money'
 
 type Perspective = 'economics' | 'fit' | 'transition' | 'day'
@@ -275,6 +276,14 @@ function DirectRouteCard({ route }: { route: DirectRoute }) {
             {' · '}
             Vocabulary mapping: {route.fit.mapping_complete ? 'complete' : `${route.fit.unmapped_requirements} unresolved`}
           </div>
+          <div style={{ marginTop: 12 }}>
+            <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', marginBottom: 4 }}>Market evidence</div>
+            {route.market_evidence ? (
+              <ArchetypeEvidenceInline evidence={{ available: true, ...route.market_evidence }} />
+            ) : (
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>No reviewed archetype assignment — market-pattern support is unavailable for this role.</p>
+            )}
+          </div>
         </div>
       }
       transition={<TransitionPanel transition={route.transition} />}
@@ -323,6 +332,14 @@ function IntermediateCard({ node }: { node: IntermediateArchetypeRoute }) {
             {node.fit.review_complete
               ? 'complete'
               : node.fit.review_blockers.map((b) => `${b.count} ${b.label}`).join('; ')}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', marginBottom: 4 }}>Market evidence</div>
+            {node.market_evidence ? (
+              <ArchetypeEvidenceInline evidence={{ available: true, ...node.market_evidence }} />
+            ) : (
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>No reviewed archetype assignment — market-pattern support is unavailable for this role.</p>
+            )}
           </div>
         </div>
       }
@@ -698,6 +715,10 @@ export default function Pathways() {
             onRebuild={rebuildEconomics}
             busy={rebuilding}
           />
+
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+            {result.representativeness.reason} <Link to="/market/coverage">See full market coverage</Link>
+          </p>
 
           {result.incomplete.length > 0 && (
             <div className="card" style={{ padding: 12, borderLeft: '3px solid var(--warning)' }}>

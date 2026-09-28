@@ -65,6 +65,7 @@ from time import perf_counter
 from fastapi.encoders import jsonable_encoder
 
 from . import compensation_resolver as resolver
+from . import market_coverage
 from .db import to_json_param
 from .economics_freshness import economics_freshness
 from .embeddings import ensure_profile_embedding, get_embedding
@@ -97,6 +98,11 @@ METHOD = {
         "A role that involves a capability is an opportunity to develop it, not proof you will acquire it. "
         "Historical postings describe role patterns, not confirmed vacancies. Nothing here estimates hiring "
         "probability, learning difficulty or time to transition."
+    ),
+    "market_evidence": (
+        "market_evidence (Phase 8, docs/39) on the direct route and each intermediate archetype describes how "
+        "much corpus evidence backs that archetype pattern — context alongside the route, never a route-"
+        "confidence score, and never a reason to add or remove a route."
     ),
 }
 
@@ -256,7 +262,7 @@ def _transition(assessment: dict, actions: dict | None) -> dict:
 # --- Direct route -----------------------------------------------------------
 
 def _direct_route(cur, target, target_requirements, statuses, target_review, mapping, compensation,
-                  earnings_state, actions) -> dict:
+                  earnings_state, actions, freshness) -> dict:
     """You -> target, assessed with exactly the same evidence statuses every
     other node uses (so the direct route and an intermediate route can never
     disagree about whether a capability is evidenced)."""
@@ -320,6 +326,11 @@ def _direct_route(cur, target, target_requirements, statuses, target_review, map
         "evidence_coverage": coverage, "evidenced_requirements": evidenced,
         "requirements_total": len(requirements), "target_gaps_addressed": [],
     }
+    target_archetype_id = str(target["archetype_concept_id"]) if target["archetype_concept_id"] else None
+    market_evidence = (
+        market_coverage.archetype_support_bulk(cur, [target_archetype_id], freshness=freshness)[target_archetype_id]
+        if target_archetype_id else None
+    )
     return {
         "kind": "direct",
         "role_instance_id": str(target["id"]),
@@ -329,6 +340,7 @@ def _direct_route(cur, target, target_requirements, statuses, target_review, map
             {"id": str(target["archetype_concept_id"]), "name": target["archetype_name"]}
             if target["archetype_concept_id"] else None
         ),
+        "market_evidence": market_evidence,
         "state": state,
         "state_reason": reason,
         "fit": {
@@ -381,6 +393,11 @@ def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: 
         (archetype_ids,),
     )
     archetypes = {str(r["id"]): dict(r) for r in cur.fetchall()}
+    # Phase 8 (docs/39 build §24): one bulk call for every intermediate
+    # archetype on this page, never a per-node round trip — archetype_ids is
+    # bounded by the structural engine's own stepping-stone output, not by
+    # role count.
+    market_evidence_by_archetype = market_coverage.archetype_support_bulk(cur, archetype_ids, freshness=freshness)
 
     cur.execute(
         "SELECT archetype_concept_id FROM jobber.archetype_context_enrichment "
@@ -463,6 +480,7 @@ def _group_by_archetype(cur, ranked: list[dict], context: dict, earnings_state: 
                 "archetype_name": archetype["canonical_name"],
                 "seniority_band": archetype["seniority_band"],
                 "typical_market": archetype["typical_market"],
+                "market_evidence": market_evidence_by_archetype.get(archetype_id),
                 "state": state,
                 "state_reason": reason,
                 "supporting_posting_ids": [p["id"] for p in postings],
@@ -749,7 +767,7 @@ def pathways_for_target(cur, target_id: str, *, market_id: str | None = None, cu
     direct = _direct_route(
         cur, target, assessed["target_requirements"], assessed["statuses"],
         assessed["target_review"], assessed["target_mapping"],
-        target_compensation, earnings_state, actions,
+        target_compensation, earnings_state, actions, freshness,
     )
     intermediates = _group_by_archetype(cur, assessed["ranked"], context, earnings_state, actions, freshness)
     unclassified = [
@@ -810,6 +828,7 @@ def pathways_for_target(cur, target_id: str, *, market_id: str | None = None, cu
             "unclassified_supporting_postings": unclassified,
             "gap_value": gap_value,
             "economics_freshness": freshness,
+            "representativeness": market_coverage.REPRESENTATIVENESS_UNKNOWN,
             "gates": gates,
             "incomplete": incomplete,
             "review_blockers": {

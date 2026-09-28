@@ -9,6 +9,7 @@ import type {
   YouToOpportunity,
 } from '../../lib/api'
 import { CompensationFigure, PersonalComparisonPanel } from '../economics/Compensation'
+import { ArchetypeEvidenceInline } from '../market/ArchetypeEvidencePanel'
 
 // Phase 7 (docs/38): `You -> Opportunity -> Target`. This one file is the
 // only place that renders an OpportunityAlignment response — Role Detail,
@@ -395,6 +396,15 @@ export function AlignmentFullSection({
             Economics
           </h3>
           <AlignmentEconomicsPanel economics={alignment.economics} />
+        </div>
+      )}
+
+      {alignment.market_evidence_context && (
+        <div className="card" style={{ marginBottom: 12 }} aria-labelledby={`${headingId}-market-evidence`}>
+          <h3 id={`${headingId}-market-evidence`} style={{ marginTop: 0, fontSize: 14 }}>
+            Market evidence for this pattern
+          </h3>
+          <ArchetypeEvidenceInline evidence={alignment.market_evidence_context} />
         </div>
       )}
 

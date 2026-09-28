@@ -228,6 +228,24 @@ def test_trends_routes_smoke(client):
     assert "sparse_insufficient_evidence" in methodology.json()["text"] or "sparse" in methodology.json()["text"]
 
 
+# --- Phase 8: requirement-trend evidence_depth (docs/39 build §20) ---------
+
+def test_requirement_trend_route_exposes_evidence_depth_without_changing_classification(client):
+    with db.db_cursor() as cur:
+        concept_id = _concept(cur, "Depth Concept", type_code="tool")
+        _role(cur, "R1", posting_date="2020-01-01", skills=[_skill("Depth Concept")])
+
+    resp = client.get("/api/trends/requirement-trend", params={"concept_id": concept_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "evidence_depth" in body
+    assert body["evidence_depth"]["state"] in ("insufficient", "thin", "supported", "broader_support")
+    assert body["evidence_depth"]["usable_periods"] == body["classification"]["usable_periods"]
+    # Sparse-sample classification is untouched by evidence_depth's existence.
+    assert body["classification"]["label"] == "sparse_insufficient_evidence"
+    assert body["evidence_depth"]["state"] == "insufficient"
+
+
 def test_trends_requirement_endpoints_require_exactly_one_key(client):
     resp = client.get("/api/trends/requirement-trend")
     assert resp.status_code == 400

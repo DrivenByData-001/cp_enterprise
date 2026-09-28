@@ -201,19 +201,25 @@ function CandidateCard({
 }
 
 function CorpusDisclosurePanel({ disclosure }: { disclosure: CareerDirectionCorpusDisclosure }) {
+  const topCountry = disclosure.country_concentration[0]
   return (
     <div className="card" style={{ fontSize: 12, marginBottom: 12 }}>
       <strong className="secondary" style={{ display: 'block', marginBottom: 4 }}>About this evidence</strong>
       <span className="muted">
         {disclosure.total_observed_postings} observed postings captured, {disclosure.postings_with_archetype_assignment} with an archetype
-        assigned ({disclosure.postings_with_reviewed_requirements} with reviewed requirements); {disclosure.supported_archetypes} of{' '}
+        assigned ({disclosure.postings_with_reviewed_requirements} with reviewed requirements); {disclosure.postings_with_unknown_posting_date}{' '}
+        with an unknown posting date; {disclosure.supported_archetypes} of{' '}
         {disclosure.active_archetypes_total} archetypes have at least one assigned posting; {disclosure.archetypes_with_compensation_evidence}{' '}
-        {disclosure.archetypes_with_compensation_evidence === 1 ? 'has' : 'have'} comparable compensation evidence. Observed corpus only —
-        not a claim of full market coverage.
+        {disclosure.archetypes_with_compensation_evidence === 1 ? 'has' : 'have'} comparable compensation evidence.
+        {topCountry && ` Concentrated in ${topCountry.label} (${topCountry.count} posting${topCountry.count === 1 ? '' : 's'}).`}
       </span>
+      <p className="muted" style={{ margin: '6px 0 0' }}>{disclosure.representativeness.reason}</p>
       {!disclosure.economics_freshness.fresh && disclosure.economics_freshness.reason && (
         <p className="muted" style={{ margin: '6px 0 0' }}>{disclosure.economics_freshness.reason}</p>
       )}
+      <p style={{ margin: '6px 0 0' }}>
+        <Link to="/market/coverage" style={{ fontSize: 12 }}>See full market coverage</Link>
+      </p>
     </div>
   )
 }

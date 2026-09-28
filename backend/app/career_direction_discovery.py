@@ -32,9 +32,9 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from . import market_coverage
 from . import profile360_reader as p360
 from .archetype_classification import active_archetype_catalogue
-from .economics_freshness import economics_freshness
 
 # Bounds (build §27 — no whole-corpus dump into the browser or the prompt).
 EPISODE_LIMIT = 40
@@ -318,7 +318,7 @@ def _target_sources(cur) -> list[SourceEntry]:
 # --- market / archetype evidence (build §10/§26) ----------------------------
 
 
-def _archetype_evidence(cur) -> tuple[list[SourceEntry], dict]:
+def _archetype_evidence(cur) -> list[SourceEntry]:
     """Bounded archetype catalogue plus assigned-posting counts, representative
     postings, reviewed-requirement coverage, derived demand and compensation
     evidence, and existing archetype context — every query here is a single
@@ -326,7 +326,7 @@ def _archetype_evidence(cur) -> tuple[list[SourceEntry], dict]:
     archetype/posting/capability)."""
     catalogue = active_archetype_catalogue(cur)[:ARCHETYPE_LIMIT]
     if not catalogue:
-        return [], {"supported_archetypes": 0}
+        return []
     ids = [a["id"] for a in catalogue]
 
     cur.execute(
@@ -470,49 +470,7 @@ def _archetype_evidence(cur) -> tuple[list[SourceEntry], dict]:
                         "postings): " + "; ".join(summary_points[:6]),
             ))
 
-    corpus = {"supported_archetypes": sum(1 for a in catalogue if posting_counts.get(a["id"], 0) > 0)}
-    return sources, corpus
-
-
-# --- basic corpus-evidence disclosure (build §10/§26) -----------------------
-
-
-def _corpus_disclosure(cur, archetype_corpus: dict) -> dict:
-    """Deterministic facts about the size/completeness of the corpus this
-    generation drew on — enough to stop a thin corpus from being presented as
-    comprehensive market truth (build §26). Not Phase 8's full Market
-    Coverage & Confidence product; no pseudo-confidence percentage is
-    computed anywhere here."""
-    cur.execute("SELECT COUNT(*) AS n FROM jobber.role_instance WHERE instance_type = 'observed_posting'")
-    total_postings = cur.fetchone()["n"]
-    cur.execute(
-        "SELECT COUNT(*) AS n FROM jobber.role_instance "
-        "WHERE instance_type = 'observed_posting' AND archetype_concept_id IS NOT NULL"
-    )
-    postings_with_archetype = cur.fetchone()["n"]
-    cur.execute(
-        "SELECT COUNT(*) AS n FROM jobber.role_instance ri WHERE ri.instance_type = 'observed_posting' AND EXISTS ("
-        "  SELECT 1 FROM jobber.requirement_claim rc WHERE rc.role_instance_id = ri.id "
-        "  AND rc.review_status = 'accepted' AND rc.superseded_by IS NULL)"
-    )
-    postings_with_reviewed_requirements = cur.fetchone()["n"]
-    cur.execute("SELECT COUNT(*) AS n FROM jobber.concept WHERE type_code = 'role_archetype' AND status = 'active'")
-    active_archetypes_total = cur.fetchone()["n"]
-    cur.execute(
-        "SELECT COUNT(DISTINCT archetype_concept_id) AS n FROM jobber.d_archetype_comp WHERE reference_comp IS NOT NULL"
-    )
-    archetypes_with_compensation = cur.fetchone()["n"]
-    freshness = economics_freshness(cur)
-
-    return {
-        "total_observed_postings": total_postings,
-        "postings_with_archetype_assignment": postings_with_archetype,
-        "postings_with_reviewed_requirements": postings_with_reviewed_requirements,
-        "active_archetypes_total": active_archetypes_total,
-        "supported_archetypes": archetype_corpus.get("supported_archetypes", 0),
-        "archetypes_with_compensation_evidence": archetypes_with_compensation,
-        "economics_freshness": {"state": freshness["state"], "fresh": freshness["fresh"], "reason": freshness["reason"]},
-    }
+    return sources
 
 
 # --- prompt rendering / injection boundary (build §16) ----------------------
@@ -605,8 +563,11 @@ def build_discovery_context(cur, *, dimensions: list, constraints, guidance: str
     while the AI provider call is in flight."""
     preference_summary = summarize_preferences(cur)
     person_sources, person_caveats = _person_sources(cur)
-    archetype_sources, archetype_corpus = _archetype_evidence(cur)
-    corpus_disclosure = _corpus_disclosure(cur, archetype_corpus)
+    archetype_sources = _archetype_evidence(cur)
+    # Phase 8 (docs/39): the shared, canonical Market Coverage service, never
+    # a second hand-rolled corpus-completeness computation — see
+    # market_coverage.discovery_corpus_disclosure's own docstring.
+    corpus_disclosure = market_coverage.discovery_corpus_disclosure(cur)
 
     sources = [
         *_direction_input_sources(dimensions, constraints, guidance),

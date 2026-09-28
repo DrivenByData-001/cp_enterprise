@@ -26,6 +26,7 @@ import CapabilityCoverage from './pages/CapabilityCoverage'
 import Trends from './pages/Trends'
 import Economics from './pages/Economics'
 import Pathways from './pages/Pathways'
+import MarketCoverage from './pages/MarketCoverage'
 
 // `/` used to be the Roles list. Old bookmarks/links carrying its query
 // params (`?period=current` etc.) must keep working as Opportunities links,
@@ -80,6 +81,7 @@ function App() {
         ['/space', 'Role map'],
         ['/trends', 'Trends'],
         ['/economics', 'Economics'],
+        ['/market/coverage', 'Market coverage'],
       ],
     },
   ]
@@ -134,6 +136,7 @@ function App() {
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
+        <Route path="/market/coverage" element={<MarketCoverage />} />
         <Route path="/pathways" element={<Pathways />} />
         <Route path="/pathways/:id" element={<Pathways />} />
         <Route path="/targets" element={<Targets />} />

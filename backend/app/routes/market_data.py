@@ -11,8 +11,9 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException, UploadFile
 
-from .. import market_analytics
+from .. import market_analytics, market_coverage
 from ..db import create_document, db_cursor
+from ..economics_freshness import economics_freshness
 from ..market_data_processing import (
     DOCUMENT_KIND,
     DocumentNotFoundError,
@@ -299,6 +300,18 @@ def market_analytics_summary(
         period_to=_parse_date_param(period_to, "period_to"),
     )
     with db_cursor() as cur:
-        return market_analytics.build_market_analytics_summary(
+        summary = market_analytics.build_market_analytics_summary(
             cur, filters, evidence_limit=evidence_limit, evidence_offset=evidence_offset
         )
+        # Phase 8 (docs/39 build §21): composed onto the existing, unchanged
+        # market_analytics coverage — never a second coverage definition.
+        freshness = economics_freshness(cur)
+        coverage = summary["coverage"]
+        summary["evidence_depth"] = market_coverage.compensation_evidence_depth(
+            observation_count=coverage["accepted_observation_count"],
+            distinct_document_count=coverage["distinct_source_document_count"],
+            distinct_provider_count=coverage["distinct_provider_count"],
+            economics_fresh=freshness["fresh"],
+        )
+        summary["representativeness"] = market_coverage.REPRESENTATIVENESS_UNKNOWN
+        return summary

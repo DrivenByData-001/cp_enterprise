@@ -54,8 +54,12 @@ function discoverResponse(overrides: Partial<CareerDirectionDiscoverResponse> = 
     caveats: [],
     corpus_disclosure: {
       total_observed_postings: 10, postings_with_archetype_assignment: 4, postings_with_reviewed_requirements: 3,
+      posting_date_range: { earliest: '2020-01-01', latest: '2024-01-01' }, postings_with_unknown_posting_date: 2,
+      country_concentration: [{ value: 'Ireland', label: 'Ireland', count: 6 }],
       active_archetypes_total: 2, supported_archetypes: 1, archetypes_with_compensation_evidence: 0,
+      compensation_evidence_available: false,
       economics_freshness: { state: 'fresh', fresh: true, reason: null },
+      representativeness: { known: false, reason: 'No known sampling frame.' },
     },
     ...overrides,
   }
@@ -199,6 +203,29 @@ describe('Career Direction builder — AI discovery', () => {
     await screen.findAllByDisplayValue('Not set')
     fireEvent.click(screen.getByText('Generate direction hypotheses'))
     expect(await screen.findByText(/10 observed postings captured/)).toBeTruthy()
+  })
+
+  it('shows the shared coverage service\'s representativeness-unknown note, never a model-generated label (docs/39 build §22)', async () => {
+    vi.mocked(api.listPreferenceDimensions).mockResolvedValue(DIMENSIONS)
+    vi.mocked(api.getCareerDirectionPreferenceSummary).mockResolvedValue({ dimensions: emptySummary() })
+    vi.mocked(api.discoverCareerDirections).mockResolvedValue(discoverResponse({
+      corpus_disclosure: {
+        total_observed_postings: 10, postings_with_archetype_assignment: 4, postings_with_reviewed_requirements: 3,
+        posting_date_range: { earliest: '2020-01-01', latest: '2024-01-01' }, postings_with_unknown_posting_date: 2,
+        country_concentration: [{ value: 'Ireland', label: 'Ireland', count: 6 }],
+        active_archetypes_total: 2, supported_archetypes: 1, archetypes_with_compensation_evidence: 0,
+        compensation_evidence_available: false,
+        economics_freshness: { state: 'fresh', fresh: true, reason: null },
+        representativeness: { known: false, reason: 'This is a user-collected/captured corpus with no known probability sampling frame.' },
+      },
+    }))
+    renderBuilder()
+    await screen.findAllByDisplayValue('Not set')
+    fireEvent.click(screen.getByText('Generate direction hypotheses'))
+    // The deterministic, backend-computed disclosure text — never a field the
+    // model wrote itself (CareerDirectionCandidate carries no such field).
+    expect(await screen.findByText(/no known probability sampling frame/)).toBeTruthy()
+    expect(screen.getByText(/Concentrated in Ireland/)).toBeTruthy()
   })
 
   it('shows an insufficient-evidence state and still allows manual save', async () => {

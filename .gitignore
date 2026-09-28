@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 frontend/dist/
 .venv/
+venv/
 .env
 .env.*
 !.env.example

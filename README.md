@@ -172,7 +172,33 @@ route depth stays exactly direct-plus-one-intermediate, with no general
 N-hop search. No AI call and no new opaque score exist anywhere in this
 phase. See
 [`docs/38-phase7-opportunity-alignment-pathways.md`](docs/38-phase7-opportunity-alignment-pathways.md).
-The fuller **Market Coverage & Confidence** product remains Phase 8.
+
+Phase 8 makes the evidence base behind every market-derived conclusion in
+this app explicit: a single canonical `market_coverage.py` service —
+composed by, never duplicated in, Trends, Market Summary, Career Direction
+discovery, Opportunity alignment and Pathways — answers *what data a
+conclusion is based on, how current and complete it is, and what it cannot
+establish*. Three concepts stay deliberately distinct: **coverage**
+(measurable facts about the captured corpus — role-metadata completeness,
+posting-date vs. capture-date, geography, source/provenance, requirement-
+review state, vocabulary canonical-vs-legacy split, archetype support,
+compensation evidence), **evidence depth** (small, named, rule-based
+sufficiency states — `insufficient`/`thin`/`supported`/`broader_support` —
+for one structural, compensation or trend claim, never a numeric score), and
+**representativeness**, which is always explicitly `known: false` — this is
+a user-collected corpus with no probability sampling frame, and no amount of
+internal completeness, corpus size or source diversity is ever allowed to
+flip that. Every proportion in the API carries its numerator, denominator
+and a plain-English meaning; a year filter never silently drops undated
+roles — it reports how many it excluded. The new `/market/coverage` page is
+the first-class product surface for this (scoped by year/country/seniority/
+archetype, with a bounded per-archetype drill-down), and Trends, Market
+Summary, Career Direction discovery, Opportunity alignment and Pathways each
+surface a compact, bounded slice of the same service as context alongside
+their existing behaviour — never changing trend classification, relationship
+states, or route depth/order. No AI, no new durable table, no automatic data
+repair anywhere in this phase. See
+[`docs/39-phase8-market-coverage-confidence.md`](docs/39-phase8-market-coverage-confidence.md).
 
 ## Technical architecture
 

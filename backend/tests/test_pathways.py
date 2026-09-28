@@ -308,6 +308,54 @@ def test_supporting_postings_are_grouped_under_their_reviewed_archetype():
     assert node["state"] == "useful_intermediate"
 
 
+# --- Phase 8: market_evidence (docs/39 build §24) ----------------------------
+
+def test_direct_route_carries_market_evidence_for_the_targets_archetype():
+    with db_cursor() as cur:
+        scenario = _scenario(cur)
+        result = pathways.pathways_for_target(cur, scenario["target_id"])
+
+    evidence = result["direct_route"]["market_evidence"]
+    assert evidence is not None
+    assert evidence["archetype_concept_id"] == scenario["target_archetype"]
+    # The Target itself is a user_defined_target, never counted as an
+    # observed posting — an honest 0 here, not the target masquerading as
+    # its own market evidence.
+    assert evidence["assigned_posting_count"] == 0
+    assert evidence["evidence_depth"]["state"] == "insufficient"
+
+
+def test_intermediate_node_carries_market_evidence_for_its_own_archetype():
+    with db_cursor() as cur:
+        scenario = _scenario(cur)
+        result = pathways.pathways_for_target(cur, scenario["target_id"])
+
+    node = result["intermediate_archetypes"][0]
+    evidence = node["market_evidence"]
+    assert evidence is not None
+    assert evidence["archetype_concept_id"] == scenario["intermediate_id"]
+    assert evidence["assigned_posting_count"] == 2  # the two supporting postings
+    assert evidence["evidence_depth"]["state"] in ("insufficient", "thin", "supported", "broader_support")
+
+
+def test_market_evidence_never_changes_route_depth_or_state():
+    """Coverage is context, never a second classifier (build §24) — the
+    route shapes/states are exactly what they are without it."""
+    with db_cursor() as cur:
+        scenario = _scenario(cur)
+        result = pathways.pathways_for_target(cur, scenario["target_id"])
+    assert result["direct_route"]["kind"] == "direct"
+    assert result["intermediate_archetypes"][0]["state"] == "useful_intermediate"
+    assert len(result["intermediate_archetypes"]) == 1  # still exactly one hop, no extra route created
+
+
+def test_pathways_reports_representativeness_unknown():
+    with db_cursor() as cur:
+        scenario = _scenario(cur)
+        result = pathways.pathways_for_target(cur, scenario["target_id"])
+    assert result["representativeness"]["known"] is False
+
+
 def test_a_posting_without_a_reviewed_archetype_cannot_become_an_intermediate_node():
     with db_cursor() as cur:
         scenario = _scenario(cur, with_intermediate=False)

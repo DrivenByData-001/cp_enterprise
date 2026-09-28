@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
-  type MarketAnalyticsCoverage,
   type MarketAnalyticsFacetValue,
   type MarketAnalyticsFiltersInput,
   type MarketAnalyticsPoint,
@@ -14,6 +14,7 @@ import {
 } from '../../lib/api'
 import { formatMoney } from '../../lib/money'
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { EvidenceDepthBadge } from '../market/ArchetypeEvidencePanel'
 
 const SERIES_COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-other)', '#9b6bd6', '#c94f7c']
 
@@ -104,7 +105,8 @@ function FilterBar({
 
 // --- Headline coverage --------------------------------------------------------
 
-function CoverageCards({ coverage }: { coverage: MarketAnalyticsCoverage }) {
+function CoverageCards({ summary }: { summary: MarketAnalyticsSummaryData }) {
+  const coverage = summary.coverage
   const range = coverage.earliest_period && coverage.latest_period
     ? coverage.earliest_period === coverage.latest_period
       ? coverage.earliest_period
@@ -120,19 +122,25 @@ function CoverageCards({ coverage }: { coverage: MarketAnalyticsCoverage }) {
   )
   return (
     <div className="card">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-        {stat('Accepted observations', coverage.accepted_observation_count)}
-        {stat('Source reports', coverage.distinct_source_document_count)}
-        {stat('Providers', coverage.distinct_provider_count)}
-        {stat('Period covered', range)}
-        {stat('With reported median', coverage.with_reported_median_count)}
-        {stat('With reported mean', coverage.with_reported_mean_count)}
-        {stat('With a range', coverage.with_range_count)}
-        {stat('With published sample n', coverage.with_sample_size_count)}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, flex: 1 }}>
+          {stat('Accepted observations', coverage.accepted_observation_count)}
+          {stat('Source reports', coverage.distinct_source_document_count)}
+          {stat('Providers', coverage.distinct_provider_count)}
+          {stat('Period covered', range)}
+          {stat('With reported median', coverage.with_reported_median_count)}
+          {stat('With reported mean', coverage.with_reported_mean_count)}
+          {stat('With a range', coverage.with_range_count)}
+          {stat('With published sample n', coverage.with_sample_size_count)}
+        </div>
+        <EvidenceDepthBadge depth={summary.evidence_depth} />
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
         {coverage.archetype_linked_count} row(s) linked to a role archetype · {coverage.not_archetype_linked_count} not yet
         linked — unlinked evidence still contributes fully to the analytics below.
+      </p>
+      <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+        {summary.representativeness.reason} <Link to="/market/coverage">See full market coverage</Link>
       </p>
     </div>
   )
@@ -537,7 +545,7 @@ export function MarketSummary() {
       </p>
       <FilterBar summary={summary} filters={filters} setFilters={setFilters} />
       <div style={{ marginTop: 12 }}>
-        <CoverageCards coverage={summary.coverage} />
+        <CoverageCards summary={summary} />
       </div>
 
       {noEvidence ? (
