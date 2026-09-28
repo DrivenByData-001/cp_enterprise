@@ -415,12 +415,16 @@ def test_cockpit_query_count_does_not_grow_with_corpus_size(client):
         _note(cur, application_id, text="One note.")
         _event(cur, application_id, event_type="interview_completed", notes="One reflection.")
 
-    # jobber.d_target_evidence (the stepping-stone/opportunity-alignment
-    # evidence-status cache keyed by revision) would otherwise make the
-    # *second* measurement cheaper than the first purely because the first
-    # warmed it — an unrelated caching effect, not evidence about whether
-    # Cockpit scales with corpus size. Clearing it before each measurement
-    # keeps the two counts genuinely comparable.
+    # Two caching effects would otherwise make measurements incomparable —
+    # neither is evidence about whether Cockpit scales with corpus size:
+    # (1) jobber.d_target_evidence (the stepping-stone/opportunity-alignment
+    # evidence-status cache keyed by revision), cleared before each
+    # measurement below; (2) profile360_reader's module-level, once-per-
+    # process schema-introspection cache (an information_schema query on
+    # first-ever use of profile360.capabilities), warmed here by one
+    # untimed call so neither the small nor the large measurement pays for
+    # it.
+    career_cockpit.build_cockpit()
     with db_cursor() as cur:
         cur.execute("TRUNCATE TABLE jobber.d_target_evidence")
     with count_queries() as small_corpus:
