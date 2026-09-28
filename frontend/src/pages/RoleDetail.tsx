@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import {
   api,
+  type CareerDirection,
   type ComparisonResult,
   type RoleCompensationResponse,
   type RoleContextBasis,
@@ -370,9 +371,24 @@ export default function RoleDetail() {
       .catch((e) => { if (currentId.current === id) setComparisonError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
+  // Phase 6 (docs/37 build §24): the selected Career Direction, by name only
+  // — no alignment/fit score. Fetched once here alongside compensation/
+  // comparison, posting-only (a target keeps its own framing and never shows
+  // the Decision Summary at all), so it never becomes a second request for
+  // the same state.
+  const [direction, setDirection] = useState<CareerDirection | null>(null)
+  const [directionError, setDirectionError] = useState<string | null>(null)
+  const loadDirection = useCallback(() => {
+    setDirectionError(null)
+    api
+      .getSelectedCareerDirection()
+      .then((r) => { if (currentId.current === id) setDirection(r.direction) })
+      .catch((e) => { if (currentId.current === id) setDirectionError(e instanceof Error ? e.message : String(e)) })
+  }, [id])
+
   // The instant id changes, forget the previous role entirely — role,
-  // compensation and comparison alike — rather than leaving any of it on
-  // screen while the new id's own requests are still in flight.
+  // compensation, comparison and direction alike — rather than leaving any
+  // of it on screen while the new id's own requests are still in flight.
   useEffect(() => {
     currentId.current = id
     setRole(null)
@@ -381,15 +397,20 @@ export default function RoleDetail() {
     setCompensationError(null)
     setComparison(null)
     setComparisonError(null)
+    setDirection(null)
+    setDirectionError(null)
   }, [id])
 
   useEffect(() => {
     if (!role) return
     loadCompensation()
-    // The Decision Summary's evidence tile is posting-only (targets keep
-    // their own Explore-my-future framing) — no reason to ask the
-    // comparison engine for a page that will never show its answer.
-    if (role.node_type === 'posting') loadComparison()
+    // The Decision Summary is posting-only (targets keep their own
+    // Explore-my-future framing) — no reason to ask the comparison engine or
+    // the Career Direction API for a page that will never show their answer.
+    if (role.node_type === 'posting') {
+      loadComparison()
+      loadDirection()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role?.id, role?.node_type])
 
@@ -522,6 +543,8 @@ export default function RoleDetail() {
             onRetryComparison={loadComparison}
             compensation={compensation}
             compensationError={compensationError}
+            direction={direction}
+            directionError={directionError}
           />
           <RequirementsAskFor role={role} />
         </>

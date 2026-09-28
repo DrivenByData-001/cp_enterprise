@@ -14,6 +14,8 @@ vi.mock('./lib/api', () => ({
     listTargets: vi.fn(),
     listApplications: vi.fn(),
     getRole: vi.fn(),
+    getSelectedCareerDirection: vi.fn(),
+    listCareerDirections: vi.fn(),
   },
 }))
 
@@ -40,6 +42,8 @@ function renderApp(url: string) {
 
 beforeEach(() => {
   vi.mocked(api.listApplications).mockResolvedValue(applicationsResponse())
+  vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+  vi.mocked(api.listCareerDirections).mockResolvedValue({ items: [] })
 })
 
 afterEach(() => {

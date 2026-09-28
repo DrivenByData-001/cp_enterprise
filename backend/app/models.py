@@ -1111,3 +1111,270 @@ class ApplicationInterviewPrepGeneration(BaseModel):
     questions_to_ask: list[InterviewQuestionToAsk] = []
     closing_points: list[InterviewClosingPoint] = []
     prep_checklist: list[str] = []
+
+
+# --- Phase 6: Career Direction / property-first target discovery (docs/37) --
+# (backend/app/career_direction_discovery.py, backend/app/career_directions.py)
+#
+# Three different things, kept as three different shapes (build §1): a
+# Preference is evidence (jobber.preference_observation, unchanged); a
+# Career Direction is a user-owned statement of a desired future state,
+# configured from properties/trade-offs before any job title exists; a
+# Target remains one concrete role hypothesis (jobber.role_instance),
+# unreplaced and unduplicated. Nothing below merges preferences with
+# capability evidence, and nothing below adds a score/rank/probability field
+# of any kind — see CareerDirectionCandidate.
+
+_DESIRED_DIRECTIONS = ("toward", "away", "neutral")
+
+
+class CareerDirectionDimensionInput(BaseModel):
+    """One explicit user choice for a single direction (build §4) — never
+    written into jobber.preference_observation, and never inferred/defaulted
+    on the user's behalf."""
+
+    dimension_code: str
+    desired_direction: str = Field(description="toward | away | neutral")
+    importance: int = Field(description="1 (mild) - 3 (strong)")
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.desired_direction not in _DESIRED_DIRECTIONS:
+            raise ValueError(f"desired_direction must be one of {_DESIRED_DIRECTIONS}")
+        if self.importance not in (1, 2, 3):
+            raise ValueError("importance must be 1, 2, or 3")
+        return self
+
+
+def _unique_dimension_codes(dimensions: list[CareerDirectionDimensionInput]) -> list[CareerDirectionDimensionInput]:
+    codes = [d.dimension_code for d in dimensions]
+    if len(codes) != len(set(codes)):
+        raise ValueError("each dimension_code may appear at most once")
+    return dimensions
+
+
+_CONSTRAINT_LIST_MAX_ITEMS = 20
+_CONSTRAINT_ITEM_MAX_LEN = 200
+
+
+def _bounded_str_list(value: list[str]) -> list[str]:
+    if len(value) > _CONSTRAINT_LIST_MAX_ITEMS:
+        raise ValueError(f"at most {_CONSTRAINT_LIST_MAX_ITEMS} entries are allowed")
+    cleaned = []
+    for item in value:
+        item = item.strip()
+        if not item:
+            continue  # an empty entry carries no intent — never stored, never counted as "specified"
+        if len(item) > _CONSTRAINT_ITEM_MAX_LEN:
+            raise ValueError(f"each entry must be at most {_CONSTRAINT_ITEM_MAX_LEN} characters")
+        cleaned.append(item)
+    return cleaned
+
+
+class CareerDirectionCompensationFloor(BaseModel):
+    """A planning assumption the user states, never a market fact (build §5).
+    Reuses compensation_observation's own component/pay_period/employment_basis
+    vocabulary (app/models.py::_PAY_PERIODS/_EMPLOYMENT_BASES) so a floor is
+    always comparable to real evidence on the same terms — never silently
+    annualised, never silently converted."""
+
+    amount: float
+    currency: str
+    pay_period: str = "annual"
+    employment_basis: str = "permanent"
+    hard: bool = False  # true = a non-negotiable floor; false = a preference
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.amount <= 0:
+            raise ValueError("compensation_floor.amount must be positive")
+        if self.pay_period not in _PAY_PERIODS:
+            raise ValueError(f"compensation_floor.pay_period must be one of {_PAY_PERIODS}")
+        if self.employment_basis not in _EMPLOYMENT_BASES:
+            raise ValueError(f"compensation_floor.employment_basis must be one of {_EMPLOYMENT_BASES}")
+        currency = self.currency.strip().upper()
+        if not currency:
+            raise ValueError("compensation_floor.currency is required")
+        self.currency = currency
+        return self
+
+
+class CareerDirectionConstraints(BaseModel):
+    """Typed API shape for jobber.career_direction.constraints (build §5).
+    An empty list always means "not specified" — never a hard requirement
+    satisfied by zero options. `other` is user intent/free context; it is
+    never treated as market evidence by career_direction_discovery.py."""
+
+    model_config = {"extra": "forbid"}
+
+    locations: list[str] = []
+    remote_types: list[str] = []
+    employment_types: list[str] = []
+    seniority_levels: list[str] = []
+    compensation_floor: Optional[CareerDirectionCompensationFloor] = None
+    other: list[str] = []
+
+    @field_validator("locations", "remote_types", "employment_types", "seniority_levels", "other")
+    @classmethod
+    def _bounded(cls, value):
+        return _bounded_str_list(value)
+
+
+class CareerDirectionCreate(BaseModel):
+    """POST /api/career-directions — manual creation, no AI involved (build
+    §19). Shares its dimension/constraint shape with the discovery request so
+    the same builder form serves both actions."""
+
+    name: str = Field(min_length=1, max_length=300)
+    summary: str = Field(default="", max_length=4000)
+    dimensions: list[CareerDirectionDimensionInput] = []
+    constraints: CareerDirectionConstraints = CareerDirectionConstraints()
+    target_role_instance_id: Optional[str] = None
+    target_archetype_concept_id: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+    @field_validator("dimensions")
+    @classmethod
+    def _check_dimensions(cls, value):
+        return _unique_dimension_codes(value)
+
+
+class CareerDirectionUpdate(BaseModel):
+    """PUT/PATCH /api/career-directions/{id} (build §7). Every field
+    optional; only supplied fields change (career_directions.py reads
+    `exclude_unset`) — an explicit `null` on the two target/archetype link
+    fields clears that link, an omitted field leaves it untouched. Never
+    touches `state`/`selected_at` — see CareerDirectionSelect for the only
+    path that may change selection."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    summary: Optional[str] = Field(default=None, max_length=4000)
+    dimensions: Optional[list[CareerDirectionDimensionInput]] = None
+    constraints: Optional[CareerDirectionConstraints] = None
+    target_role_instance_id: Optional[str] = None
+    target_archetype_concept_id: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        return value
+
+    @field_validator("dimensions")
+    @classmethod
+    def _check_dimensions(cls, value):
+        if value is None:
+            return None
+        return _unique_dimension_codes(value)
+
+
+class CareerDirectionDiscoverRequest(BaseModel):
+    """Body for POST /api/career-directions/discover (build §11). Always the
+    *unsaved* property-first builder state — regenerating from an existing
+    saved direction is the frontend populating this same shape from that
+    direction's current dimensions/constraints, never the endpoint reading a
+    career_direction row by id itself."""
+
+    name: Optional[str] = Field(default=None, max_length=300)
+    dimensions: list[CareerDirectionDimensionInput] = []
+    constraints: CareerDirectionConstraints = CareerDirectionConstraints()
+    guidance: Optional[str] = Field(default=None, max_length=4000)
+
+    @field_validator("dimensions")
+    @classmethod
+    def _check_dimensions(cls, value):
+        return _unique_dimension_codes(value)
+
+
+# --- Candidate hypotheses (build §12/§13) -----------------------------------
+#
+# Every factual block below carries `source_refs` into the stable registry
+# `career_direction_discovery.build_discovery_context` assembles — the same
+# "cannot establish grounding merely by inventing a plausible-looking id"
+# discipline docs/35 established for Application artifacts. `extra: forbid`
+# on the candidate and result models is a second, schema-level backstop
+# against the model adding a score/rank/probability field: such a field
+# fails validation (AISchemaValidationError) rather than silently passing
+# through as an extra key nobody asked for.
+
+class CareerDirectionSourcedText(BaseModel):
+    text: str
+    source_refs: list[str] = []
+
+
+class CareerDirectionPriorityAlignment(BaseModel):
+    dimension_code: str
+    alignment: str = Field(description="supports | tension | neutral")
+    explanation: str
+    source_refs: list[str] = []
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.alignment not in ("supports", "tension", "neutral"):
+            raise ValueError("alignment must be one of supports, tension, neutral")
+        return self
+
+
+class CareerDirectionEvidenceItem(BaseModel):
+    """Shared shape for market_basis / person_basis / tradeoffs / unknowns
+    entries — each is one bounded factual statement plus its sources."""
+
+    text: str
+    source_refs: list[str] = []
+
+
+class CareerDirectionCandidate(BaseModel):
+    """One grounded, unordered hypothesis (build §12/§13). Deliberately no
+    fit_score/career_score/probability/utility/rank field, and none of
+    'best'/'top'/'recommended'/'#1' is a valid `name` prefix — enforced in
+    career_direction_discovery.py's post-validation, not only by prompt
+    instruction."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str
+    summary: CareerDirectionSourcedText
+    primary_archetype_id: Optional[str] = None
+    related_archetype_ids: list[str] = []
+    priority_alignment: list[CareerDirectionPriorityAlignment] = []
+    market_basis: list[CareerDirectionEvidenceItem] = []
+    person_basis: list[CareerDirectionEvidenceItem] = []
+    compensation_context: Optional[CareerDirectionSourcedText] = None
+    tradeoffs: list[CareerDirectionEvidenceItem] = []
+    unknowns: list[CareerDirectionEvidenceItem] = []
+
+
+class CareerDirectionDiscoveryResult(BaseModel):
+    """Output schema for career_direction_discovery_generate. `candidates` is
+    unordered (build §12) — list position carries no ranking meaning and
+    nothing in this build ever reads it as one. Returning fewer than 3-5, or
+    zero with `insufficient_evidence=true`, is a valid, expected outcome
+    (build §12), never an error to work around."""
+
+    model_config = {"extra": "forbid"}
+
+    candidates: list[CareerDirectionCandidate] = []
+    insufficient_evidence: bool = False
+    insufficient_evidence_reason: Optional[str] = None
+
+
+class CareerDirectionAdoptRequest(BaseModel):
+    """Body for POST .../discovery-runs/{run_id}/candidates/{candidate_id}/adopt
+    (build §18). Lets the user rename/re-summarise before saving without
+    another generation round; both stay optional since adopting verbatim is
+    the common case."""
+
+    name: Optional[str] = Field(default=None, max_length=300)
+    summary: Optional[str] = Field(default=None, max_length=4000)

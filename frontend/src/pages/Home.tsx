@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Application, type ApplicationRoleSummary, type Profile, type Role } from '../lib/api'
+import { api, type Application, type ApplicationRoleSummary, type CareerDirection, type Profile, type Role } from '../lib/api'
 
 const OPPORTUNITIES_PREVIEW_LIMIT = 5
 const APPLICATIONS_PREVIEW_LIMIT = 3
@@ -23,6 +23,20 @@ export default function Home() {
   const [activeApplications, setActiveApplications] = useState<(Application & { role: ApplicationRoleSummary })[] | null>(null)
   const [applicationsLoading, setApplicationsLoading] = useState(true)
   const [applicationsError, setApplicationsError] = useState<string | null>(null)
+
+  const [direction, setDirection] = useState<CareerDirection | null>(null)
+  const [directionLoading, setDirectionLoading] = useState(true)
+  const [directionError, setDirectionError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let current = true
+    api
+      .getSelectedCareerDirection()
+      .then((res) => { if (current) setDirection(res.direction) })
+      .catch((e) => { if (current) setDirectionError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (current) setDirectionLoading(false) })
+    return () => { current = false }
+  }, [])
 
   useEffect(() => {
     let current = true
@@ -73,14 +87,32 @@ export default function Home() {
       <div className="home-grid">
         <section className="card" aria-labelledby="home-direction-h">
           <h2 id="home-direction-h" style={{ fontSize: 16, marginTop: 0 }}>Career direction</h2>
-          <p style={{ fontWeight: 600, margin: '4px 0' }}>No career direction selected yet</p>
-          <p className="secondary" style={{ fontSize: 13 }}>
-            Explore existing targets, preferences and pathways while the fuller direction-builder is developed.
-          </p>
-          <div className="actions" style={{ marginTop: 12 }}>
-            <Link to="/future" className="button primary">Explore my future</Link>
-            <Link to="/targets">View saved targets</Link>
-          </div>
+          {directionLoading && <p className="muted">Loading…</p>}
+          {directionError && <p role="alert" style={{ fontSize: 13 }}>Could not load your career direction: {directionError}</p>}
+          {!directionLoading && !directionError && direction && (
+            <>
+              <p style={{ fontWeight: 600, margin: '4px 0' }}>{direction.name}</p>
+              <p className="secondary" style={{ fontSize: 13 }}>
+                {direction.target ? `Target: ${direction.target.title}` : 'No concrete Target linked yet.'}
+              </p>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <Link to={`/future/directions/${direction.id}`} className="button primary">Open direction</Link>
+                {direction.target && <Link to={`/pathways/${direction.target.id}`}>Pathways</Link>}
+              </div>
+            </>
+          )}
+          {!directionLoading && !directionError && !direction && (
+            <>
+              <p style={{ fontWeight: 600, margin: '4px 0' }}>Define or select a Career Direction</p>
+              <p className="secondary" style={{ fontSize: 13 }}>
+                Explore existing targets, preferences and pathways, or design a new direction from your priorities.
+              </p>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <Link to="/future" className="button primary">Explore my future</Link>
+                <Link to="/targets">View saved targets</Link>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="card" aria-labelledby="home-opportunities-h">
