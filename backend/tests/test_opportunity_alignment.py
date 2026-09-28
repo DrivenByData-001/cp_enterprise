@@ -513,6 +513,36 @@ def test_deprecated_shared_archetype_never_gives_same_destination_family(client)
     assert body["archetype_relationship"]["opportunity_archetype"]["status"] == "deprecated"
 
 
+# --- Phase 8: market_evidence_context (docs/39 build §23) -------------------
+
+def test_market_evidence_context_present_when_archetype_assigned(client):
+    with db_cursor() as cur:
+        opportunity_archetype = _archetype(cur, "Capital Archetype")
+        scenario = _base_scenario(cur, opportunity_archetype=opportunity_archetype)
+        _selected_direction(cur, target_id=scenario["target_id"])
+    body = client.get(f"/api/roles/{scenario['opportunity_id']}/career-alignment").json()
+    context = body["market_evidence_context"]
+    assert context["available"] is True
+    assert context["archetype_concept_id"] == opportunity_archetype
+    assert context["assigned_posting_count"] >= 1
+    assert "evidence_depth" in context and "state" in context["evidence_depth"]
+    # Coverage is context, never a second classifier — the relationship
+    # state is exactly what it would be without market_evidence_context.
+    assert body["relationship"]["state"] == "potential_step"
+
+
+def test_market_evidence_context_absent_when_no_archetype(client):
+    with db_cursor() as cur:
+        target_archetype = _archetype(cur, "Capital archetype 2")
+        scenario = _base_scenario(cur, target_archetype=target_archetype, name_suffix="2")  # opportunity has no archetype
+        _selected_direction(cur, target_id=scenario["target_id"])
+    body = client.get(f"/api/roles/{scenario['opportunity_id']}/career-alignment").json()
+    assert body["market_evidence_context"] == {
+        "available": False,
+        "message": "No reviewed archetype assignment — market-pattern support is unavailable for this role.",
+    }
+
+
 def test_semantic_similarity_alone_never_creates_a_relationship_state():
     """Direct unit check of the classifier's contract: it takes an
     `archetype_match` boolean and the stepping-stone verdict, never a

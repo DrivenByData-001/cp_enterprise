@@ -1474,14 +1474,22 @@ export type CareerDirectionDiscoverInput = {
   guidance?: string | null
 }
 
+// Phase 8 (docs/39): the compact, bounded subset of the shared Market
+// Coverage service — market_coverage.discovery_corpus_disclosure — never a
+// second hand-rolled set of corpus-completeness counts (build §22).
 export type CareerDirectionCorpusDisclosure = {
   total_observed_postings: number
   postings_with_archetype_assignment: number
   postings_with_reviewed_requirements: number
+  posting_date_range: { earliest: string | null; latest: string | null }
+  postings_with_unknown_posting_date: number
+  country_concentration: { value: string | number; label: string; count: number }[]
   active_archetypes_total: number
   supported_archetypes: number
   archetypes_with_compensation_evidence: number
-  economics_freshness: { state: 'never_rebuilt' | 'stale' | 'fresh'; fresh: boolean; reason: string | null }
+  compensation_evidence_available: boolean
+  economics_freshness: EconomicsFreshnessSummary
+  representativeness: { known: false; reason: string }
 }
 
 export type CareerDirectionDiscoverResponse = {
@@ -1587,7 +1595,15 @@ export type TrendClassification = {
   late_mean_proportion?: number
 }
 
-export type RequirementTrend = { granularity: 'year' | '5year'; series: TrendPeriodPoint[]; classification: TrendClassification }
+// Phase 8 (docs/39 build §20): evidence_depth is context around the trend
+// classification, never an input to it — classification above is computed
+// exactly as before.
+export type RequirementTrend = {
+  granularity: 'year' | '5year'
+  series: TrendPeriodPoint[]
+  classification: TrendClassification
+  evidence_depth: EvidenceDepth
+}
 
 export type CooccurrenceItem = { concept_id: string; canonical_name: string; type_code: string; co_count: number; proportion_of_roles: number }
 export type Cooccurrence = { sample_size: number; items: CooccurrenceItem[] }
@@ -2195,6 +2211,10 @@ export interface MarketAnalyticsSummary {
   role_ranges: MarketRoleRange[]
   trends: MarketTrendSeries[]
   evidence_rows: MarketAnalyticsEvidencePage
+  // Phase 8 (docs/39 build §21): composed onto the coverage above at the
+  // route layer — never a second, independently-computed coverage figure.
+  evidence_depth: EvidenceDepth
+  representativeness: { known: false; reason: string }
 }
 
 export interface MarketAnalyticsFiltersInput {
@@ -2620,6 +2640,7 @@ export type DirectRoute = {
   title: string
   organisation: string | null
   archetype: { id: string; name: string } | null
+  market_evidence: ArchetypeEvidence | null
   state:
     | 'structurally_evidenced'
     | 'blocking_gaps'
@@ -2680,6 +2701,7 @@ export type IntermediateArchetypeRoute = {
   archetype_name: string
   seniority_band: string | null
   typical_market: string | null
+  market_evidence: ArchetypeEvidence | null
   state: 'useful_intermediate' | 'route_without_compensation' | 'no_target_progress'
   state_reason: string
   supporting_posting_ids: string[]
@@ -2774,6 +2796,7 @@ export type PathwaysResult = {
   }[]
   gap_value: GapValueItem[]
   economics_freshness: EconomicsFreshness
+  representativeness: { known: false; reason: string }
   gates: PathwaysGates
   incomplete: string[]
   review_blockers: { target: ReviewBlocker[]; supporting_candidates: ReviewBlocker[] }
@@ -2889,6 +2912,50 @@ export type QualitativeDimensionAssessment = {
   reason: string
 }
 
+// Phase 8 (docs/39): a named evidence-depth state plus the plain-English
+// reason and facts it was computed from — never a numeric confidence score.
+// The exact extra fact keys differ by evidence type (structural/
+// compensation/trend); every consumer reads `state`/`reason` and treats the
+// rest as inspectable detail.
+export type EvidenceDepthState = 'insufficient' | 'thin' | 'supported' | 'broader_support'
+export type EvidenceDepth = { state: EvidenceDepthState; reason: string; [fact: string]: unknown }
+
+// The compact 3-field freshness summary every Phase 8 surface echoes
+// (never the full EconomicsFreshness row — that stays economics-route-only).
+export type EconomicsFreshnessSummary = { state: 'never_rebuilt' | 'stale' | 'fresh'; fresh: boolean; reason: string | null }
+
+// Phase 8 (docs/39 build §23/§24/§25): concise corpus support for the
+// archetype/market pattern a result relies on — context around a Phase 7
+// relationship/route, never a second classifier. `available: false` covers
+// "no reviewed archetype assignment" honestly rather than omitting the key.
+export type MarketEvidenceContext =
+  | { available: false; message: string }
+  | ({ available: true } & ArchetypeEvidence)
+
+// The shared shape build §25 asks for — one archetype's support, used
+// identically by Market Coverage's drill-down, Career Direction detail,
+// Opportunity alignment's market_evidence_context, and Pathways' archetype
+// nodes. Always composed from the same backend function
+// (market_coverage.archetype_coverage_detail) so these can never disagree.
+export type ArchetypeEvidence = {
+  archetype_concept_id: string
+  canonical_name: string
+  status: string
+  seniority_band: string | null
+  typical_market: string | null
+  assigned_posting_count: number
+  reviewed_requirement_posting_count: number
+  known_posting_date_count: number
+  unknown_posting_date_count: number
+  latest_known_posting_date: string | null
+  distinct_country_count: number
+  countries: string[]
+  demand_derivation_available: boolean
+  compensation_benchmark_available: boolean
+  economics_freshness: EconomicsFreshnessSummary
+  evidence_depth: EvidenceDepth
+}
+
 export type ArchetypeRelationship = {
   opportunity_archetype: { id: string; canonical_name: string; status: string } | null
   target_archetype: { id: string; canonical_name: string; status: string } | null
@@ -2926,10 +2993,159 @@ export type OpportunityAlignment = {
   direction_constraints?: DirectConstraint[]
   direction_dimensions?: QualitativeDimensionAssessment[]
   archetype_relationship?: ArchetypeRelationship
+  market_evidence_context?: MarketEvidenceContext
   economics?: AlignmentEconomics
   review?: AlignmentReview
   semantic_similarity?: { to_target: number | null; to_profile: number | null }
   method: Record<string, string>
+}
+
+// --- Phase 8: Market Coverage & Confidence (docs/39) ------------------------
+//
+// One canonical, read-only, deterministic shape — every field carrying a
+// `proportion` also carries its numerator, denominator and a plain-English
+// `meaning`, and the whole-corpus `representativeness` is always
+// `known: false`. No score, gauge or single "market confidence" number
+// anywhere in this shape (build §4/§14/§19).
+
+export type CoverageFraction = { count: number; total: number; proportion: number | null; meaning: string }
+export type CoverageDistributionItem = { value: string | number; label: string; count: number }
+
+export type MarketCoverageScope = {
+  year_from: number | null
+  year_to: number | null
+  country: string | null
+  seniority_level: string | null
+  archetype_id: string | null
+  dated_scope_active: boolean
+}
+
+export type MarketCoverageRoles = {
+  total: number
+  excluded_undated_count: number
+  with_source_document: CoverageFraction
+  without_source_document: CoverageFraction
+  known_posting_date: CoverageFraction
+  unknown_posting_date: CoverageFraction
+  known_country: CoverageFraction
+  unknown_country: CoverageFraction
+  known_seniority: CoverageFraction
+  unknown_seniority: CoverageFraction
+  known_employment_type: CoverageFraction
+  unknown_employment_type: CoverageFraction
+  known_remote_type: CoverageFraction
+  unknown_remote_type: CoverageFraction
+}
+
+export type MarketCoverageTime = {
+  earliest_known_posting_date: string | null
+  latest_known_posting_date: string | null
+  known_posting_date: CoverageFraction
+  unknown_posting_date: CoverageFraction
+  by_year: { value: number; count: number }[]
+  current_calendar_year_count: number
+  previous_calendar_year_count: number
+  older_count: number
+  freshly_captured_but_posting_date_unknown_count: number
+  document_capture_date_range: { earliest: string | null; latest: string | null }
+}
+
+export type MarketCoverageGeography = {
+  known_country: CoverageFraction
+  unknown_country: CoverageFraction
+  distinct_known_country_count: number
+  country_distribution: CoverageDistributionItem[]
+  region_distribution: CoverageDistributionItem[]
+}
+
+export type MarketCoverageSources = {
+  with_source_document: CoverageFraction
+  without_source_document: CoverageFraction
+  capture_source_distribution: CoverageDistributionItem[]
+  provenance_quality_distribution: CoverageDistributionItem[]
+  document_kind_distribution: CoverageDistributionItem[]
+  url_present: CoverageFraction
+  url_absent: CoverageFraction
+}
+
+export type RequirementReviewState =
+  | 'needs_reextraction' | 'unresolved_vocabulary' | 'review_pending' | 'reviewed' | 'legacy_only' | 'not_extracted'
+
+export type MarketCoverageRequirements = {
+  review_complete: CoverageFraction
+  accepted_present: CoverageFraction
+  unreviewed_present: CoverageFraction
+  unresolved_vocabulary_present: CoverageFraction
+  needs_reextraction_present: CoverageFraction
+  extraction_attempted_incomplete: CoverageFraction
+  extraction_never_attempted: CoverageFraction
+  legacy_only: CoverageFraction
+  no_usable_evidence: CoverageFraction
+  state_precedence: RequirementReviewState[]
+  state_distribution: Record<RequirementReviewState, number>
+}
+
+export type MarketCoverageVocabulary = {
+  roles_with_accepted_canonical_requirements: CoverageFraction
+  roles_relying_on_legacy_fallback: CoverageFraction
+  role_skill_observations_resolved: CoverageFraction
+  role_skill_observations_unresolved_count: number
+  unresolved_vocabulary_proposal_occurrence_count: number
+}
+
+export type MarketCoverageArchetypes = {
+  active_archetype_count: number
+  assigned_active: CoverageFraction
+  assigned_deprecated: { count: number; meaning: string }
+  unassigned: CoverageFraction
+  active_archetypes_with_support: CoverageFraction
+  active_archetypes_without_support_count: number
+  unsupported_active_archetypes: { archetype_concept_id: string; canonical_name: string }[]
+  support: ArchetypeEvidence[]
+}
+
+export type MarketCoverageCompensation = {
+  coverage: MarketAnalyticsCoverage
+  source_kind_distribution: CoverageDistributionItem[]
+  basis_distribution: CoverageDistributionItem[]
+  top_providers: MarketAnalyticsFacetValue[]
+  role_linked_coverage: {
+    with_accepted_role_linked_compensation: CoverageFraction
+    without_accepted_role_linked_compensation: CoverageFraction
+  }
+  scope_note: string
+}
+
+export type MarketCoverageConcentration = {
+  top_capture_sources: CoverageDistributionItem[]
+  top_countries: CoverageDistributionItem[]
+  top_organisations: CoverageDistributionItem[]
+  top_compensation_providers: MarketAnalyticsFacetValue[]
+  note: string
+}
+
+export type MarketCoverageSummary = {
+  scope: MarketCoverageScope
+  roles: MarketCoverageRoles
+  time: MarketCoverageTime
+  geography: MarketCoverageGeography
+  sources: MarketCoverageSources
+  requirements: MarketCoverageRequirements
+  vocabulary: MarketCoverageVocabulary
+  archetypes: MarketCoverageArchetypes
+  compensation: MarketCoverageCompensation
+  derived_economics: EconomicsFreshness
+  representativeness: { known: false; reason: string }
+  concentration: MarketCoverageConcentration
+  limitations: string[]
+}
+
+export type MarketCoverageFilters = {
+  year_from?: number
+  year_to?: number
+  country?: string
+  seniority_level?: string
+  archetype_id?: string
 }
 
 export const api = {
@@ -3594,4 +3810,22 @@ export const api = {
     req<{ artifact: ApplicationArtifact }>(`/applications/${id}/artifacts/${artifactId}/adopt`, { method: 'POST' }),
   discardApplicationArtifact: (id: string, artifactId: string) =>
     req<{ status: string }>(`/applications/${id}/artifacts/${artifactId}/discard`, { method: 'POST' }),
+
+  // --- Phase 8: Market Coverage & Confidence (docs/39) ---------------------
+  getMarketCoverageSummary: (filters: MarketCoverageFilters = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<MarketCoverageSummary>(`/market-coverage/summary${suffix}`)
+  },
+  getMarketCoverageArchetypeDetail: (archetypeId: string, filters: Omit<MarketCoverageFilters, 'archetype_id'> = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    }
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<ArchetypeEvidence & { found: boolean }>(`/market-coverage/archetypes/${archetypeId}${suffix}`)
+  },
 }

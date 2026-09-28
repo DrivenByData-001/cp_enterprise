@@ -5,6 +5,7 @@ import Pathways from './Pathways'
 import {
   api,
   type ArchetypeContextResponse,
+  type ArchetypeEvidence,
   type OpportunityAlignment,
   type PathwaysResult,
   type PersonalComparison,
@@ -202,6 +203,7 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
       title: 'Head of Capital',
       organisation: 'An insurer',
       archetype: { id: 'a1', name: 'Head of Capital archetype' },
+      market_evidence: null,
       state: 'blocking_gaps',
       state_reason: '1 required capability/capabilities have no supporting evidence.',
       fit: {
@@ -229,6 +231,7 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
         archetype_name: 'Capital Analyst archetype',
         seniority_band: 'mid',
         typical_market: null,
+        market_evidence: null,
         state: 'useful_intermediate',
         state_reason: 'This archetype involves 1 of the target’s outstanding requirement(s).',
         supporting_posting_ids: ['p1', 'p2'],
@@ -344,6 +347,7 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
       last_rebuilt_at: '2026-09-16T08:00:00Z',
       engine_version: 'economics-engine-v1',
     },
+    representativeness: { known: false, reason: 'No known sampling frame.' },
     review_blockers: { target: [], supporting_candidates: [] },
     incomplete: [],
     candidates_assessed: 12,
@@ -504,6 +508,42 @@ describe('Pathways', () => {
     expect(screen.getByText(/1 of 2 reviewed requirements evidenced/)).toBeTruthy()
     expect(screen.getByText('Blocking gaps')).toBeTruthy()
     expect(screen.getAllByText('Capital management').length).toBeGreaterThan(0)
+  })
+
+  it('shows market evidence for the direct route and each intermediate node without a route-confidence score (docs/39 build §24)', async () => {
+    const evidence: ArchetypeEvidence = {
+      archetype_concept_id: 'a2',
+      canonical_name: 'Capital Analyst archetype',
+      status: 'active',
+      seniority_band: 'mid',
+      typical_market: null,
+      assigned_posting_count: 2,
+      reviewed_requirement_posting_count: 1,
+      known_posting_date_count: 2,
+      unknown_posting_date_count: 0,
+      latest_known_posting_date: '2025-02-01',
+      distinct_country_count: 1,
+      countries: ['United Kingdom'],
+      demand_derivation_available: false,
+      compensation_benchmark_available: true,
+      economics_freshness: { state: 'fresh', fresh: true, reason: null },
+      evidence_depth: { state: 'thin', reason: 'Only 2 supporting posting(s) in this scope.' },
+    }
+    const withEvidence = result()
+    withEvidence.direct_route.market_evidence = null
+    withEvidence.intermediate_archetypes[0].market_evidence = evidence
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(withEvidence)
+    renderPathways()
+
+    await screen.findByText(/Direct: Head of Capital/)
+    fireEvent.click(screen.getAllByRole('tab', { name: 'Fit' })[1])
+
+    expect(screen.getByText('Market evidence')).toBeTruthy()
+    expect(screen.getByText(/Thin evidence/i)).toBeTruthy()
+    // No numeric route-confidence score anywhere on the node.
+    expect(screen.queryByText(/route confidence/i)).toBeNull()
+    expect(screen.queryByText(/%\s*confidence/i)).toBeNull()
   })
 
   it('states what the transition view deliberately does not estimate', async () => {

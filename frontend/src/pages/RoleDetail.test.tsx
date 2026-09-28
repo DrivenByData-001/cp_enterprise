@@ -307,6 +307,48 @@ describe('Opportunity Decision Workspace — posting', () => {
     expect(pathwaysLink?.getAttribute('href')).toBe('/pathways/target-1?opportunity_id=role')
   })
 
+  it('shows Phase 8 market evidence context without changing the relationship state (docs/39 build §23)', async () => {
+    const alignment = targetAvailableAlignment({
+      market_evidence_context: {
+        available: true,
+        archetype_concept_id: 'arch-1',
+        canonical_name: 'Senior Actuary',
+        status: 'active',
+        seniority_band: 'senior',
+        typical_market: 'Ireland',
+        assigned_posting_count: 4,
+        reviewed_requirement_posting_count: 3,
+        known_posting_date_count: 4,
+        unknown_posting_date_count: 0,
+        latest_known_posting_date: '2024-06-01',
+        distinct_country_count: 1,
+        countries: ['Ireland'],
+        demand_derivation_available: true,
+        compensation_benchmark_available: true,
+        economics_freshness: { state: 'fresh', fresh: true, reason: null },
+        evidence_depth: { state: 'thin', reason: 'Only 4 supporting posting(s) in this scope.' },
+      },
+    })
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), alignment)
+    expect(await screen.findByRole('heading', { name: 'Market evidence for this pattern' })).toBeTruthy()
+    expect(screen.getByText('Senior Actuary')).toBeTruthy()
+    expect(screen.getByText(/Thin evidence/i)).toBeTruthy()
+    // The relationship state is exactly what targetAvailableAlignment() already asserts elsewhere — unaffected by coverage.
+    expect(screen.getByText('Potential stepping stone')).toBeTruthy()
+  })
+
+  it('shows the "no reviewed archetype" message when the opportunity has none (docs/39 build §23)', async () => {
+    const alignment = targetAvailableAlignment({
+      market_evidence_context: {
+        available: false,
+        message: 'No reviewed archetype assignment — market-pattern support is unavailable for this role.',
+      },
+    })
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), alignment)
+    await screen.findByRole('heading', { name: 'You → this opportunity → Target' })
+    expect(screen.getByText('No reviewed archetype assignment — market-pattern support is unavailable for this role.')).toBeTruthy()
+  })
+
   it('never shows direction constraints/dimensions cards when there are none to show', async () => {
     renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), targetAvailableAlignment())
     await screen.findByRole('heading', { name: 'You → this opportunity → Target' })

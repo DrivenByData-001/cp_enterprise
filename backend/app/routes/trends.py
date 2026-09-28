@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 
-from .. import trends
+from .. import market_coverage, trends
 from ..db import db_cursor
 
 router = APIRouter(prefix="/api/trends", tags=["trends"])
@@ -51,10 +51,14 @@ def requirement_trend_route(
 ):
     key = _requirement_key(concept_id, surface_form)
     with db_cursor() as cur:
-        return trends.requirement_trend(
+        result = trends.requirement_trend(
             cur, key, _filters(year_from, year_to, country, seniority_level, career_track),
             granularity=granularity, min_sample_size=min_sample_size,
         )
+        # Phase 8 (docs/39 build §20): context around the trend, never an
+        # input to it — classification above is untouched.
+        result["evidence_depth"] = market_coverage.trend_evidence_depth(result["classification"])
+        return result
 
 
 @router.get("/cooccurrence")

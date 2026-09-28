@@ -151,6 +151,31 @@ def test_no_archetype_requirement_unmapped_evidence_is_first_class(client):
 # --- 3: practice grouping ----------------------------------------------------
 
 
+# --- Phase 8: evidence_depth / representativeness composed at route level --
+
+def test_analytics_summary_route_exposes_evidence_depth_and_representativeness(client):
+    with db.db_cursor() as cur:
+        doc_id, _ = db.create_document(cur, kind="market_survey", content_text="report", provenance_quality="original")
+        _insert_observation(cur, document_id=doc_id, raw_role_label="Row A")
+
+    resp = client.get("/api/market-data/analytics/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["evidence_depth"]["state"] in ("insufficient", "thin", "supported", "broader_support")
+    assert body["representativeness"] == {
+        "known": False,
+        "reason": (
+            "This is a user-collected/captured corpus with no known probability sampling frame. Internal "
+            "completeness, corpus size, capture-source diversity and metadata coverage cannot establish "
+            "representativeness of the external labour market."
+        ),
+    }
+    # The underlying coverage numbers evidence_depth was derived from are
+    # still exactly market_analytics.build_coverage's own output — composed,
+    # not duplicated.
+    assert body["evidence_depth"]["observation_count"] == body["coverage"]["accepted_observation_count"]
+
+
 def test_group_practice_area_maps_synonyms_and_preserves_unknown_labels():
     assert ma.group_practice_area("Life") == "Life"
     assert ma.group_practice_area("Life Insurance") == "Life"

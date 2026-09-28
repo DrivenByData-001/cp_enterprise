@@ -82,6 +82,7 @@ exactly two roles (the opportunity and the target) — never a corpus scan
 from . import career_directions
 from . import comparison_service
 from . import compensation_resolver as resolver
+from . import market_coverage
 from .economics_freshness import economics_freshness
 from .embeddings import ensure_profile_embedding, get_embedding
 from .personal_earnings import safe_personal_earnings_state
@@ -131,6 +132,12 @@ METHOD = {
     "semantic_similarity": (
         "Semantic similarity to the target/profile is secondary context only, shown separately under "
         "semantic_similarity — it never decides a relationship state."
+    ),
+    "market_evidence_context": (
+        "market_evidence_context (Phase 8, docs/39) describes how much corpus evidence backs this opportunity's "
+        "own archetype pattern. It is context around the relationship above, never a second classifier — it "
+        "never changes same_destination_family, potential_step, no_identified_target_progress or any other "
+        "relationship state."
     ),
     "compensation": (
         "Every compensation figure carries its own basis. Figures of different bases are never merged, and "
@@ -248,6 +255,44 @@ def _archetype_relationship(cur, opportunity_role: dict, target_role: dict | Non
         "same_as_target_archetype": same_as_target,
         "same_as_direction_archetype": same_as_direction,
         "note": None if opp_archetype else "No reviewed archetype is assigned to this posting.",
+    }
+
+
+_NO_ARCHETYPE_MARKET_EVIDENCE_MESSAGE = "No reviewed archetype assignment — market-pattern support is unavailable for this role."
+
+
+def _market_evidence_context(cur, opportunity_role: dict, freshness: dict) -> dict:
+    """Phase 8 (build §23): concise corpus support for the archetype pattern
+    this opportunity relies on — composed from the shared Market Coverage
+    service (`market_coverage.archetype_coverage_detail`), never a second,
+    independently-computed archetype-support calculation. Context only: it
+    is never consulted by `_classify_relationship` and can never change
+    `same_destination_family`/`potential_step`/`no_identified_target_progress`
+    or any other Phase 7 relationship state."""
+    archetype_id = opportunity_role.get("archetype_concept_id")
+    if not archetype_id:
+        return {"available": False, "message": _NO_ARCHETYPE_MARKET_EVIDENCE_MESSAGE}
+    detail = market_coverage.archetype_coverage_detail(cur, archetype_id, freshness=freshness)
+    if not detail["found"]:
+        return {"available": False, "message": _NO_ARCHETYPE_MARKET_EVIDENCE_MESSAGE}
+    return {
+        "available": True,
+        "archetype_concept_id": archetype_id,
+        "canonical_name": detail["canonical_name"],
+        "status": detail["status"],
+        "seniority_band": detail["seniority_band"],
+        "typical_market": detail["typical_market"],
+        "assigned_posting_count": detail["assigned_posting_count"],
+        "reviewed_requirement_posting_count": detail["reviewed_requirement_posting_count"],
+        "known_posting_date_count": detail["known_posting_date_count"],
+        "unknown_posting_date_count": detail["unknown_posting_date_count"],
+        "latest_known_posting_date": detail["latest_known_posting_date"],
+        "distinct_country_count": detail["distinct_country_count"],
+        "countries": detail["countries"],
+        "demand_derivation_available": detail["demand_derivation_available"],
+        "compensation_benchmark_available": detail["compensation_benchmark_available"],
+        "economics_freshness": detail["economics_freshness"],
+        "evidence_depth": detail["evidence_depth"],
     }
 
 
@@ -530,7 +575,8 @@ def _no_selected_direction(opportunity_role: dict) -> dict:
     }
 
 
-def _direction_without_target(cur, opportunity_role: dict, direction: dict, opportunity_compensation: dict) -> dict:
+def _direction_without_target(cur, opportunity_role: dict, direction: dict, opportunity_compensation: dict,
+                              freshness: dict) -> dict:
     return {
         "state": STATE_DIRECTION_WITHOUT_TARGET,
         "direction": direction,
@@ -540,6 +586,7 @@ def _direction_without_target(cur, opportunity_role: dict, direction: dict, oppo
         "direction_constraints": _direct_constraints(direction, opportunity_role, opportunity_compensation),
         "direction_dimensions": _qualitative_dimensions(direction),
         "archetype_relationship": _archetype_relationship(cur, opportunity_role, None, direction),
+        "market_evidence_context": _market_evidence_context(cur, opportunity_role, freshness),
         "opportunity": _role_summary(opportunity_role),
         "method": METHOD,
     }
@@ -570,6 +617,7 @@ def _insufficient_target_evidence(cur, opportunity_role: dict, target_role: dict
                     "comparison is not available. The facts below do not depend on that gap."),
         "you_to_opportunity": _you_to_opportunity_summary(comparison),
         "economics": _economics_block(cur, opportunity_id, str(target_role["id"]), opportunity_compensation, freshness),
+        "market_evidence_context": _market_evidence_context(cur, opportunity_role, freshness),
         "opportunity": _role_summary(opportunity_role),
         "method": METHOD,
     }
@@ -614,6 +662,7 @@ def _target_available(cur, opportunity_role: dict, target_role: dict, target_id:
         "direction_constraints": _direct_constraints(direction, opportunity_role, opportunity_compensation) if direction else [],
         "direction_dimensions": _qualitative_dimensions(direction) if direction else [],
         "archetype_relationship": archetype_relationship,
+        "market_evidence_context": _market_evidence_context(cur, opportunity_role, freshness),
         "economics": economics,
         "review": review,
         "semantic_similarity": {
@@ -647,7 +696,7 @@ def build_opportunity_alignment(cur, opportunity_id: str, *, target_id_override:
     elif direction["target"] is None:
         freshness = economics_freshness(cur)
         opportunity_compensation = resolver.resolve_role_compensation(cur, opportunity_id, freshness=freshness)
-        return _direction_without_target(cur, opportunity_role, direction, opportunity_compensation)
+        return _direction_without_target(cur, opportunity_role, direction, opportunity_compensation, freshness)
     else:
         target_id = direction["target"]["id"]
         target_role = _role_or_none(cur, target_id)
@@ -657,7 +706,7 @@ def build_opportunity_alignment(cur, opportunity_id: str, *, target_id_override:
             # defensive fallback, not an expected path.
             freshness = economics_freshness(cur)
             opportunity_compensation = resolver.resolve_role_compensation(cur, opportunity_id, freshness=freshness)
-            return _direction_without_target(cur, opportunity_role, direction, opportunity_compensation)
+            return _direction_without_target(cur, opportunity_role, direction, opportunity_compensation, freshness)
 
     freshness = economics_freshness(cur)
     opportunity_compensation = resolver.resolve_role_compensation(cur, opportunity_id, freshness=freshness)

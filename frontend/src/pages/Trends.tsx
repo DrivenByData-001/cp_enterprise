@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   type CooccurrenceItem,
   type CorpusOverview,
   type DimensionCompareItem,
+  type MarketCoverageSummary,
   type RequirementFrequencyItem,
   type RequirementKey,
   type RequirementTrend,
@@ -11,6 +13,7 @@ import {
   type TrendFilterInput,
   type TrendLabel,
 } from '../lib/api'
+import { EvidenceDepthBadge } from '../components/market/ArchetypeEvidencePanel'
 
 const TREND_LABEL: Record<TrendLabel, { text: string; color: string }> = {
   emerging: { text: 'Emerging', color: 'var(--series-1)' },
@@ -43,6 +46,36 @@ function SampleSize({ n, insufficient }: { n: number; insufficient?: boolean }) 
       n={n}
       {insufficient ? ' — too few roles to read much into this' : ''}
     </span>
+  )
+}
+
+// Phase 8 (docs/39 build §20): a compact coverage strip so every trend is
+// read in the context of how much (and how canonical) the corpus behind it
+// actually is — context alongside the trend classification, never an input
+// to it.
+function CoverageStrip({ filters, coverage }: { filters: TrendFilterInput; coverage: MarketCoverageSummary | null }) {
+  if (!coverage) return null
+  const { roles, geography, vocabulary } = coverage
+  const canonicalMode = (vocabulary.roles_with_accepted_canonical_requirements.count
+    >= vocabulary.roles_relying_on_legacy_fallback.count) ? 'canonical' : 'legacy/raw'
+  const qs = new URLSearchParams()
+  if (filters.year_from) qs.set('year_from', String(filters.year_from))
+  if (filters.year_to) qs.set('year_to', String(filters.year_to))
+  if (filters.country) qs.set('country', filters.country)
+  if (filters.seniority_level) qs.set('seniority_level', filters.seniority_level)
+  return (
+    <div
+      className="card"
+      style={{ marginTop: 12, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12 }}
+    >
+      <span className="secondary"><strong>{roles.total}</strong> roles in scope</span>
+      <span className="secondary">{roles.known_posting_date.count} dated · {roles.unknown_posting_date.count} undated</span>
+      <span className="secondary">{geography.distinct_known_country_count} countries represented</span>
+      <span className="secondary">requirement evidence: predominantly {canonicalMode}</span>
+      <Link to={`/market/coverage${qs.toString() ? `?${qs}` : ''}`} style={{ marginLeft: 'auto' }}>
+        Full market coverage →
+      </Link>
+    </div>
   )
 }
 
@@ -160,6 +193,12 @@ function RequirementDetail({ item, filters }: { item: RequirementFrequencyItem; 
                 {trend.classification.rationale}
               </span>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <EvidenceDepthBadge depth={trend.evidence_depth} />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {trend.evidence_depth.reason}
+              </span>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {trend.series.map((p) => (
                 <Bar key={p.period} label={String(p.period)} count={p.role_count} total={p.total_roles} />
@@ -229,6 +268,7 @@ export default function Trends() {
   const [filters, setFilters] = useState<TrendFilterInput>({})
   const [overview, setOverview] = useState<CorpusOverview | null>(null)
   const [topRequirements, setTopRequirements] = useState<TopRequirements | null>(null)
+  const [coverage, setCoverage] = useState<MarketCoverageSummary | null>(null)
   const [selected, setSelected] = useState<RequirementFrequencyItem | null>(null)
   const [methodologyOpen, setMethodologyOpen] = useState(false)
   const [methodology, setMethodology] = useState<string | null>(null)
@@ -243,6 +283,16 @@ export default function Trends() {
         setTopRequirements(t)
       })
       .catch((e) => setError(String(e)))
+    // Phase 8 (docs/39 build §20/§31): exactly one additional request for
+    // the whole page — coverage-context failure never blanks Trends itself.
+    setCoverage(null)
+    api
+      .getMarketCoverageSummary({
+        year_from: filters.year_from, year_to: filters.year_to,
+        country: filters.country, seniority_level: filters.seniority_level,
+      })
+      .then(setCoverage)
+      .catch(() => setCoverage(null))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(filters)])
 
@@ -260,6 +310,7 @@ export default function Trends() {
       </p>
 
       <FilterBar filters={filters} setFilters={setFilters} />
+      <CoverageStrip filters={filters} coverage={coverage} />
 
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
 

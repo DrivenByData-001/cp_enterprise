@@ -168,6 +168,14 @@ export default function Explore() {
             </div>
           </div>
           <div>
+            <h3 style={{ fontSize: 14, marginTop: 0 }}>How much evidence do I actually have?</h3>
+            <p className="muted" style={{ fontSize: 13 }}>
+              What the captured corpus covers, and what it cannot establish about the wider market — the evidence
+              base behind every market-derived conclusion in this app.
+            </p>
+            <Link to="/market/coverage">Market coverage →</Link>
+          </div>
+          <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>Visual exploration</h3>
             <p className="muted" style={{ fontSize: 13 }}>
               Optional semantic visualization of role similarity — not a career recommendation.

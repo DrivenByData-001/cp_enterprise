@@ -25,6 +25,7 @@ from .routes import (
     episodes,
     evaluation,
     import_routes,
+    market_coverage,
     market_data,
     pathways,
     preferences,
@@ -131,6 +132,7 @@ app.include_router(archetypes.router, dependencies=_protected)
 app.include_router(archetype_context.router, dependencies=_protected)
 app.include_router(economics.router, dependencies=_protected)
 app.include_router(market_data.router, dependencies=_protected)
+app.include_router(market_coverage.router, dependencies=_protected)
 app.include_router(role_economics.router, dependencies=_protected)
 app.include_router(pathways.router, dependencies=_protected)
 app.include_router(applications.router, dependencies=_protected)
