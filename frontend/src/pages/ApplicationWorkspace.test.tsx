@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ApplicationWorkspace from './ApplicationWorkspace'
@@ -13,6 +13,7 @@ import {
   type ApplicationEventType,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
+  type ApplicationLearningState,
   type ApplicationNote,
   type ArtifactType,
   type OpportunityAlignment,
@@ -46,8 +47,18 @@ vi.mock('../lib/api', () => ({
     updateApplicationEvent: vi.fn(),
     deleteApplicationEvent: vi.fn(),
     getCareerAlignment: vi.fn(),
+    getApplicationLearningState: vi.fn(),
+    promoteApplicationNote: vi.fn(),
+    promoteApplicationEvent: vi.fn(),
   },
 }))
+
+beforeEach(() => {
+  // Most tests here don't care about the Phase 9 learning-loop queue-status
+  // panel — give it a harmless empty default so they don't each have to
+  // know about it (same precedent as Home.test.tsx's own beforeEach).
+  vi.mocked(api.getApplicationLearningState).mockResolvedValue({ notes: [], events: [] })
+})
 
 afterEach(() => {
   cleanup()
@@ -213,6 +224,7 @@ function renderWorkspace(
   artifacts: ApplicationArtifactsResponse = makeArtifactsResponse(),
   events: ApplicationEvent[] | Error = [],
   alignment: OpportunityAlignment | Error = noDirectionAlignment(detail.role.id),
+  learningState: ApplicationLearningState | Error = { notes: [], events: [] },
 ) {
   vi.mocked(api.getApplication).mockResolvedValue(detail)
   if (evidence instanceof Error) vi.mocked(api.getApplicationEvidence).mockRejectedValue(evidence)
@@ -222,6 +234,8 @@ function renderWorkspace(
   else vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events })
   if (alignment instanceof Error) vi.mocked(api.getCareerAlignment).mockRejectedValue(alignment)
   else vi.mocked(api.getCareerAlignment).mockResolvedValue(alignment)
+  if (learningState instanceof Error) vi.mocked(api.getApplicationLearningState).mockRejectedValue(learningState)
+  else vi.mocked(api.getApplicationLearningState).mockResolvedValue(learningState)
   return render(
     <MemoryRouter initialEntries={['/applications/app-1']}>
       <Routes>
@@ -917,5 +931,127 @@ describe('Interview stage (Phase 5, docs/36)', () => {
     await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalled())
     expect(api.updateApplicationStatus).not.toHaveBeenCalled()
     expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
+  })
+})
+
+// --- Phase 9: learning-loop promotion (docs/40, build §49) ------------------
+
+describe('Learning-loop promotion (Phase 9, docs/40)', () => {
+  const evidenceNote: ApplicationNote = {
+    id: 'note-1', application_id: 'app-1', concept_id: 'c1', note_type: 'evidence_example',
+    note_text: 'I personally led the reserving process.', created_at: 't', updated_at: 't',
+  }
+  const generalNote: ApplicationNote = {
+    id: 'note-2', application_id: 'app-1', concept_id: null, note_type: 'general',
+    note_text: 'Remember to mention the migration project.', created_at: 't', updated_at: 't',
+  }
+
+  it('an evidence-example note offers a Profile360 review action', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }), undefined, [], undefined, { notes: [], events: [] })
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    expect(within(notesSection).getByText('Send to Profile360 for review')).toBeTruthy()
+  })
+
+  it('a general note can also be explicitly queued', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [generalNote] }))
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    expect(within(notesSection).getByText('Send to Profile360 for review')).toBeTruthy()
+  })
+
+  it('clicking the review action promotes the note and refreshes queue status', async () => {
+    vi.mocked(api.promoteApplicationNote).mockResolvedValue({ status: 'queued_pending', queue_source_key: 'cp_enterprise_application_note:note-1' })
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }))
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    fireEvent.click(within(notesSection).getByText('Send to Profile360 for review'))
+    await waitFor(() => expect(api.promoteApplicationNote).toHaveBeenCalledWith('app-1', 'note-1'))
+    await waitFor(() => expect(api.getApplicationLearningState).toHaveBeenCalledTimes(2)) // initial load + post-promote refresh
+    // The promote handler re-reads learning state; it never re-fetches
+    // evidence, and never touches capability/Target evidence in any way.
+    expect(api.getApplicationEvidence).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows "Queued for Profile360 review" once pending, with no further action offered', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }), undefined, [], undefined, {
+      notes: [{ source_type: 'note', source_id: 'note-1', queue_source_key: 'k', status: 'queued_pending' }], events: [],
+    })
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    expect(within(notesSection).getByText('Queued for Profile360 review')).toBeTruthy()
+    expect(within(notesSection).queryByText('Send to Profile360 for review')).toBeNull()
+  })
+
+  it('shows "Processed by Profile360" once processed, distinct from evidence status', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }), undefined, [], undefined, {
+      notes: [{ source_type: 'note', source_id: 'note-1', queue_source_key: 'k', status: 'processed_by_profile360' }], events: [],
+    })
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    expect(within(notesSection).getByText('Processed by Profile360')).toBeTruthy()
+    // "Processed" is a queue fact, never rendered as an evidence verdict.
+    expect(within(notesSection).queryByText('Evidenced')).toBeNull()
+  })
+
+  it('shows a changed-since-queue state with a Requeue action', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }), undefined, [], undefined, {
+      notes: [{ source_type: 'note', source_id: 'note-1', queue_source_key: 'k', status: 'source_changed_since_queue' }], events: [],
+    })
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    expect(within(notesSection).getByText('Changed since queued')).toBeTruthy()
+    expect(within(notesSection).getByText('Requeue')).toBeTruthy()
+  })
+
+  it('explicit requeue calls promote again', async () => {
+    vi.mocked(api.promoteApplicationNote).mockResolvedValue({ status: 'queued_pending', queue_source_key: 'k' })
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }), undefined, [], undefined, {
+      notes: [{ source_type: 'note', source_id: 'note-1', queue_source_key: 'k', status: 'source_changed_since_queue' }], events: [],
+    })
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    fireEvent.click(within(notesSection).getByText('Requeue'))
+    await waitFor(() => expect(api.promoteApplicationNote).toHaveBeenCalledWith('app-1', 'note-1'))
+  })
+
+  it('a queue failure surfaces an error without claiming success', async () => {
+    vi.mocked(api.promoteApplicationNote).mockRejectedValue(new Error('503 profile360.manual_import_queue write failed'))
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote] }))
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    fireEvent.click(within(notesSection).getByText('Send to Profile360 for review'))
+    await waitFor(() => expect(api.promoteApplicationNote).toHaveBeenCalled())
+    expect(await screen.findByText(/write failed/)).toBeTruthy()
+  })
+
+  it('an event with notes offers a review action', async () => {
+    const event = makeEvent({ event_type: 'interview_completed', notes: 'They asked hard reserving questions.' })
+    renderWorkspace(makeDetail(), makeEvidence(), undefined, [event])
+    const lifecycleSection = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    expect(within(lifecycleSection).getByText('Send to Profile360 for review')).toBeTruthy()
+  })
+
+  it('an event with no notes offers no promotion action', async () => {
+    const event = makeEvent({ event_type: 'interview_scheduled', notes: null })
+    renderWorkspace(makeDetail(), makeEvidence(), undefined, [event])
+    const lifecycleSection = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    expect(within(lifecycleSection).queryByText('Send to Profile360 for review')).toBeNull()
+  })
+
+  it('promoting an event calls the event promotion endpoint, not the note one', async () => {
+    vi.mocked(api.promoteApplicationEvent).mockResolvedValue({ status: 'queued_pending', queue_source_key: 'k' })
+    const event = makeEvent({ id: 'event-9', event_type: 'interview_completed', notes: 'Good technical discussion.' })
+    renderWorkspace(makeDetail(), makeEvidence(), undefined, [event])
+    const lifecycleSection = (await screen.findByRole('heading', { name: 'Lifecycle' })).closest('section') as HTMLElement
+    fireEvent.click(within(lifecycleSection).getByText('Send to Profile360 for review'))
+    await waitFor(() => expect(api.promoteApplicationEvent).toHaveBeenCalledWith('app-1', 'event-9'))
+    expect(api.promoteApplicationNote).not.toHaveBeenCalled()
+  })
+
+  it('queueing a note never changes the capability/evidence status shown on the page', async () => {
+    vi.mocked(api.promoteApplicationNote).mockResolvedValue({ status: 'queued_pending', queue_source_key: 'k' })
+    renderWorkspace(makeDetail(), makeEvidence({ notes: [evidenceNote], counts: { evidenced: 0, partial: 0, user_asserted: 0, not_found: 1 } }))
+    await screen.findByRole('heading', { name: 'Evidence to use' })
+    expect(screen.getByText('No accepted profile evidence found.')).toBeTruthy()
+    const notesSection = (await screen.findByRole('heading', { name: 'Application notes' })).closest('section') as HTMLElement
+    fireEvent.click(within(notesSection).getByText('Send to Profile360 for review'))
+    await waitFor(() => expect(api.promoteApplicationNote).toHaveBeenCalled())
+    // Queueing calls no evidence-mutating endpoint at all.
+    expect(api.createApplicationNote).not.toHaveBeenCalled()
+    expect(api.updateApplicationNote).not.toHaveBeenCalled()
+    expect(screen.getByText('No accepted profile evidence found.')).toBeTruthy()
   })
 })

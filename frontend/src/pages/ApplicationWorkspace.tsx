@@ -10,8 +10,11 @@ import {
   type ApplicationEventType,
   type ApplicationEvidence,
   type ApplicationEvidenceItem,
+  type ApplicationLearningState,
+  type ApplicationLearningStateItem,
   type ApplicationNote,
   type ApplicationNoteType,
+  type LearningQueueStatus,
   type ApplicationStatus,
   type ArtifactContent,
   type ArtifactType,
@@ -144,6 +147,65 @@ function personSideSummary(item: ApplicationEvidenceItem): string {
   return 'No accepted profile evidence found.'
 }
 
+// --- Phase 9: learning-loop promotion (docs/40) -----------------------------
+//
+// The explicit, user-triggered path from an application-local note/event
+// into Profile360's own review queue (app/application_learning.py). Careful
+// copy throughout: "send for review", never "add to my evidence" — review
+// hasn't happened yet, and queueing never itself changes any capability or
+// Target evidence status (build §14/§34).
+
+const QUEUE_STATUS_LABEL: Record<LearningQueueStatus, string> = {
+  not_queued: 'Application-only',
+  queued_pending: 'Queued for Profile360 review',
+  processed_by_profile360: 'Processed by Profile360',
+  source_changed_since_queue: 'Changed since queued',
+}
+
+function findLearningStatus(
+  learningState: ApplicationLearningState | null,
+  sourceType: 'note' | 'event',
+  sourceId: string,
+): ApplicationLearningStateItem | undefined {
+  const list = sourceType === 'note' ? learningState?.notes : learningState?.events
+  return list?.find((item) => item.source_id === sourceId)
+}
+
+function LearningActionRow({
+  status,
+  busy,
+  onPromote,
+}: {
+  status: LearningQueueStatus | undefined
+  busy: boolean
+  onPromote: () => void
+}) {
+  if (!status || status === 'not_queued') {
+    return (
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+          {busy ? 'Sending…' : 'Send to Profile360 for review'}
+        </button>
+      </div>
+    )
+  }
+  if (status === 'source_changed_since_queue') {
+    return (
+      <div className="actions" style={{ marginTop: 6, alignItems: 'center' }}>
+        <span className="muted" style={{ fontSize: 12 }}>{QUEUE_STATUS_LABEL[status]}</span>
+        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+          {busy ? 'Requeuing…' : 'Requeue'}
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div style={{ marginTop: 6 }}>
+      <span className="muted" style={{ fontSize: 12 }}>{QUEUE_STATUS_LABEL[status]}</span>
+    </div>
+  )
+}
+
 // --- Notes -------------------------------------------------------------
 
 function NoteComposer({
@@ -189,11 +251,17 @@ function NoteItem({
   busy,
   onSave,
   onDelete,
+  learningStatus,
+  promoteBusy,
+  onPromote,
 }: {
   note: ApplicationNote
   busy: boolean
   onSave: (text: string) => void
   onDelete: () => void
+  learningStatus: LearningQueueStatus | undefined
+  promoteBusy: boolean
+  onPromote: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(note.note_text)
@@ -235,6 +303,7 @@ function NoteItem({
           </button>
         </div>
       </div>
+      <LearningActionRow status={learningStatus} busy={promoteBusy} onPromote={onPromote} />
     </div>
   )
 }
@@ -331,11 +400,17 @@ function EventRow({
   busy,
   onSave,
   onDelete,
+  learningStatus,
+  promoteBusy,
+  onPromote,
 }: {
   event: ApplicationEvent
   busy: boolean
   onSave: (input: ApplicationEventInput) => void
   onDelete: () => void
+  learningStatus: LearningQueueStatus | undefined
+  promoteBusy: boolean
+  onPromote: () => void
 }) {
   const [editing, setEditing] = useState(false)
   if (editing) {
@@ -372,6 +447,7 @@ function EventRow({
           </button>
         </div>
       </div>
+      {event.notes && <LearningActionRow status={learningStatus} busy={promoteBusy} onPromote={onPromote} />}
     </div>
   )
 }
@@ -385,6 +461,9 @@ function LifecycleSection({
   onAdd,
   onSave,
   onDelete,
+  learningState,
+  promoteBusyKey,
+  onPromoteEvent,
 }: {
   status: ApplicationStatus
   events: ApplicationEvent[] | null
@@ -394,6 +473,9 @@ function LifecycleSection({
   onAdd: (input: ApplicationEventInput) => void
   onSave: (eventId: string, input: ApplicationEventInput) => void
   onDelete: (eventId: string) => void
+  learningState: ApplicationLearningState | null
+  promoteBusyKey: string | null
+  onPromoteEvent: (eventId: string) => void
 }) {
   const [composing, setComposing] = useState<ApplicationEventType | null>(null)
   const upcoming = events ? upcomingInterview(events) : null
@@ -431,7 +513,16 @@ function LifecycleSection({
       {events === null && !eventsError && <p className="muted">Loading timeline…</p>}
       {events && events.length === 0 && <p className="muted">No events recorded yet.</p>}
       {events?.map((event) => (
-        <EventRow key={event.id} event={event} busy={busy} onSave={(input) => onSave(event.id, input)} onDelete={() => onDelete(event.id)} />
+        <EventRow
+          key={event.id}
+          event={event}
+          busy={busy}
+          onSave={(input) => onSave(event.id, input)}
+          onDelete={() => onDelete(event.id)}
+          learningStatus={findLearningStatus(learningState, 'event', event.id)?.status}
+          promoteBusy={promoteBusyKey === `event:${event.id}`}
+          onPromote={() => onPromoteEvent(event.id)}
+        />
       ))}
 
       {composing ? (
@@ -1730,12 +1821,18 @@ function ApplicationNotesSection({
   onAdd,
   onSave,
   onDelete,
+  learningState,
+  promoteBusyKey,
+  onPromoteNote,
 }: {
   notes: ApplicationNote[]
   busy: boolean
   onAdd: (text: string) => void
   onSave: (noteId: string, text: string) => void
   onDelete: (noteId: string) => void
+  learningState: ApplicationLearningState | null
+  promoteBusyKey: string | null
+  onPromoteNote: (noteId: string) => void
 }) {
   const [adding, setAdding] = useState(false)
   return (
@@ -1744,7 +1841,8 @@ function ApplicationNotesSection({
         Application notes
       </h2>
       <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
-        Notes here are specific to this application. They never become Profile360 claims, mappings or evidence.
+        Notes here are specific to this application. They never become Profile360 claims, mappings or evidence
+        unless you explicitly send one to Profile360 for review.
       </p>
       {notes.length === 0 && !adding && <p className="muted">No notes yet.</p>}
       {notes.map((note) => (
@@ -1754,6 +1852,9 @@ function ApplicationNotesSection({
           busy={busy}
           onSave={(text) => onSave(note.id, text)}
           onDelete={() => onDelete(note.id)}
+          learningStatus={findLearningStatus(learningState, 'note', note.id)?.status}
+          promoteBusy={promoteBusyKey === `note:${note.id}`}
+          onPromote={() => onPromoteNote(note.id)}
         />
       ))}
       {adding ? (
@@ -1788,6 +1889,10 @@ export default function ApplicationWorkspace() {
   const [artifactsError, setArtifactsError] = useState<string | null>(null)
   const [events, setEvents] = useState<ApplicationEvent[] | null>(null)
   const [eventsError, setEventsError] = useState<string | null>(null)
+  // Phase 9 (docs/40 build §12): one bounded queue-status read for every
+  // note/event on this Application — never a request per row.
+  const [learningState, setLearningState] = useState<ApplicationLearningState | null>(null)
+  const [learningStateError, setLearningStateError] = useState<string | null>(null)
   // Phase 7 (docs/38 build §16): a compact, read-only alignment summary —
   // reuses the same endpoint/service Role Detail and Pathways call, never a
   // second alignment engine. Independent of the other four loads: a failed
@@ -1801,6 +1906,8 @@ export default function ApplicationWorkspace() {
   const [noteError, setNoteError] = useState<string | null>(null)
   const [eventBusy, setEventBusy] = useState(false)
   const [eventActionError, setEventActionError] = useState<string | null>(null)
+  const [promoteBusyKey, setPromoteBusyKey] = useState<string | null>(null)
+  const [promoteError, setPromoteError] = useState<string | null>(null)
 
   const loadDetail = useCallback(() => {
     if (!id) return
@@ -1845,6 +1952,15 @@ export default function ApplicationWorkspace() {
       .catch((e) => { if (currentId.current === id) setEventsError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
+  const loadLearningState = useCallback(() => {
+    if (!id) return
+    setLearningStateError(null)
+    api
+      .getApplicationLearningState(id)
+      .then((d) => { if (currentId.current === id) setLearningState(d) })
+      .catch((e) => { if (currentId.current === id) setLearningStateError(e instanceof Error ? e.message : String(e)) })
+  }, [id])
+
   // Phase 7: the alignment endpoint is keyed by the *role* id, which is only
   // known once `detail` has loaded — so this fires as its own effect, after
   // detail resolves, rather than joining the four requests below that all
@@ -1871,15 +1987,18 @@ export default function ApplicationWorkspace() {
     setEventsError(null)
     setAlignment(null)
     setAlignmentError(null)
+    setLearningState(null)
+    setLearningStateError(null)
   }, [id])
 
-  // Four independent, parallel requests (build §13/§20/§21) — never a
+  // Five independent, parallel requests (build §13/§20/§21) — never a
   // waterfall, and generation never happens on load.
   useEffect(loadDetail, [loadDetail])
   useEffect(loadEvidence, [loadEvidence])
   useEffect(loadArtifacts, [loadArtifacts])
   useEffect(loadEvents, [loadEvents])
   useEffect(loadAlignment, [loadAlignment])
+  useEffect(loadLearningState, [loadLearningState])
 
   const handleStatusChange = async (status: ApplicationStatus) => {
     if (!id) return
@@ -1995,6 +2114,34 @@ export default function ApplicationWorkspace() {
     }
   }
 
+  const handlePromoteNote = async (noteId: string) => {
+    if (!id) return
+    setPromoteBusyKey(`note:${noteId}`)
+    setPromoteError(null)
+    try {
+      await api.promoteApplicationNote(id, noteId)
+      loadLearningState()
+    } catch (e) {
+      setPromoteError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPromoteBusyKey(null)
+    }
+  }
+
+  const handlePromoteEvent = async (eventId: string) => {
+    if (!id) return
+    setPromoteBusyKey(`event:${eventId}`)
+    setPromoteError(null)
+    try {
+      await api.promoteApplicationEvent(id, eventId)
+      loadLearningState()
+    } catch (e) {
+      setPromoteError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPromoteBusyKey(null)
+    }
+  }
+
   if (detailError) return <p role="alert" style={{ color: 'var(--critical)' }}>{detailError}</p>
   if (!detail) return <p className="muted">Loading…</p>
 
@@ -2064,6 +2211,9 @@ export default function ApplicationWorkspace() {
           onAdd={handleAddEvent}
           onSave={handleSaveEvent}
           onDelete={handleDeleteEvent}
+          learningState={learningState}
+          promoteBusyKey={promoteBusyKey}
+          onPromoteEvent={handlePromoteEvent}
         />
       </div>
 
@@ -2085,6 +2235,12 @@ export default function ApplicationWorkspace() {
       )}
 
       {noteError && <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>{noteError}</p>}
+      {promoteError && <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>{promoteError}</p>}
+      {learningStateError && (
+        <p className="muted" style={{ marginTop: 16, fontSize: 12 }}>
+          Profile360 review status couldn't be checked just now: {learningStateError}
+        </p>
+      )}
 
       <div style={{ marginTop: 16 }}>
         <ApplicationNotesSection
@@ -2093,6 +2249,9 @@ export default function ApplicationWorkspace() {
           onAdd={handleAddGeneralNote}
           onSave={handleSaveNote}
           onDelete={handleDeleteNote}
+          learningState={learningState}
+          promoteBusyKey={promoteBusyKey}
+          onPromoteNote={handlePromoteNote}
         />
       </div>
 

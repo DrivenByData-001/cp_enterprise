@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { AuthContext } from './useAuth'
-import { api, type ApplicationListItem, type Profile360Row, type Role, type RoleListResponse } from './lib/api'
+import { api, type ApplicationListItem, type Cockpit, type Profile360Row, type Role, type RoleListResponse } from './lib/api'
 
 vi.mock('./lib/api', () => ({
   api: {
@@ -16,8 +16,24 @@ vi.mock('./lib/api', () => ({
     getRole: vi.fn(),
     getSelectedCareerDirection: vi.fn(),
     listCareerDirections: vi.fn(),
+    getCockpit: vi.fn(),
   },
 }))
+
+// Phase 9 (docs/40): Home now renders from this one composed call — these
+// App-level navigation/accessibility tests don't care about its contents,
+// just that the page renders, so a minimal empty Cockpit is the shared default.
+function emptyCockpit(): Cockpit {
+  return {
+    direction: { state: 'no_direction', direction: null, target: null },
+    target_progress: { state: 'no_direction', direction: null, current: null, checkpoint: null, diff: null, history: [] },
+    opportunities: { state: 'available', items: [] },
+    applications: { state: 'available', active_count: 0, by_status: {}, active_items: [], next_interview: null, recent_outcomes: [] },
+    learning: { state: 'available', items: [] },
+    market_context: { state: 'no_direction' },
+    next_actions: [],
+  }
+}
 
 // Home and Applications both fetch applications on mount; most of these
 // navigation-focused tests don't care about that response, so a shared
@@ -44,6 +60,7 @@ beforeEach(() => {
   vi.mocked(api.listApplications).mockResolvedValue(applicationsResponse())
   vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
   vi.mocked(api.listCareerDirections).mockResolvedValue({ items: [] })
+  vi.mocked(api.getCockpit).mockResolvedValue(emptyCockpit())
 })
 
 afterEach(() => {

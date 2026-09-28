@@ -86,8 +86,17 @@ from . import market_coverage
 from .economics_freshness import economics_freshness
 from .embeddings import ensure_profile_embedding, get_embedding
 from .personal_earnings import safe_personal_earnings_state
-from .stepping_stones import assess_specific_candidate, review_blockers, review_is_complete
+from .role_requirements import load_requirement_review_summary_bulk, load_role_requirements_bulk
+from .stepping_stones import (
+    _evaluate_missing_concepts,
+    assess_candidate,
+    assess_specific_candidate,
+    review_blockers,
+    review_is_complete,
+)
+from .target_cache import cached_statuses
 from .target_cache import revisions as target_cache_revisions
+from .target_mapping import target_mapping_summary
 
 STATE_NO_SELECTED_DIRECTION = "no_selected_direction"
 STATE_DIRECTION_WITHOUT_TARGET = "direction_without_target"
@@ -315,6 +324,103 @@ def _classify_relationship(step: dict, archetype_match: bool) -> dict:
     else:
         state = REL_RELATIONSHIP_UNCLEAR
     return {"state": state, "label": _RELATIONSHIP_LABELS[state], "reason": step["explanation"]}
+
+
+# --- Bulk relationship (Phase 9, build §20) ---------------------------------
+
+
+def bulk_target_relationship(
+    cur,
+    target_id: str,
+    candidate_ids: list[str],
+    *,
+    target_archetype_id: str | None,
+    direction_archetype_id: str | None,
+) -> dict[str, dict]:
+    """Bounded, batched counterpart to `assess_specific_candidate` +
+    `_classify_relationship` for several candidates against one target at
+    once — Career Cockpit's recent-opportunities summary needs this for a
+    handful of postings without one alignment round trip per posting
+    (build §20's "do not call the single-role alignment path once per Home
+    opportunity"). Bulk-loads requirements/review for the target plus every
+    candidate in two queries, evaluates each distinct concept's evidence
+    status at most once (the same `_evaluate_missing_concepts` cache path
+    `assess_all_candidates`/`assess_specific_candidate` use), and calls the
+    exact same pure `assess_candidate`/`_classify_relationship` functions —
+    so this can never disagree with what a single `build_opportunity_
+    alignment` call would say about the same (target, candidate) pair (see
+    test_opportunity_alignment.py's bulk/single parity test). Never invokes
+    `assess_all_candidates`'s whole-corpus scan (build §39) — `candidate_ids`
+    is exactly the caller's own bounded set, never the full posting corpus.
+
+    Returns `{}` for an empty `candidate_ids`. Callers with no Target at all
+    (no selected Direction, or a Direction without a Target) must not call
+    this — build §20's "If selected Direction has no Target, show recent
+    opportunities but no fabricated route relationship" — there is nothing
+    to relate candidates to."""
+    candidate_ids = [str(c) for c in candidate_ids]
+    if not candidate_ids:
+        return {}
+
+    cur.execute(
+        "SELECT id, archetype_concept_id FROM jobber.role_instance WHERE id = ANY(%s::uuid[])",
+        (candidate_ids,),
+    )
+    candidate_archetypes = {
+        str(r["id"]): (str(r["archetype_concept_id"]) if r["archetype_concept_id"] else None) for r in cur.fetchall()
+    }
+
+    # A shared archetype only counts as a structural anchor while active —
+    # same gate `_archetype_relationship` applies to the single-role path.
+    all_archetype_ids = {a for a in (*candidate_archetypes.values(), target_archetype_id, direction_archetype_id) if a}
+    active_archetypes: set[str] = set()
+    if all_archetype_ids:
+        cur.execute(
+            "SELECT id FROM jobber.concept WHERE id = ANY(%s::uuid[]) AND status = 'active'", (list(all_archetype_ids),)
+        )
+        active_archetypes = {str(r["id"]) for r in cur.fetchall()}
+
+    requirements = load_role_requirements_bulk(cur, [target_id, *candidate_ids])
+    review_summary = load_requirement_review_summary_bulk(cur, [target_id, *candidate_ids])
+    concepts = {r["concept_id"] for rows in requirements.values() for r in rows}
+
+    evidence_revision, _path_revision = target_cache_revisions(cur, None, None)
+    statuses = cached_statuses(cur, evidence_revision, list(concepts))
+    _evaluate_missing_concepts(cur, requirements, statuses, evidence_revision)
+
+    mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
+    target_review = review_summary.get(target_id, {})
+
+    results: dict[str, dict] = {}
+    for candidate_id in candidate_ids:
+        step = assess_candidate(
+            requirements.get(candidate_id, []),
+            requirements.get(target_id, []),
+            statuses,
+            review=review_summary.get(candidate_id, {}),
+            target_review=target_review,
+        )
+        if not mapping["complete"]:
+            step.update(
+                assessment="incomplete_target_mapping",
+                ranking_score=0,
+                explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.",
+            )
+
+        candidate_archetype = candidate_archetypes.get(candidate_id)
+        archetype_match = bool(
+            candidate_archetype
+            and candidate_archetype in active_archetypes
+            and candidate_archetype in (target_archetype_id, direction_archetype_id)
+        )
+        results[candidate_id] = {
+            "relationship": _classify_relationship(step, archetype_match),
+            "target_gaps_addressed": step["target_gaps_addressed"],
+            "review_caveat": None if (step["review_complete"] and step["target_review_complete"] and mapping["complete"]) else (
+                "Requirement review or Target mapping is incomplete for this posting — the relationship shown may change once review is complete."
+            ),
+        }
+    return results
 
 
 # --- You -> Opportunity (build §6) ------------------------------------------

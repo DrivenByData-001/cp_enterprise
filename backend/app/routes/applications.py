@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from .. import application_events as events
+from .. import application_learning as learning
 from ..comparison_service import build_role_comparison
 from ..db import db_cursor
 from ..models import ApplicationEventInput, ApplicationEventUpdate
@@ -55,6 +56,11 @@ def _notes_for_application(cur, application_id: UUID) -> list[dict]:
         (str(application_id),),
     )
     return cur.fetchall()
+
+
+def _role_summary_for_application(cur, application: dict) -> dict:
+    cur.execute("SELECT id, title, organisation FROM jobber.role_instance WHERE id = %s", (application["role_instance_id"],))
+    return cur.fetchone()
 
 
 def _require_active_concept(cur, concept_id) -> None:
@@ -440,3 +446,86 @@ def delete_application_event(application_id: UUID, event_id: UUID):
         if not events.delete_event(cur, str(application_id), str(event_id)):
             raise HTTPException(404, "event not found on this application")
     return {"status": "deleted"}
+
+
+# --- learning-loop promotion (Phase 9, docs/40) ------------------------------
+#
+# Explicit, user-triggered promotion of one note/event into profile360's own
+# review pipeline (app/application_learning.py) — never automatic, never a
+# second evidence engine. Promoting changes no Application state: the source
+# note/event is never mutated or deleted, and no capability/Target-gap
+# status anywhere changes as a result (build §13/§15).
+
+
+def _note_or_404(cur, application_id: UUID, note_id: UUID) -> dict:
+    cur.execute(
+        "SELECT * FROM jobber.application_note WHERE id = %s AND application_id = %s",
+        (str(note_id), str(application_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "note not found on this application")
+    return row
+
+
+def _event_or_404(cur, application_id: UUID, event_id: UUID) -> dict:
+    cur.execute(
+        "SELECT * FROM jobber.application_event WHERE id = %s AND application_id = %s",
+        (str(event_id), str(application_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "event not found on this application")
+    return row
+
+
+def _concept_or_none(cur, concept_id) -> dict | None:
+    if not concept_id:
+        return None
+    cur.execute("SELECT id, canonical_name, type_code FROM jobber.concept WHERE id = %s", (concept_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+@router.post("/{application_id}/notes/{note_id}/promote")
+def promote_application_note(application_id: UUID, note_id: UUID):
+    """Send this user-written note to Profile360 for review (build §14) —
+    never labelled "add to my evidence": review has not happened yet."""
+    with db_cursor() as cur:
+        application = _require_application(cur, application_id)
+        note = _note_or_404(cur, application_id, note_id)
+        role = _role_summary_for_application(cur, application)
+        concept = _concept_or_none(cur, note.get("concept_id"))
+        try:
+            return learning.promote_note(cur, note, role=role, concept=concept)
+        except learning.LearningSourceError as e:
+            raise HTTPException(400, str(e)) from e
+        except learning.LearningPromotionError as e:
+            raise HTTPException(503, str(e)) from e
+
+
+@router.post("/{application_id}/events/{event_id}/promote")
+def promote_application_event(application_id: UUID, event_id: UUID):
+    with db_cursor() as cur:
+        application = _require_application(cur, application_id)
+        event = _event_or_404(cur, application_id, event_id)
+        role = _role_summary_for_application(cur, application)
+        try:
+            return learning.promote_event(cur, event, role=role)
+        except learning.LearningSourceError as e:
+            raise HTTPException(400, str(e)) from e
+        except learning.LearningPromotionError as e:
+            raise HTTPException(503, str(e)) from e
+
+
+@router.get("/{application_id}/learning-state")
+def get_application_learning_state(application_id: UUID):
+    """One bounded read for every note's/event's promotion-queue status on
+    this Application (build §12) — never one GET per note/event. Queue
+    status only; never a capability/Target evidence verdict (build §34)."""
+    with db_cursor() as cur:
+        application = _require_application(cur, application_id)
+        role = _role_summary_for_application(cur, application)
+        notes = _notes_for_application(cur, application_id)
+        event_list = events.list_events(cur, str(application_id))
+        return learning.application_learning_state(cur, role=role, notes=notes, events=event_list)
