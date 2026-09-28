@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import Pathways from './Pathways'
 import {
   api,
   type ArchetypeContextResponse,
+  type OpportunityAlignment,
   type PathwaysResult,
   type PersonalComparison,
   type ResolvedCompensation,
+  type Role,
 } from '../lib/api'
 
 // The UI's job here is to keep four things visibly distinct: which basis a
@@ -24,6 +26,7 @@ vi.mock('../lib/api', () => ({
     getPlanningAssumptions: vi.fn(),
     savePlanningAssumptions: vi.fn(),
     rebuildEconomics: vi.fn(),
+    getCareerAlignment: vi.fn(),
   },
 }))
 
@@ -366,7 +369,7 @@ function result(overrides: Partial<PathwaysResult> = {}): PathwaysResult {
   }
 }
 
-function renderPathways() {
+function renderPathways(initialPath = '/pathways/t1') {
   // The planning-assumption editor loads on mount; without a resolved value
   // its promise chain throws and takes the whole page down.
   if (vi.mocked(api.getPlanningAssumptions).mock.results.length === 0) {
@@ -377,12 +380,62 @@ function renderPathways() {
     })
   }
   return render(
-    <MemoryRouter initialEntries={['/pathways/t1']}>
+    <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
+        <Route path="/pathways" element={<Pathways />} />
         <Route path="/pathways/:id" element={<Pathways />} />
       </Routes>
     </MemoryRouter>,
   )
+}
+
+function testTarget(overrides: Partial<Role> = {}): Role {
+  return {
+    id: 't1', node_type: 'target_real', title: 'Head of Capital', organisation: 'An insurer', location: null,
+    country: null, remote_type: null, employment_type: null, posting_date: null, captured_at: null,
+    career_track: null, seniority_level: null, salary_min: null, salary_max: null, currency: null, summary: null,
+    description: null, requirements: null, responsibilities: null, key_skills_summary: null, top_adjacent_roles: null,
+    extraction_status: null, extraction_notes: null, similarity: null, url: null,
+    ...overrides,
+  }
+}
+
+const ALIGNMENT_METHOD = {
+  what_this_is: 'test', not_a_recommendation: 'test', involvement_not_acquisition: 'test',
+  relationship_caveat: 'Independent facts, not verdicts.', semantic_similarity: 'test', compensation: 'test',
+}
+
+function opportunityAlignment(overrides: Partial<OpportunityAlignment> = {}): OpportunityAlignment {
+  return {
+    state: 'target_available',
+    direction: null,
+    target: { id: 't1', title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+    opportunity: { id: 'opp-1', title: 'Capital Analyst at Alpha', organisation: 'Alpha', archetype_concept_id: null },
+    relationship: { state: 'potential_step', label: 'Potential stepping stone', reason: 'Evidence supports 1/2 requirements.' },
+    you_to_opportunity: {
+      counts: { evidenced: 1, partial: 0, user_asserted: 0, not_found: 0 }, requirements_reviewed: 1,
+      legacy_requirement_count: 0, review_summary: { accepted: 1, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 0, complete: true },
+      review_blockers: [], blocking_gaps: [], unverified_required: [], embedding_similarity: null,
+    },
+    opportunity_to_target: {
+      target_gaps_involved: [{ concept_id: 'g1', canonical_name: 'Capital management', target_requirement_type: 'required', opportunity_requirement_type: 'preferred', person_evidence_status: 'not_found', target_requirement_source: 'claim', opportunity_requirement_source: 'claim' }],
+      target_gaps_not_touched: [], additional_opportunity_demands: [], legacy_requirements_involved: 0,
+      is_potential_step: true, candidate_required_gaps: 0, candidate_missing_required: [], candidate_unverified_required: [],
+      target_required_evidence_gaps: 1, candidate_review_complete: true, candidate_review_blockers: [],
+      target_review_complete: true, target_review_blockers: [], target_mapping_complete: true, target_mapping_unresolved: 0,
+    },
+    direction_constraints: [],
+    direction_dimensions: [],
+    archetype_relationship: { opportunity_archetype: null, target_archetype: { id: 'a1', canonical_name: 'Head of Capital archetype', status: 'active' }, direction_archetype: null, same_as_target_archetype: false, same_as_direction_archetype: false, note: 'No reviewed archetype is assigned to this posting.' },
+    economics: {
+      opportunity: insufficient, vs_personal_earnings: { comparable: false, reason: 'no evidence', baseline: null, uses_planning_equivalent: false, difference_min: null, difference_reference: null, difference_max: null },
+      target: marketEstimate,
+    },
+    review: { opportunity: { complete: true, blockers: [], legacy_requirement_count: 0 }, target: { complete: true, blockers: [], mapping_complete: true, mapping_unresolved: 0 } },
+    semantic_similarity: { to_target: null, to_profile: null },
+    method: ALIGNMENT_METHOD,
+    ...overrides,
+  }
 }
 
 describe('Pathways', () => {
@@ -730,5 +783,139 @@ describe('Pathways — review findings', () => {
     expect(await screen.findByText('Market option value')).toBeTruthy()
     expect(screen.getByText(/out of date/)).toBeTruthy()
     expect(screen.queryByText(/Highest qualifying reference compensation/)).toBeNull()
+  })
+})
+
+// Phase 7 (docs/38 build §19): the target-selector URL-sync fix + regression.
+describe('Pathways — target selector reflects the URL (build §19)', () => {
+  it('visibly selects the URL target once the target list loads', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([testTarget({ id: 't1', title: 'Head of Capital' }), testTarget({ id: 't2', title: 'Head of Risk' })])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    renderPathways('/pathways/t1')
+
+    const select = (await screen.findByLabelText('Target')) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('t1'))
+  })
+
+  it('updates the selector when the route param changes without unmounting (browser back/forward)', async () => {
+    // A same-tree navigation (imperative navigate, or browser back/forward)
+    // never unmounts Pathways — the same regression class RoleDetail's own
+    // A->B stale-response test guards against.
+    vi.mocked(api.listTargets).mockResolvedValue([testTarget({ id: 't1', title: 'Head of Capital' }), testTarget({ id: 't2', title: 'Head of Risk' })])
+    vi.mocked(api.getPathways).mockImplementation((targetId: string) =>
+      Promise.resolve(result({ target: { ...result().target, id: targetId, title: targetId === 't2' ? 'Head of Risk' : 'Head of Capital' } })),
+    )
+
+    function Nav() {
+      const navigate = useNavigate()
+      return (
+        <button type="button" onClick={() => navigate('/pathways/t2')}>
+          Go to t2
+        </button>
+      )
+    }
+    render(
+      <MemoryRouter initialEntries={['/pathways/t1']}>
+        <Nav />
+        <Routes>
+          <Route path="/pathways/:id" element={<Pathways />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect((screen.getByLabelText('Target') as HTMLSelectElement).value).toBe('t1'))
+
+    fireEvent.click(screen.getByText('Go to t2'))
+    await waitFor(() => expect((screen.getByLabelText('Target') as HTMLSelectElement).value).toBe('t2'))
+  })
+
+  it('navigates to the new route when the selector is changed', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([testTarget({ id: 't1', title: 'Head of Capital' }), testTarget({ id: 't2', title: 'Head of Risk' })])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    renderPathways('/pathways/t1')
+
+    const select = await screen.findByLabelText('Target')
+    fireEvent.change(select, { target: { value: 't2' } })
+    await waitFor(() => expect(api.getPathways).toHaveBeenCalledWith('t2', expect.anything()))
+  })
+
+  it('shows an honest not-found state for a missing/deleted target id, never another real target', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([testTarget({ id: 't1', title: 'Head of Capital' })])
+    vi.mocked(api.getPathways).mockRejectedValue(new Error('404 not found'))
+    renderPathways('/pathways/deleted-id')
+
+    expect(await screen.findByText(/This target could not be found/)).toBeTruthy()
+    // The select falls back to the placeholder — it never silently shows
+    // t1 (a real target) as though it were the selected one.
+    const select = screen.getByLabelText('Target') as HTMLSelectElement
+    expect(select.value).toBe('')
+  })
+})
+
+describe('Pathways — specific-opportunity overlay (build §17/§18)', () => {
+  it('shows nothing extra when no opportunity_id is present', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    renderPathways('/pathways/t1')
+
+    await screen.findByText(/Direct: Head of Capital/)
+    expect(screen.queryByRole('heading', { name: "This opportunity's route to the target" })).toBeNull()
+    expect(api.getCareerAlignment).not.toHaveBeenCalled()
+  })
+
+  it('shows the relationship, gap movement and economics for the specific opportunity', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(opportunityAlignment())
+    renderPathways('/pathways/t1?opportunity_id=opp-1')
+
+    const heading = await screen.findByRole('heading', { name: "This opportunity's route to the target" })
+    const overlay = heading.closest('section') as HTMLElement
+    expect(within(overlay).getByText('Capital Analyst at Alpha')).toBeTruthy()
+    expect(within(overlay).getByText('Potential stepping stone')).toBeTruthy()
+    expect(within(overlay).getByText('Capital management')).toBeTruthy()
+    expect(api.getCareerAlignment).toHaveBeenCalledWith('opp-1', { target_id: 't1' })
+  })
+
+  it('never inserts the opportunity into an archetype route card', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(opportunityAlignment())
+    renderPathways('/pathways/t1?opportunity_id=opp-1')
+
+    await screen.findByRole('heading', { name: "This opportunity's route to the target" })
+    // The overlay is its own card; the existing archetype route section is untouched.
+    expect(screen.getByText('One-step intermediate archetypes (1)')).toBeTruthy()
+    expect(screen.getByText(/Via: Capital Analyst archetype/)).toBeTruthy()
+  })
+
+  it('an overlay failure never blanks the existing Direct/Intermediate route sections', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    vi.mocked(api.getCareerAlignment).mockRejectedValue(new Error('alignment service unavailable'))
+    renderPathways('/pathways/t1?opportunity_id=opp-1')
+
+    expect(await screen.findByText(/Couldn't load this opportunity's alignment/)).toBeTruthy()
+    expect(screen.getByText(/Direct: Head of Capital/)).toBeTruthy()
+    expect(screen.getByText(/Via: Capital Analyst archetype/)).toBeTruthy()
+  })
+
+  it('a Pathways route-section failure never blanks the opportunity overlay', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockRejectedValue(new Error('pathways engine unavailable'))
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(opportunityAlignment())
+    renderPathways('/pathways/t1?opportunity_id=opp-1')
+
+    expect(await screen.findByText('Potential stepping stone')).toBeTruthy()
+  })
+
+  it('route depth stays direct + one intermediate — no N-hop UI appears', async () => {
+    vi.mocked(api.listTargets).mockResolvedValue([])
+    vi.mocked(api.getPathways).mockResolvedValue(result())
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(opportunityAlignment())
+    renderPathways('/pathways/t1?opportunity_id=opp-1')
+
+    await screen.findByRole('heading', { name: "This opportunity's route to the target" })
+    expect(screen.getByText('One-step intermediate archetypes (1)')).toBeTruthy()
+    expect(screen.queryByText(/two-step|multi-step archetype|second intermediate/i)).toBeNull()
   })
 })

@@ -7,6 +7,7 @@ import {
   type CareerDirection,
   type ComparisonItem,
   type ComparisonResult,
+  type OpportunityAlignment,
   type Role,
   type RoleCompensationResponse,
 } from '../lib/api'
@@ -19,6 +20,64 @@ function testDirection(overrides: Partial<CareerDirection> = {}): CareerDirectio
     selected_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
     ...overrides,
   }
+}
+
+const ALIGNMENT_METHOD = {
+  what_this_is: 'test', not_a_recommendation: 'test', involvement_not_acquisition: 'test',
+  relationship_caveat: 'Same destination family, potential step and no identified target progress are each independent facts, not verdicts.',
+  semantic_similarity: 'test', compensation: 'test',
+}
+
+function noDirectionAlignment(roleId = 'role'): OpportunityAlignment {
+  return {
+    state: 'no_selected_direction',
+    direction: null,
+    target: null,
+    opportunity: { id: roleId, title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+    message: 'Select a Career Direction to evaluate this opportunity against it.',
+    method: ALIGNMENT_METHOD,
+  }
+}
+
+function targetAvailableAlignment(overrides: Partial<OpportunityAlignment> = {}): OpportunityAlignment {
+  return {
+    state: 'target_available',
+    direction: testDirection({ target: { id: 'target-1', title: 'Head of Risk', organisation: null } }),
+    target: { id: 'target-1', title: 'Head of Risk', organisation: null, archetype_concept_id: null },
+    opportunity: { id: 'role', title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+    relationship: { state: 'potential_step', label: 'Potential stepping stone', reason: 'Evidence supports 1/2 requirements.' },
+    you_to_opportunity: {
+      counts: { evidenced: 1, partial: 0, user_asserted: 0, not_found: 0 }, requirements_reviewed: 1,
+      legacy_requirement_count: 0, review_summary: { accepted: 1, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 0, complete: true },
+      review_blockers: [], blocking_gaps: [], unverified_required: [], embedding_similarity: null,
+    },
+    opportunity_to_target: {
+      target_gaps_involved: [{ concept_id: 'g1', canonical_name: 'Capital management', target_requirement_type: 'required', opportunity_requirement_type: 'preferred', person_evidence_status: 'not_found', target_requirement_source: 'claim', opportunity_requirement_source: 'claim' }],
+      target_gaps_not_touched: [], additional_opportunity_demands: [], legacy_requirements_involved: 0,
+      is_potential_step: true, candidate_required_gaps: 0, candidate_missing_required: [], candidate_unverified_required: [],
+      target_required_evidence_gaps: 1, candidate_review_complete: true, candidate_review_blockers: [],
+      target_review_complete: true, target_review_blockers: [], target_mapping_complete: true, target_mapping_unresolved: 0,
+    },
+    direction_constraints: [],
+    direction_dimensions: [],
+    archetype_relationship: { opportunity_archetype: null, target_archetype: null, direction_archetype: null, same_as_target_archetype: false, same_as_direction_archetype: false, note: 'No reviewed archetype is assigned to this posting.' },
+    economics: {
+      opportunity: NO_COMPENSATION_FIGURE, vs_personal_earnings: { comparable: false, reason: 'no evidence', baseline: null, uses_planning_equivalent: false, difference_min: null, difference_reference: null, difference_max: null },
+      target: null,
+    },
+    review: { opportunity: { complete: true, blockers: [], legacy_requirement_count: 0 }, target: { complete: true, blockers: [], mapping_complete: true, mapping_unresolved: 0 } },
+    semantic_similarity: { to_target: null, to_profile: null },
+    method: ALIGNMENT_METHOD,
+    ...overrides,
+  }
+}
+
+const NO_COMPENSATION_FIGURE = {
+  basis: 'insufficient_evidence' as const, basis_label: 'Insufficient compensation evidence', component_label: null,
+  supplementary: [], currency: null, amount_min: null, amount_reference: null, amount_max: null, component: null,
+  pay_period: null, employment_basis: null, market: null, period: null, as_of: null, archetype: null,
+  evidence: { n_observations: 0, n_posting_stated: 0, n_survey_sources: 0 }, reference_source: null,
+  evidence_quality: 'insufficient' as const, reason: 'No compensation evidence.', trace: {},
 }
 
 // Phase 2 (docs/33): the Opportunity Decision Workspace. These tests focus on
@@ -43,7 +102,7 @@ vi.mock('../lib/api', () => ({
     reacceptRoleCompensation: vi.fn(),
     deleteRole: vi.fn(),
     createOrReopenApplication: vi.fn(),
-    getSelectedCareerDirection: vi.fn(),
+    getCareerAlignment: vi.fn(),
   },
 }))
 
@@ -194,13 +253,13 @@ function emptyComparison(overrides: Partial<ComparisonResult> = {}): ComparisonR
 
 function renderPosting(
   role: Role = basePosting, compensation: RoleCompensationResponse = NO_COMPENSATION, comparison: ComparisonResult = emptyComparison(),
-  direction: CareerDirection | null = null,
+  alignment: OpportunityAlignment = noDirectionAlignment(role.id),
 ) {
   vi.mocked(api.getRole).mockResolvedValue(role)
   vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: role.id, enrichment: null })
   vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation)
   vi.mocked(api.compareRole).mockResolvedValue(comparison)
-  vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction })
+  vi.mocked(api.getCareerAlignment).mockResolvedValue(alignment)
   return render(
     <MemoryRouter initialEntries={[`/roles/${role.id}`]}>
       <Routes>
@@ -218,29 +277,90 @@ describe('Opportunity Decision Workspace — posting', () => {
     expect(screen.getByRole('heading', { name: 'Evidence' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Economics' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Career direction' })).toBeTruthy()
-    expect(screen.getByText(/No career direction selected yet/)).toBeTruthy()
-    // No fit/readiness/hiring score is introduced anywhere on the page.
+    expect(await screen.findByText('Select a Career Direction to evaluate this opportunity against it.')).toBeTruthy()
+    // No fit/readiness/hiring/alignment score is introduced anywhere on the page.
     expect(screen.queryByText(/fit score/i)).toBeNull()
     expect(screen.queryByText(/readiness/i)).toBeNull()
     expect(screen.queryByText(/hiring/i)).toBeNull()
   })
 
-  it('shows the selected Career Direction by name with no alignment score (build §24)', async () => {
-    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), testDirection())
+  it('shows the relationship state and involved-gaps summary for a full alignment (build §8/§15)', async () => {
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), targetAvailableAlignment())
     await screen.findByRole('heading', { name: 'Decision summary' })
     expect(await screen.findByText('Technical actuarial leadership')).toBeTruthy()
     expect(screen.getByText(/Current direction:/)).toBeTruthy()
-    expect(screen.getByText(/handled in the next phase/)).toBeTruthy()
+    expect(screen.getByText('Potential stepping stone')).toBeTruthy()
+    expect(screen.getByText('Involves 1 of your 1 outstanding Target requirement.')).toBeTruthy()
     expect(screen.getByText('Open direction').closest('a')?.getAttribute('href')).toBe('/future/directions/dir-1')
-    expect(screen.queryByText(/fit score|readiness|hiring|%.*align/i)).toBeNull()
+    // No composite score/percentage anywhere.
+    expect(screen.queryByText(/fit score|readiness|hiring probability|offer probability/i)).toBeNull()
   })
 
-  it('degrades to the honest empty state if the Career Direction fetch fails', async () => {
+  it('shows the fuller You -> this opportunity -> Target section, with a Pathways deep link', async () => {
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), targetAvailableAlignment())
+    expect(await screen.findByRole('heading', { name: 'You → this opportunity → Target' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'You → Opportunity' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Opportunity → Target' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Why this relationship' })).toBeTruthy()
+    expect(screen.getByText('Capital management')).toBeTruthy()
+    const pathwaysLink = screen.getByText('View this opportunity in Pathways').closest('a')
+    expect(pathwaysLink?.getAttribute('href')).toBe('/pathways/target-1?opportunity_id=role')
+  })
+
+  it('never shows direction constraints/dimensions cards when there are none to show', async () => {
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), targetAvailableAlignment())
+    await screen.findByRole('heading', { name: 'You → this opportunity → Target' })
+    expect(screen.queryByRole('heading', { name: 'Direction constraints' })).toBeNull()
+  })
+
+  it('shows an honest partial state for a direction with no linked Target, without inventing route analysis', async () => {
+    const alignment: OpportunityAlignment = {
+      state: 'direction_without_target',
+      direction: testDirection(),
+      target: null,
+      opportunity: { id: 'role', title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+      message: 'This direction has no linked Target yet, so structural Opportunity -> Target analysis is not available. Direction constraints can still be checked directly.',
+      direction_constraints: [
+        { constraint: 'locations', label: 'Location', status: 'matches', observed_value: 'London', desired_value: ['London'], reason: '"London" matches one of your stated preferences.' },
+      ],
+      direction_dimensions: [],
+      archetype_relationship: { opportunity_archetype: null, target_archetype: null, direction_archetype: null, same_as_target_archetype: false, same_as_direction_archetype: false, note: 'No reviewed archetype is assigned to this posting.' },
+      method: ALIGNMENT_METHOD,
+    }
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), alignment)
+    expect(await screen.findByText(/No concrete Target linked/)).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Direction constraints' })).toBeTruthy()
+    expect(screen.getByText('Location')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Opportunity → Target' })).toBeNull()
+  })
+
+  it('shows insufficient-target-evidence honestly while still showing independent facts', async () => {
+    const alignment: OpportunityAlignment = {
+      state: 'insufficient_target_evidence',
+      direction: testDirection({ target: { id: 'target-1', title: 'Head of Risk', organisation: null } }),
+      target: { id: 'target-1', title: 'Head of Risk', organisation: null, archetype_concept_id: null },
+      opportunity: { id: 'role', title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+      message: 'This target has no reviewed, mapped requirements yet, so a structural Opportunity -> Target comparison is not available. The facts below do not depend on that gap.',
+      you_to_opportunity: {
+        counts: { evidenced: 1, partial: 0, user_asserted: 0, not_found: 0 }, requirements_reviewed: 1,
+        legacy_requirement_count: 0, review_summary: { accepted: 1, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 0, complete: true },
+        review_blockers: [], blocking_gaps: [], unverified_required: [], embedding_similarity: null,
+      },
+      economics: { opportunity: NO_COMPENSATION_FIGURE, vs_personal_earnings: { comparable: false, reason: 'no evidence', baseline: null, uses_planning_equivalent: false, difference_min: null, difference_reference: null, difference_max: null }, target: null },
+      method: ALIGNMENT_METHOD,
+    }
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), alignment)
+    expect(await screen.findByText(/no reviewed, mapped requirements yet/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'You → Opportunity' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Opportunity → Target' })).toBeNull()
+  })
+
+  it('degrades to a focused local error if the alignment fetch fails, without blanking the rest of the page', async () => {
     vi.mocked(api.getRole).mockResolvedValue(basePosting)
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: basePosting.id, enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(emptyComparison())
-    vi.mocked(api.getSelectedCareerDirection).mockRejectedValue(new Error('down'))
+    vi.mocked(api.getCareerAlignment).mockRejectedValue(new Error('down'))
     render(
       <MemoryRouter initialEntries={['/roles/role']}>
         <Routes>
@@ -249,8 +369,28 @@ describe('Opportunity Decision Workspace — posting', () => {
       </MemoryRouter>,
     )
     await screen.findByRole('heading', { name: 'Decision summary' })
-    expect(await screen.findByText(/couldn't be loaded/)).toBeTruthy()
+    expect(await screen.findByText("Career alignment couldn't be loaded.")).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Requirements' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Economics' })).toBeTruthy()
+  })
+
+  it('retries the alignment fetch alone without reloading the rest of the page', async () => {
+    vi.mocked(api.getRole).mockResolvedValue(basePosting)
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: basePosting.id, enrichment: null })
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(emptyComparison())
+    vi.mocked(api.getCareerAlignment).mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce(noDirectionAlignment())
+    render(
+      <MemoryRouter initialEntries={['/roles/role']}>
+        <Routes>
+          <Route path="/roles/:id" element={<RoleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText("Career alignment couldn't be loaded.")
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Select a Career Direction to evaluate this opportunity against it.')).toBeTruthy()
+    expect(api.getRole).toHaveBeenCalledTimes(1)
   })
 
   it('shows a complete requirement review without treating it as a problem', async () => {
@@ -359,6 +499,7 @@ describe('Opportunity Decision Workspace — posting', () => {
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockRejectedValue(new Error('comparison service unavailable'))
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
     render(
       <MemoryRouter initialEntries={['/roles/role']}>
         <Routes>
@@ -390,6 +531,7 @@ describe('Opportunity → Application (docs/34 §7)', () => {
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: basePosting.id, enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(emptyComparison())
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
     return render(
       <MemoryRouter initialEntries={['/roles/role']}>
         <Routes>
@@ -479,6 +621,7 @@ describe('Opportunity Decision Workspace — navigation and accessibility', () =
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockRejectedValue(new Error('boom'))
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
     render(
       <MemoryRouter initialEntries={['/roles/role']}>
         <Routes>
@@ -514,11 +657,12 @@ describe('Target regression', () => {
     )
   }
 
-  it('still renders target content and never fetches the comparison engine', async () => {
+  it('still renders target content and never fetches the comparison or alignment engines', async () => {
     renderTarget()
     expect(await screen.findByRole('heading', { level: 1, name: 'Head of Risk' })).toBeTruthy()
     expect(screen.getByText(/Target · real/)).toBeTruthy()
     expect(api.compareRole).not.toHaveBeenCalled()
+    expect(api.getCareerAlignment).not.toHaveBeenCalled()
   })
 
   it('never shows opportunity-only decision or application language', async () => {
@@ -596,6 +740,8 @@ describe('Cross-role navigation never leaks stale state', () => {
     let resolveCompB!: (v: RoleCompensationResponse) => void
     let resolveCmpA!: (v: ComparisonResult) => void
     let resolveCmpB!: (v: ComparisonResult) => void
+    let resolveAlignA!: (v: OpportunityAlignment) => void
+    let resolveAlignB!: (v: OpportunityAlignment) => void
 
     vi.mocked(api.getRole).mockImplementation((id: string) => Promise.resolve(id === 'A' ? roleA : roleB))
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'x', enrichment: null })
@@ -611,6 +757,15 @@ describe('Cross-role navigation never leaks stale state', () => {
         new Promise((resolve) => {
           if (id === 'A') resolveCmpA = resolve
           else resolveCmpB = resolve
+        }),
+    )
+    // Phase 7: the alignment fetch must carry the exact same stale-response
+    // protection as compensation/comparison above (build §32).
+    vi.mocked(api.getCareerAlignment).mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          if (id === 'A') resolveAlignA = resolve
+          else resolveAlignB = resolve
         }),
     )
 
@@ -637,18 +792,27 @@ describe('Cross-role navigation never leaks stale state', () => {
         counts: { evidenced: 1, partial: 0, user_asserted: 0, not_found: 0 },
       }),
     )
+    resolveAlignB(targetAvailableAlignment({
+      opportunity: { id: 'B', title: 'Role B', organisation: null, archetype_concept_id: null },
+      economics: undefined,
+    }))
     await screen.findByText('Advert salary')
     await within(evidenceTile).findByText('evidenced')
+    await screen.findByText('Potential stepping stone')
 
     // A's slow, now-stale responses finally arrive — they must be ignored.
     resolveCompA(NO_COMPENSATION)
     resolveCmpA(emptyComparison())
+    resolveAlignA(noDirectionAlignment('A'))
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(screen.getByRole('heading', { level: 1, name: 'Role B' })).toBeTruthy()
     expect(screen.getByText('Advert salary')).toBeTruthy()
     expect(screen.queryByText('Insufficient evidence')).toBeNull()
     expect(within(evidenceTile).getByText('evidenced')).toBeTruthy()
+    // A's alignment ("no direction selected") must never overwrite B's.
+    expect(screen.getByText('Potential stepping stone')).toBeTruthy()
+    expect(screen.queryByText('Select a Career Direction to evaluate this opportunity against it.')).toBeNull()
     expect(within(evidenceTile).queryByText('No reviewed requirements to compare yet.')).toBeNull()
   })
 })

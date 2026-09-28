@@ -21,12 +21,14 @@ import {
   type GapConcept,
   type InterviewGenerationContextSummary,
   type InterviewPrepContent,
+  type OpportunityAlignment,
   type PositioningContent,
   type SourceCategory,
   type SourceManifestEntry,
   type SourcedText,
   type SupportingStatementContent,
 } from '../lib/api'
+import { AlignmentDecisionTile } from '../components/opportunity/AlignmentSection'
 
 // Phase 3 (docs/34 §9): a guided preparation workspace, not another
 // analytics dump. Every structural fact here is read from the existing
@@ -1786,6 +1788,12 @@ export default function ApplicationWorkspace() {
   const [artifactsError, setArtifactsError] = useState<string | null>(null)
   const [events, setEvents] = useState<ApplicationEvent[] | null>(null)
   const [eventsError, setEventsError] = useState<string | null>(null)
+  // Phase 7 (docs/38 build §16): a compact, read-only alignment summary —
+  // reuses the same endpoint/service Role Detail and Pathways call, never a
+  // second alignment engine. Independent of the other four loads: a failed
+  // fetch here never blanks the preparation checks/evidence/artifacts below.
+  const [alignment, setAlignment] = useState<OpportunityAlignment | null>(null)
+  const [alignmentError, setAlignmentError] = useState<string | null>(null)
 
   const [statusBusy, setStatusBusy] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
@@ -1837,6 +1845,20 @@ export default function ApplicationWorkspace() {
       .catch((e) => { if (currentId.current === id) setEventsError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
+  // Phase 7: the alignment endpoint is keyed by the *role* id, which is only
+  // known once `detail` has loaded — so this fires as its own effect, after
+  // detail resolves, rather than joining the four requests below that all
+  // key off the application id directly.
+  const roleId = detail?.role.id
+  const loadAlignment = useCallback(() => {
+    if (!roleId) return
+    setAlignmentError(null)
+    api
+      .getCareerAlignment(roleId)
+      .then((r) => { if (currentId.current === id) setAlignment(r) })
+      .catch((e) => { if (currentId.current === id) setAlignmentError(e instanceof Error ? e.message : String(e)) })
+  }, [roleId, id])
+
   useEffect(() => {
     currentId.current = id
     setDetail(null)
@@ -1847,6 +1869,8 @@ export default function ApplicationWorkspace() {
     setArtifactsError(null)
     setEvents(null)
     setEventsError(null)
+    setAlignment(null)
+    setAlignmentError(null)
   }, [id])
 
   // Four independent, parallel requests (build §13/§20/§21) — never a
@@ -1855,6 +1879,7 @@ export default function ApplicationWorkspace() {
   useEffect(loadEvidence, [loadEvidence])
   useEffect(loadArtifacts, [loadArtifacts])
   useEffect(loadEvents, [loadEvents])
+  useEffect(loadAlignment, [loadAlignment])
 
   const handleStatusChange = async (status: ApplicationStatus) => {
     if (!id) return
@@ -2016,6 +2041,18 @@ export default function ApplicationWorkspace() {
       <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
         This status is set by you — it never changes automatically based on the preparation checks below.
       </p>
+
+      {/* Phase 7 (docs/38 build §16): compact, read-only — never mutates
+          application status or artifacts, and a failed fetch here never
+          blanks the rest of the workspace (build §26). */}
+      <div style={{ marginTop: 16 }}>
+        <AlignmentDecisionTile alignment={alignment} error={alignmentError} onRetry={loadAlignment} />
+        {alignment?.target && (
+          <p style={{ marginTop: 8, fontSize: 13 }}>
+            <Link to={`/pathways/${alignment.target.id}?opportunity_id=${role.id}`}>View this opportunity in Pathways</Link>
+          </p>
+        )}
+      </div>
 
       <div style={{ marginTop: 16 }}>
         <LifecycleSection

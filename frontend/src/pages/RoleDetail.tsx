@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import {
   api,
-  type CareerDirection,
   type ComparisonResult,
+  type OpportunityAlignment,
   type RoleCompensationResponse,
   type RoleContextBasis,
   type RoleContextEnrichment,
@@ -15,6 +15,7 @@ import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
 import { RoleEconomicsSection } from '../components/economics/RoleEconomicsSection'
 import { DecisionSummary, RequirementsAskFor, RequirementReviewPendingNotice } from '../components/opportunity/DecisionSummary'
+import { AlignmentFullSection } from '../components/opportunity/AlignmentSection'
 
 // Shared chip rendering for both the reviewed-requirements and legacy-skills
 // sections below — same look, so the *labelling of the section itself* is
@@ -371,23 +372,25 @@ export default function RoleDetail() {
       .catch((e) => { if (currentId.current === id) setComparisonError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
-  // Phase 6 (docs/37 build §24): the selected Career Direction, by name only
-  // — no alignment/fit score. Fetched once here alongside compensation/
-  // comparison, posting-only (a target keeps its own framing and never shows
-  // the Decision Summary at all), so it never becomes a second request for
-  // the same state.
-  const [direction, setDirection] = useState<CareerDirection | null>(null)
-  const [directionError, setDirectionError] = useState<string | null>(null)
-  const loadDirection = useCallback(() => {
-    setDirectionError(null)
+  // Phase 7 (docs/38): `You -> Opportunity -> Target` against the selected
+  // Career Direction's linked Target. Fetched once here alongside
+  // compensation/comparison, posting-only (a target keeps its own framing
+  // and never shows the Decision Summary at all), so it never becomes a
+  // second request for the same state. Replaces Phase 6's bare "name the
+  // direction" fetch — this is the richer analysis that was deferred then.
+  const [alignment, setAlignment] = useState<OpportunityAlignment | null>(null)
+  const [alignmentError, setAlignmentError] = useState<string | null>(null)
+  const loadAlignment = useCallback(() => {
+    if (!id) return
+    setAlignmentError(null)
     api
-      .getSelectedCareerDirection()
-      .then((r) => { if (currentId.current === id) setDirection(r.direction) })
-      .catch((e) => { if (currentId.current === id) setDirectionError(e instanceof Error ? e.message : String(e)) })
+      .getCareerAlignment(id)
+      .then((r) => { if (currentId.current === id) setAlignment(r) })
+      .catch((e) => { if (currentId.current === id) setAlignmentError(e instanceof Error ? e.message : String(e)) })
   }, [id])
 
   // The instant id changes, forget the previous role entirely — role,
-  // compensation, comparison and direction alike — rather than leaving any
+  // compensation, comparison and alignment alike — rather than leaving any
   // of it on screen while the new id's own requests are still in flight.
   useEffect(() => {
     currentId.current = id
@@ -397,8 +400,8 @@ export default function RoleDetail() {
     setCompensationError(null)
     setComparison(null)
     setComparisonError(null)
-    setDirection(null)
-    setDirectionError(null)
+    setAlignment(null)
+    setAlignmentError(null)
   }, [id])
 
   useEffect(() => {
@@ -406,10 +409,10 @@ export default function RoleDetail() {
     loadCompensation()
     // The Decision Summary is posting-only (targets keep their own
     // Explore-my-future framing) — no reason to ask the comparison engine or
-    // the Career Direction API for a page that will never show their answer.
+    // the alignment API for a page that will never show their answer.
     if (role.node_type === 'posting') {
       loadComparison()
-      loadDirection()
+      loadAlignment()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role?.id, role?.node_type])
@@ -543,11 +546,32 @@ export default function RoleDetail() {
             onRetryComparison={loadComparison}
             compensation={compensation}
             compensationError={compensationError}
-            direction={direction}
-            directionError={directionError}
+            alignment={alignment}
+            alignmentError={alignmentError}
+            onRetryAlignment={loadAlignment}
           />
           <RequirementsAskFor role={role} />
         </>
+      )}
+
+      {/* Phase 7 (docs/38 build §15): the fuller You -> this opportunity ->
+          Target section, directly below the Decision Summary tile above.
+          Renders nothing for `no_selected_direction` (the compact tile
+          already says everything there is to say); every other state shows
+          whatever pieces are available without blanking the rest of the
+          page on a fetch failure (build §26). */}
+      {!isTarget && alignment && (
+        <section aria-labelledby="alignment-full-h" style={{ marginTop: 16 }}>
+          <h2 id="alignment-full-h" style={{ fontSize: 18, marginBottom: 8 }}>
+            You → this opportunity → Target
+          </h2>
+          <AlignmentFullSection alignment={alignment} roleId={role.id} />
+          {alignment.target && (
+            <p style={{ marginTop: 12 }}>
+              <Link to={`/pathways/${alignment.target.id}?opportunity_id=${role.id}`}>View this opportunity in Pathways</Link>
+            </p>
+          )}
+        </section>
       )}
 
       {/* Build §14: compensation with its basis, the personal comparison,

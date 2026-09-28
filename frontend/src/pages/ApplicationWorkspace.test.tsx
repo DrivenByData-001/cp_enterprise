@@ -15,6 +15,7 @@ import {
   type ApplicationEvidenceItem,
   type ApplicationNote,
   type ArtifactType,
+  type OpportunityAlignment,
 } from '../lib/api'
 
 // Phase 3 (docs/34 §9): preparation checks, evidence presentation, the gap
@@ -44,6 +45,7 @@ vi.mock('../lib/api', () => ({
     createApplicationEvent: vi.fn(),
     updateApplicationEvent: vi.fn(),
     deleteApplicationEvent: vi.fn(),
+    getCareerAlignment: vi.fn(),
   },
 }))
 
@@ -171,11 +173,46 @@ function makeEvent(overrides: Partial<ApplicationEvent> = {}): ApplicationEvent 
   }
 }
 
+const ALIGNMENT_METHOD = {
+  what_this_is: 'test', not_a_recommendation: 'test', involvement_not_acquisition: 'test',
+  relationship_caveat: 'Independent facts, not verdicts.', semantic_similarity: 'test', compensation: 'test',
+}
+
+function noDirectionAlignment(roleId = 'role-1'): OpportunityAlignment {
+  return {
+    state: 'no_selected_direction',
+    direction: null,
+    target: null,
+    opportunity: { id: roleId, title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+    message: 'Select a Career Direction to evaluate this opportunity against it.',
+    method: ALIGNMENT_METHOD,
+  }
+}
+
+function targetAvailableAlignment(overrides: Partial<OpportunityAlignment> = {}): OpportunityAlignment {
+  return {
+    state: 'target_available',
+    direction: {
+      id: 'dir-1', name: 'Technical actuarial leadership', summary: '', state: 'selected', origin: 'user',
+      dimensions: [], constraints: { locations: [], remote_types: [], employment_types: [], seniority_levels: [], compensation_floor: null, other: [] },
+      target: { id: 'target-1', title: 'Head of Risk', organisation: null }, archetype: null,
+      source_discovery_run_id: null, source_candidate_id: null,
+      selected_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    },
+    target: { id: 'target-1', title: 'Head of Risk', organisation: null, archetype_concept_id: null },
+    opportunity: { id: 'role-1', title: 'Head of Capital', organisation: 'An insurer', archetype_concept_id: null },
+    relationship: { state: 'potential_step', label: 'Potential stepping stone', reason: 'Evidence supports 1/2 requirements.' },
+    method: ALIGNMENT_METHOD,
+    ...overrides,
+  }
+}
+
 function renderWorkspace(
   detail: ApplicationDetail,
   evidence: ApplicationEvidence | Error,
   artifacts: ApplicationArtifactsResponse = makeArtifactsResponse(),
   events: ApplicationEvent[] | Error = [],
+  alignment: OpportunityAlignment | Error = noDirectionAlignment(detail.role.id),
 ) {
   vi.mocked(api.getApplication).mockResolvedValue(detail)
   if (evidence instanceof Error) vi.mocked(api.getApplicationEvidence).mockRejectedValue(evidence)
@@ -183,6 +220,8 @@ function renderWorkspace(
   vi.mocked(api.getApplicationArtifacts).mockResolvedValue(artifacts)
   if (events instanceof Error) vi.mocked(api.listApplicationEvents).mockRejectedValue(events)
   else vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events })
+  if (alignment instanceof Error) vi.mocked(api.getCareerAlignment).mockRejectedValue(alignment)
+  else vi.mocked(api.getCareerAlignment).mockResolvedValue(alignment)
   return render(
     <MemoryRouter initialEntries={['/applications/app-1']}>
       <Routes>
@@ -200,6 +239,50 @@ describe('Header', () => {
     const back = screen.getByText('← Back to opportunity').closest('a') as HTMLAnchorElement
     expect(back.getAttribute('href')).toBe('/roles/role-1')
     expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
+  })
+})
+
+// Phase 7 (docs/38 build §16): a compact, read-only alignment summary —
+// reuses the same AlignmentDecisionTile Role Detail shows, never a second
+// alignment engine, and never mutates application status or artifacts.
+describe('Career alignment summary (Phase 7, docs/38)', () => {
+  it('shows the compact alignment summary and calls the alignment endpoint with the role id', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    await screen.findByRole('heading', { name: 'Head of Capital' })
+    expect(await screen.findByRole('heading', { name: 'Career direction' })).toBeTruthy()
+    expect(screen.getByText('Select a Career Direction to evaluate this opportunity against it.')).toBeTruthy()
+    await waitFor(() => expect(api.getCareerAlignment).toHaveBeenCalledWith('role-1'))
+  })
+
+  it('shows the relationship state and a Pathways deep link when a Target exists', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [], targetAvailableAlignment())
+    await screen.findByRole('heading', { name: 'Head of Capital' })
+    expect(await screen.findByText('Potential stepping stone')).toBeTruthy()
+    const link = screen.getByText('View this opportunity in Pathways').closest('a') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('/pathways/target-1?opportunity_id=role-1')
+  })
+
+  it('omits the Pathways link when the alignment has no Target', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    await screen.findByRole('heading', { name: 'Career direction' })
+    expect(screen.queryByText('View this opportunity in Pathways')).toBeNull()
+  })
+
+  it('a failed alignment fetch never blanks the rest of the Application workspace', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [], new Error('alignment service unavailable'))
+    await screen.findByRole('heading', { name: 'Head of Capital' })
+    expect(await screen.findByText("Career alignment couldn't be loaded.")).toBeTruthy()
+    // The rest of the workspace is unaffected.
+    expect(screen.getByRole('heading', { name: 'Preparation checks' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Evidence to use' })).toBeTruthy()
+  })
+
+  it('never mutates application status or artifacts merely by showing alignment', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse(), [], targetAvailableAlignment())
+    await screen.findByText('Potential stepping stone')
+    expect(api.updateApplicationStatus).not.toHaveBeenCalled()
+    expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
+    expect(api.editApplicationArtifact).not.toHaveBeenCalled()
   })
 })
 
@@ -307,6 +390,7 @@ describe('Gaps and uncertainties', () => {
     vi.mocked(api.getApplicationEvidence).mockResolvedValueOnce(withoutNote).mockResolvedValueOnce(withNote)
     vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
     vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>
         <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
@@ -342,6 +426,7 @@ describe('Application notes', () => {
     vi.mocked(api.deleteApplicationNote).mockResolvedValue({ status: 'deleted' })
     vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse())
     vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
 
     render(
       <MemoryRouter initialEntries={['/applications/app-1']}>

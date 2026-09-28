@@ -137,6 +137,86 @@ def assess_candidate(requirements, target_requirements, status_by_concept, revie
     }
 
 
+def _evaluate_missing_concepts(cur, requirements_by_role, statuses, evidence_revision):
+    """Mutates `statuses` in place, adding every concept referenced anywhere
+    in `requirements_by_role` (a role_id -> requirement-rows mapping, as
+    `role_requirements.load_role_requirements_bulk` returns) that is not
+    already present — i.e. not already served by the `d_target_evidence`
+    cache lookup the caller did just before this. Extracted so both the
+    corpus-wide `assess_all_candidates` and the single-candidate
+    `assess_specific_candidate` evaluate a distinct concept exactly the same
+    way — same engine choice (capability vs atomic), same cache writes —
+    rather than two independently-maintained copies of this loop drifting
+    apart. Returns how many concepts were freshly derived (not already
+    cached), for the caller's own metrics."""
+    evaluated = 0
+    for rows in requirements_by_role.values():
+        for row in rows:
+            key = row["concept_id"]
+            if key not in statuses:
+                if row["concept_status"] != "active":
+                    statuses[key] = "not_found"
+                    continue
+                evidence = (derive_capability_coverage(cur, key) if row["type_code"] == "capability"
+                            else atomic_concept_evidence(cur, key))
+                statuses[key] = evidence["status"]
+                save_status(cur, evidence_revision, key, evidence["status"])
+                evaluated += 1
+    return evaluated
+
+
+def assess_specific_candidate(cur, target_id, candidate_id, target_vec, profile_vec, evidence_revision):
+    """`assess_candidate` for exactly one observed posting against one
+    target, without `assess_all_candidates`' corpus-wide
+    `WHERE instance_type = 'observed_posting'` scan — Role Detail/Pathways/
+    Applications need exactly one candidate's structural relationship to a
+    target, never the whole ranked corpus, and paying for that scan (plus
+    bulk-loading requirements/review for every other posting) on every such
+    request would make a single-opportunity read scale with corpus size for
+    no reason.
+
+    Same bulk loaders, same cache (`jobber.d_target_evidence` by
+    `evidence_revision`), same `_evaluate_missing_concepts` concept-evaluation
+    path, and the exact same `assess_candidate` call as
+    `assess_all_candidates` uses per candidate in its loop — so a caller can
+    never observe a different verdict for the same (target, candidate) pair
+    depending on which of the two functions produced it (see
+    `test_opportunity_alignment.py`'s bulk/specific parity test). Does not
+    re-query the candidate's own role metadata (title/organisation/
+    archetype) — a caller assembling a full alignment response has almost
+    always already loaded that role for its own purposes."""
+    target_id, candidate_id = str(target_id), str(candidate_id)
+    requirements = load_role_requirements_bulk(cur, [target_id, candidate_id])
+    review_summary = load_requirement_review_summary_bulk(cur, [target_id, candidate_id])
+    vectors = get_embeddings(cur, "role_instance", [candidate_id])
+
+    concepts = {r["concept_id"] for rows in requirements.values() for r in rows}
+    statuses = cached_statuses(cur, evidence_revision, list(concepts))
+    evaluated = _evaluate_missing_concepts(cur, requirements, statuses, evidence_revision)
+
+    mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
+    target_review = review_summary.get(target_id, {})
+    candidate_review = review_summary.get(candidate_id, {})
+
+    step = assess_candidate(requirements.get(candidate_id, []), requirements.get(target_id, []), statuses,
+                            review=candidate_review, target_review=target_review)
+    if not mapping["complete"]:
+        step.update(assessment="incomplete_target_mapping", ranking_score=0,
+                    explanation="Target requirements are unmapped or excluded. Resolve these before interpreting readiness or intermediate steps.")
+
+    vector = vectors.get(candidate_id, [])
+    step["similarity_to_target"] = cosine_similarity(target_vec, vector)
+    step["similarity_to_profile"] = cosine_similarity(profile_vec, vector) if profile_vec else None
+
+    return {
+        "step": step, "target_mapping": mapping, "statuses": statuses,
+        "target_requirements": requirements.get(target_id, []),
+        "candidate_requirements": requirements.get(candidate_id, []),
+        "target_review": target_review, "candidate_review": candidate_review,
+        "distinct_concepts": len(concepts), "concepts_evaluated": evaluated,
+    }
+
+
 def assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revision):
     """Every observed posting assessed against one target, with the shared
     bulk loads done once: requirement evidence and review summaries for the
@@ -163,19 +243,7 @@ def assess_all_candidates(cur, target_id, target_vec, profile_vec, evidence_revi
     # Evaluate each distinct concept once per request, using the same engine as Comparison.
     concepts = {r["concept_id"] for rows in requirements.values() for r in rows}
     statuses = cached_statuses(cur, evidence_revision, list(concepts))
-    evaluated = 0
-    for rows in requirements.values():
-        for row in rows:
-            key = row["concept_id"]
-            if key not in statuses:
-                if row["concept_status"] != "active":
-                    statuses[key] = "not_found"
-                    continue
-                evidence = (derive_capability_coverage(cur, key) if row["type_code"] == "capability"
-                            else atomic_concept_evidence(cur, key))
-                statuses[key] = evidence["status"]
-                save_status(cur, evidence_revision, key, evidence["status"])
-                evaluated += 1
+    evaluated = _evaluate_missing_concepts(cur, requirements, statuses, evidence_revision)
     mapping = target_mapping_summary(cur, target_id, requirements.get(target_id, []))
     target_review = review_summary.get(str(target_id), {})
     target_pending = target_review.get("unreviewed", 0)

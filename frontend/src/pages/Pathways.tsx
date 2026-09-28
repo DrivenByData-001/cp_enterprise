@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   api,
   type ArchetypeContextResponse,
   type DirectRoute,
   type GapValueItem,
   type IntermediateArchetypeRoute,
+  type OpportunityAlignment,
   type PathwaysResult,
   type PersonalEarningsState,
   type Role,
@@ -18,6 +19,7 @@ import {
 } from '../components/economics/Compensation'
 import { PlanningAssumptionEditor } from '../components/economics/PlanningAssumption'
 import { DayInTheLife } from '../components/economics/DayInTheLife'
+import { AlignmentFullSection, AlignmentOpportunityHeader, RelationshipBadge } from '../components/opportunity/AlignmentSection'
 import { formatMoney } from '../lib/money'
 
 type Perspective = 'economics' | 'fit' | 'transition' | 'day'
@@ -471,17 +473,48 @@ function EarningsHeader({ earnings }: { earnings: PersonalEarningsState }) {
 
 export default function Pathways() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
+  // Phase 7 (docs/38 build §17): a real observed opportunity, shown as an
+  // overlay on top of this target's existing route context. The URL
+  // (`?opportunity_id=`) remains authoritative, same as `:id` below — never
+  // component-local state that could drift from it.
+  const opportunityId = searchParams.get('opportunity_id')
   const navigate = useNavigate()
   const [targets, setTargets] = useState<Role[]>([])
+  const [targetsLoaded, setTargetsLoaded] = useState(false)
   const [result, setResult] = useState<PathwaysResult | null>(null)
   const [contextKey, setContextKey] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
+  const [alignment, setAlignment] = useState<OpportunityAlignment | null>(null)
+  const [alignmentError, setAlignmentError] = useState<string | null>(null)
+
+  // Guards every fetch below against resolving for a since-superseded target
+  // id — switching targets via the selector, or via browser back/forward,
+  // must never let a slow response for the previous target overwrite the
+  // new one's state. Same discipline as RoleDetail/ApplicationWorkspace.
+  const currentId = useRef(id)
+  useEffect(() => {
+    currentId.current = id
+    setResult(null)
+    setError(null)
+  }, [id])
 
   useEffect(() => {
-    api.listTargets().then(setTargets).catch((e) => setError(String(e)))
+    api
+      .listTargets()
+      .then(setTargets)
+      .catch((e) => setError(String(e)))
+      .finally(() => setTargetsLoaded(true))
   }, [])
+
+  // A route id that doesn't match any known target — deleted, or simply
+  // invalid — is an honest, explicit state (build §19), never silently
+  // shown as though some other target were selected: the <select> below has
+  // no matching <option> for it, so it falls back to the placeholder rather
+  // than another real target.
+  const targetNotFound = Boolean(id) && targetsLoaded && !targets.some((t) => t.id === id)
 
   const load = useCallback(
     (targetId: string, selection: string) => {
@@ -490,9 +523,9 @@ export default function Pathways() {
       const [marketId, currency] = selection ? selection.split('::') : [undefined, undefined]
       api
         .getPathways(targetId, { market_id: marketId, currency })
-        .then(setResult)
-        .catch((e) => setError(String(e)))
-        .finally(() => setLoading(false))
+        .then((r) => { if (currentId.current === targetId) setResult(r) })
+        .catch((e) => { if (currentId.current === targetId) setError(String(e)) })
+        .finally(() => { if (currentId.current === targetId) setLoading(false) })
     },
     [],
   )
@@ -501,6 +534,26 @@ export default function Pathways() {
     if (id) load(id, contextKey)
     else setResult(null)
   }, [id, contextKey, load])
+
+  // The specific-opportunity overlay, loaded independently of the route
+  // sections above: a failure here must never blank Direct/Intermediate,
+  // and vice versa (build §26). No opportunity_id leaves this whole path
+  // inert — existing Pathways behaviour is completely unchanged.
+  useEffect(() => {
+    setAlignment(null)
+    setAlignmentError(null)
+  }, [id, opportunityId])
+
+  const loadAlignment = useCallback(() => {
+    if (!id || !opportunityId) return
+    const targetId = id
+    api
+      .getCareerAlignment(opportunityId, { target_id: targetId })
+      .then((r) => { if (currentId.current === targetId) setAlignment(r) })
+      .catch((e) => { if (currentId.current === targetId) setAlignmentError(e instanceof Error ? e.message : String(e)) })
+  }, [id, opportunityId])
+
+  useEffect(loadAlignment, [loadAlignment])
 
   const reload = () => {
     if (id) load(id, contextKey)
@@ -582,7 +635,12 @@ export default function Pathways() {
         )}
       </div>
 
-      {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
+      {targetNotFound && (
+        <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>
+          This target could not be found — it may have been deleted. <Link to="/pathways">Choose another target</Link>.
+        </p>
+      )}
+      {error && !targetNotFound && <p style={{ color: 'var(--critical)' }}>{error}</p>}
       {loading && <p className="muted">Loading…</p>}
 
       {!id && !loading && (
@@ -590,6 +648,47 @@ export default function Pathways() {
           Choose a target above to see the direct route and the intermediate archetypes that could get you there.
           No targets yet? <Link to="/targets/new">Add one</Link>.
         </p>
+      )}
+
+      {/* Phase 7 (docs/38 build §17/§18): the specific-opportunity overlay —
+          independent of `result` above, so it appears as soon as it resolves
+          and never waits on (or is blanked by) the route sections below. */}
+      {id && opportunityId && (
+        <section style={{ marginTop: 16 }} aria-labelledby="pathways-alignment-h">
+          <h2 id="pathways-alignment-h" style={{ fontSize: 16, margin: '0 0 8px' }}>
+            This opportunity's route to the target
+          </h2>
+          <div className="card" style={{ padding: 16 }}>
+            {alignmentError ? (
+              <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+                Couldn't load this opportunity's alignment: {alignmentError}
+              </p>
+            ) : !alignment ? (
+              <p className="muted">Loading…</p>
+            ) : (
+              <>
+                <AlignmentOpportunityHeader alignment={alignment} />
+                {alignment.archetype_relationship?.opportunity_archetype ? (
+                  <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
+                    Archetype: {alignment.archetype_relationship.opportunity_archetype.canonical_name}
+                  </p>
+                ) : (
+                  alignment.archetype_relationship && (
+                    <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
+                      {alignment.archetype_relationship.note}
+                    </p>
+                  )
+                )}
+                {alignment.relationship && (
+                  <div style={{ marginBottom: 10 }}>
+                    <RelationshipBadge relationship={alignment.relationship} />
+                  </div>
+                )}
+                <AlignmentFullSection alignment={alignment} roleId={opportunityId} headingId="pathways-alignment" />
+              </>
+            )}
+          </div>
+        </section>
       )}
 
       {result && !loading && (

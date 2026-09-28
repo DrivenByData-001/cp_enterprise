@@ -1,6 +1,7 @@
 import psycopg
 from fastapi import APIRouter, HTTPException, Query
 
+from .. import opportunity_alignment
 from ..db import build_role_view, db_cursor, delete_role_instance, flatten_role_instance, upsert_role_instance
 from ..document_processing import role_extraction_quality, role_extraction_quality_bulk
 from ..embeddings import cosine_similarity, ensure_profile_embedding, get_embedding, get_embeddings
@@ -218,6 +219,27 @@ def get_role(role_id: str):
 
     role["similarity"] = cosine_similarity(profile_vec, role_vec) if profile_vec else None
     return role
+
+
+@router.get("/{role_id}/career-alignment")
+def get_career_alignment(role_id: str, target_id: str | None = Query(None)):
+    """Phase 7 (docs/38): `You -> Opportunity -> Target` for one observed
+    posting against the selected Career Direction's linked Target — or, when
+    `target_id` is supplied (Pathways' `?opportunity_id=` overlay, which
+    already knows which Target it is showing), against that Target directly,
+    regardless of which Direction is currently selected. No AI, no writes,
+    no rebuild side effects."""
+    with db_cursor() as cur:
+        try:
+            return opportunity_alignment.build_opportunity_alignment(cur, role_id, target_id_override=target_id)
+        except opportunity_alignment.OpportunityNotFoundError:
+            raise HTTPException(404, "role not found")
+        except opportunity_alignment.NotAnOpportunityError as e:
+            raise HTTPException(400, str(e))
+        except opportunity_alignment.TargetNotFoundError:
+            raise HTTPException(404, "target not found")
+        except opportunity_alignment.NotATargetError as e:
+            raise HTTPException(400, str(e))
 
 
 @router.put("/{role_id}")
