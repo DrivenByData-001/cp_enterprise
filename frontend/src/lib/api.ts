@@ -1365,6 +1365,173 @@ export type PreferenceObservationInput = {
   note?: string | null
 }
 
+// --- Phase 6: Career Direction / property-first target discovery (docs/37) --
+//
+// Three different things, never merged into one score: a Preference
+// (above) is evidence; a Career Direction (below) is a user-owned statement
+// of a desired future state; a Target (Role with node_type target_real/
+// target_imagined) remains one concrete role hypothesis. Candidates below
+// are unordered hypotheses for human review — deliberately no score/rank/
+// probability field anywhere in this shape.
+
+export type CareerDirectionState = 'exploring' | 'selected' | 'archived'
+export type CareerDirectionOrigin = 'user' | 'ai_adopted'
+
+export type CareerDirectionDimension = {
+  dimension_code: string
+  desired_direction: 'toward' | 'away' | 'neutral'
+  importance: number
+  note?: string | null
+}
+
+export type CareerDirectionCompensationFloor = {
+  amount: number
+  currency: string
+  pay_period: 'annual' | 'daily'
+  employment_basis: 'permanent' | 'contract' | 'unknown'
+  hard: boolean
+}
+
+export type CareerDirectionConstraints = {
+  locations: string[]
+  remote_types: string[]
+  employment_types: string[]
+  seniority_levels: string[]
+  compensation_floor: CareerDirectionCompensationFloor | null
+  other: string[]
+}
+
+export const EMPTY_CAREER_DIRECTION_CONSTRAINTS: CareerDirectionConstraints = {
+  locations: [], remote_types: [], employment_types: [], seniority_levels: [], compensation_floor: null, other: [],
+}
+
+export type CareerDirectionTargetSummary = { id: string; title: string; organisation: string | null }
+export type CareerDirectionArchetypeSummary = { id: string; canonical_name: string; status: string }
+export type CareerDirectionArchetypeEvidence = { assigned_postings: number; demand_capabilities: number; compensation_buckets: number }
+
+export type CareerDirection = {
+  id: string
+  name: string
+  summary: string
+  state: CareerDirectionState
+  origin: CareerDirectionOrigin
+  dimensions: CareerDirectionDimension[]
+  constraints: CareerDirectionConstraints
+  target: CareerDirectionTargetSummary | null
+  archetype: CareerDirectionArchetypeSummary | null
+  archetype_evidence?: CareerDirectionArchetypeEvidence | null
+  source_discovery_run_id: string | null
+  source_candidate_id: string | null
+  selected_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CareerDirectionCreateInput = {
+  name: string
+  summary?: string
+  dimensions?: CareerDirectionDimension[]
+  constraints?: CareerDirectionConstraints
+  target_role_instance_id?: string | null
+  target_archetype_concept_id?: string | null
+}
+
+export type CareerDirectionUpdateInput = Partial<CareerDirectionCreateInput>
+
+export type CareerDirectionSourcedText = { text: string; source_refs: string[] }
+export type CareerDirectionPriorityAlignment = {
+  dimension_code: string
+  alignment: 'supports' | 'tension' | 'neutral'
+  explanation: string
+  source_refs: string[]
+}
+export type CareerDirectionEvidenceItem = { text: string; source_refs: string[] }
+
+export type CareerDirectionCandidate = {
+  id: string
+  name: string
+  summary: CareerDirectionSourcedText
+  primary_archetype_id: string | null
+  related_archetype_ids: string[]
+  priority_alignment: CareerDirectionPriorityAlignment[]
+  market_basis: CareerDirectionEvidenceItem[]
+  person_basis: CareerDirectionEvidenceItem[]
+  compensation_context: CareerDirectionSourcedText | null
+  tradeoffs: CareerDirectionEvidenceItem[]
+  unknowns: CareerDirectionEvidenceItem[]
+}
+
+export type CareerDirectionDiscoveryResult = {
+  candidates: CareerDirectionCandidate[]
+  insufficient_evidence: boolean
+  insufficient_evidence_reason: string | null
+}
+
+export type CareerDirectionDiscoverInput = {
+  name?: string | null
+  dimensions: CareerDirectionDimension[]
+  constraints: CareerDirectionConstraints
+  guidance?: string | null
+}
+
+export type CareerDirectionCorpusDisclosure = {
+  total_observed_postings: number
+  postings_with_archetype_assignment: number
+  postings_with_reviewed_requirements: number
+  active_archetypes_total: number
+  supported_archetypes: number
+  archetypes_with_compensation_evidence: number
+  economics_freshness: { state: 'never_rebuilt' | 'stale' | 'fresh'; fresh: boolean; reason: string | null }
+}
+
+export type CareerDirectionDiscoverResponse = {
+  status: 'ok'
+  discovery_run_id: string
+  result: CareerDirectionDiscoveryResult
+  caveats: string[]
+  corpus_disclosure: CareerDirectionCorpusDisclosure
+}
+
+export type CareerDirectionSourceManifestEntry = { ref: string; kind: string; label: string; category: string }
+
+export type CareerDirectionDiscoveryRun = {
+  id: string
+  status: 'ok' | 'failed'
+  model: string | null
+  prompt_name: string
+  prompt_version: string
+  guidance: string | null
+  criteria: { name: string | null; dimensions: CareerDirectionDimension[]; constraints: CareerDirectionConstraints; guidance: string | null }
+  source_manifest: CareerDirectionSourceManifestEntry[]
+  output: CareerDirectionDiscoveryResult | null
+  error_type: string | null
+  error_message: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export type PreferenceSummaryObservation = {
+  id: string
+  direction: 'toward' | 'away' | 'neutral'
+  strength: number
+  basis: PreferenceObservation['basis']
+  source_label: string | null
+  confidence: 'low' | 'medium' | 'high'
+  note: string | null
+  is_psychometric: boolean
+}
+
+export type PreferenceSummaryEntry = {
+  dimension_code: string
+  label: string
+  recent_observations: PreferenceSummaryObservation[]
+  strongest_basis: string | null
+  agreement: 'no_evidence' | 'agree' | 'conflict'
+  suggested_direction: 'toward' | 'away' | 'neutral' | null
+  basis: string | null
+  conflict: boolean
+}
+
 // --- Trends (docs/18 §7/§8/§9) — descriptive statistics over the captured
 // role corpus, never a labour-market forecast; every result carries its own
 // sample size. -------------------------------------------------------------
@@ -3030,6 +3197,30 @@ export const api = {
     req<PreferenceObservation[]>(`/preferences${dimensionCode ? `?dimension_code=${encodeURIComponent(dimensionCode)}` : ''}`),
   createPreferenceObservation: (payload: PreferenceObservationInput) =>
     req<{ id: string; status: string }>('/preferences', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // --- Phase 6: Career Direction / property-first target discovery -----------
+  listCareerDirections: (state?: CareerDirectionState) =>
+    req<{ items: CareerDirection[] }>(`/career-directions${state ? `?state=${encodeURIComponent(state)}` : ''}`),
+  getSelectedCareerDirection: () => req<{ direction: CareerDirection | null }>('/career-directions/selected'),
+  getCareerDirectionPreferenceSummary: () =>
+    req<{ dimensions: Record<string, PreferenceSummaryEntry> }>('/career-directions/preference-summary'),
+  getCareerDirection: (id: string) => req<CareerDirection>(`/career-directions/${id}`),
+  createCareerDirection: (payload: CareerDirectionCreateInput) =>
+    req<CareerDirection>('/career-directions', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCareerDirection: (id: string, payload: CareerDirectionUpdateInput) =>
+    req<CareerDirection>(`/career-directions/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  selectCareerDirection: (id: string) => req<CareerDirection>(`/career-directions/${id}/select`, { method: 'POST' }),
+  archiveCareerDirection: (id: string) => req<CareerDirection>(`/career-directions/${id}/archive`, { method: 'POST' }),
+  reopenCareerDirection: (id: string) => req<CareerDirection>(`/career-directions/${id}/reopen`, { method: 'POST' }),
+  discoverCareerDirections: (payload: CareerDirectionDiscoverInput) =>
+    req<CareerDirectionDiscoverResponse>('/career-directions/discover', { method: 'POST', body: JSON.stringify(payload) }),
+  getCareerDirectionDiscoveryRun: (runId: string) =>
+    req<CareerDirectionDiscoveryRun>(`/career-directions/discovery-runs/${runId}`),
+  adoptCareerDirectionCandidate: (runId: string, candidateId: string, payload: { name?: string; summary?: string } = {}) =>
+    req<{ created: boolean; direction: CareerDirection }>(
+      `/career-directions/discovery-runs/${runId}/candidates/${candidateId}/adopt`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
 
   // --- Phase 3: capability catalogue + coverage -------------------------------
   listCapabilities: (params: { status?: string; q?: string } = {}) => {

@@ -16,6 +16,7 @@ from .routes import (
     archetypes,
     auth as auth_routes,
     capabilities,
+    career_directions,
     comparison,
     concept_dossier,
     concepts,
@@ -119,6 +120,7 @@ app.include_router(concept_dossier.router, dependencies=_protected)
 app.include_router(role_instances.router, dependencies=_protected)
 app.include_router(profile360.router, dependencies=_protected)
 app.include_router(preferences.router, dependencies=_protected)
+app.include_router(career_directions.router, dependencies=_protected)
 app.include_router(comparison.router, dependencies=_protected)
 app.include_router(capabilities.router, dependencies=_protected)
 app.include_router(evaluation.router, dependencies=_protected)

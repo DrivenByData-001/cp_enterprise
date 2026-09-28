@@ -46,6 +46,11 @@ vi.mock('../lib/api', () => ({
         complete: true,
       },
     }),
+    // Role Detail's Decision Summary also fetches the selected Career
+    // Direction (docs/37), in the same parallel wave as compensation/
+    // comparison, once the role loads — same harmless-default treatment as
+    // compareRole above; no test in this file asserts on it.
+    getSelectedCareerDirection: vi.fn().mockResolvedValue({ direction: null }),
   },
 }))
 

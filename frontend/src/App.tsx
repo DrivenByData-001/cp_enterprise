@@ -3,6 +3,8 @@ import { useAuth } from './useAuth'
 import { hasLegacyRoleListQuery } from './lib/roleNavigation'
 import Home from './pages/Home'
 import Explore from './pages/Explore'
+import CareerDirectionBuilder from './pages/CareerDirectionBuilder'
+import CareerDirectionDetail from './pages/CareerDirectionDetail'
 import Applications from './pages/Applications'
 import ApplicationWorkspace from './pages/ApplicationWorkspace'
 import Dashboard from './pages/Dashboard'
@@ -46,7 +48,7 @@ const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string) =>
   {
     path: '/future',
     label: 'Explore my future',
-    match: (p) => p === '/future' || p === '/targets' || p.startsWith('/targets/') || p === '/pathways' || p.startsWith('/pathways/'),
+    match: (p) => p === '/future' || p.startsWith('/future/') || p === '/targets' || p.startsWith('/targets/') || p === '/pathways' || p.startsWith('/pathways/'),
   },
   {
     path: '/opportunities',
@@ -124,6 +126,8 @@ function App() {
       <Routes>
         <Route path="/" element={<Root />} />
         <Route path="/future" element={<Explore />} />
+        <Route path="/future/build" element={<CareerDirectionBuilder />} />
+        <Route path="/future/directions/:id" element={<CareerDirectionDetail />} />
         <Route path="/opportunities" element={<Dashboard />} />
         <Route path="/applications" element={<Applications />} />
         <Route path="/applications/:id" element={<ApplicationWorkspace />} />

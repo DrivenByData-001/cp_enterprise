@@ -1,10 +1,43 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { api, type TargetDraft } from '../lib/api'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { api, type CareerDirection, type TargetDraft } from '../lib/api'
 import TargetDraftEditor from '../components/TargetDraftEditor'
+
+// Phase 6 (docs/37 build §21): `?direction_id=` prefills this form from a
+// Career Direction's own dimensions/constraints/summary — sensibly, never
+// silently — the user can edit every field before saving. A Target is never
+// created merely because a direction exists; this page still only saves on
+// the existing explicit "Save target" action, and the direction is linked
+// back only after that save succeeds.
+function describeDirection(d: CareerDirection): { description: string; support: string } {
+  const dimensionLines = d.dimensions
+    .map((dim) => `- ${dim.dimension_code}: ${dim.desired_direction} (importance ${dim.importance}/3)${dim.note ? ` — ${dim.note}` : ''}`)
+    .join('\n')
+  const c = d.constraints
+  const constraintLines = [
+    c.locations.length ? `Locations: ${c.locations.join(', ')}` : '',
+    c.remote_types.length ? `Working mode: ${c.remote_types.join(', ')}` : '',
+    c.employment_types.length ? `Employment type: ${c.employment_types.join(', ')}` : '',
+    c.seniority_levels.length ? `Seniority: ${c.seniority_levels.join(', ')}` : '',
+    c.compensation_floor
+      ? `Compensation floor: ${c.compensation_floor.amount.toLocaleString()} ${c.compensation_floor.currency} (${c.compensation_floor.pay_period}, ${c.compensation_floor.employment_basis})`
+      : '',
+    c.other.length ? `Other context: ${c.other.join('; ')}` : '',
+  ].filter(Boolean).join('\n')
+
+  return {
+    description: [d.summary, dimensionLines ? `Desired properties:\n${dimensionLines}` : ''].filter(Boolean).join('\n\n'),
+    support: [constraintLines, `Originating Career Direction: ${d.name}`].filter(Boolean).join('\n\n'),
+  }
+}
 
 export default function AddTarget() {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const directionId = params.get('direction_id')
+  const [direction, setDirection] = useState<CareerDirection | null>(null)
+  const [directionError, setDirectionError] = useState<string | null>(null)
+
   const [title, setTitle] = useState('')
   const [organisation, setOrganisation] = useState('')
   const [imagined, setImagined] = useState(false)
@@ -14,6 +47,23 @@ export default function AddTarget() {
   const [json, setJson] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!directionId) return
+    let current = true
+    api.getCareerDirection(directionId)
+      .then((d) => {
+        if (!current) return
+        setDirection(d)
+        setTitle(d.name)
+        setImagined(true) // default to imagined unless anchored to a specific real role (build §21) — never known here
+        const { description: desc, support: sup } = describeDirection(d)
+        setDescription(desc)
+        setSupport(sup)
+      })
+      .catch((e) => { if (current) setDirectionError(e instanceof Error ? e.message : String(e)) })
+    return () => { current = false }
+  }, [directionId])
   const manualDraft = (): TargetDraft => ({ metadata: { source: 'user_defined', notes_for_user: support || null },
     target: { title: title.trim(), organisation: organisation || null, is_imagined: imagined, description,
       typical_tasks: [], skill_decomposition: [], technical_subjects: [] }, skills: [] })
@@ -31,13 +81,27 @@ export default function AddTarget() {
     setBusy(true); setError(null)
     try {
       const res = await api.importTarget(draft)
+      if (directionId) {
+        try {
+          await api.updateCareerDirection(directionId, { target_role_instance_id: res.id })
+        } catch {
+          // The Target itself saved fine — linking can still be done manually
+          // from the Direction detail page ("Link an existing Target"), so a
+          // linking failure must never block the save the user just made.
+        }
+      }
       navigate(`/targets/${res.id}`)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
   return <div>
-    <Link to="/targets">← Back to targets</Link>
+    <Link to={directionId ? `/future/directions/${directionId}` : '/targets'}>← Back to {directionId ? 'direction' : 'targets'}</Link>
     <h1>Add a target</h1>
+    {directionId && (
+      directionError
+        ? <p role="alert">Could not load the Career Direction to prefill from: {directionError}</p>
+        : direction && <p className="secondary">Prefilled from your Career Direction "{direction.name}" — edit anything below before saving.</p>
+    )}
     <p>Describe a role you want to explore, review its tasks and requirements, then save it.</p>
     {error && <p role="alert">{error} Your input is preserved.</p>}
     {!draft ? <>

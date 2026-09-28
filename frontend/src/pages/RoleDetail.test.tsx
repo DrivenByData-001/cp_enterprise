@@ -4,11 +4,22 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import RoleDetail from './RoleDetail'
 import {
   api,
+  type CareerDirection,
   type ComparisonItem,
   type ComparisonResult,
   type Role,
   type RoleCompensationResponse,
 } from '../lib/api'
+
+function testDirection(overrides: Partial<CareerDirection> = {}): CareerDirection {
+  return {
+    id: 'dir-1', name: 'Technical actuarial leadership', summary: '', state: 'selected', origin: 'user',
+    dimensions: [], constraints: { locations: [], remote_types: [], employment_types: [], seniority_levels: [], compensation_floor: null, other: [] },
+    target: null, archetype: null, source_discovery_run_id: null, source_candidate_id: null,
+    selected_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
 
 // Phase 2 (docs/33): the Opportunity Decision Workspace. These tests focus on
 // what the acceptance criteria actually care about — the summary-first
@@ -32,6 +43,7 @@ vi.mock('../lib/api', () => ({
     reacceptRoleCompensation: vi.fn(),
     deleteRole: vi.fn(),
     createOrReopenApplication: vi.fn(),
+    getSelectedCareerDirection: vi.fn(),
   },
 }))
 
@@ -180,11 +192,15 @@ function emptyComparison(overrides: Partial<ComparisonResult> = {}): ComparisonR
   }
 }
 
-function renderPosting(role: Role = basePosting, compensation: RoleCompensationResponse = NO_COMPENSATION, comparison: ComparisonResult = emptyComparison()) {
+function renderPosting(
+  role: Role = basePosting, compensation: RoleCompensationResponse = NO_COMPENSATION, comparison: ComparisonResult = emptyComparison(),
+  direction: CareerDirection | null = null,
+) {
   vi.mocked(api.getRole).mockResolvedValue(role)
   vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: role.id, enrichment: null })
   vi.mocked(api.getRoleCompensation).mockResolvedValue(compensation)
   vi.mocked(api.compareRole).mockResolvedValue(comparison)
+  vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction })
   return render(
     <MemoryRouter initialEntries={[`/roles/${role.id}`]}>
       <Routes>
@@ -207,6 +223,34 @@ describe('Opportunity Decision Workspace — posting', () => {
     expect(screen.queryByText(/fit score/i)).toBeNull()
     expect(screen.queryByText(/readiness/i)).toBeNull()
     expect(screen.queryByText(/hiring/i)).toBeNull()
+  })
+
+  it('shows the selected Career Direction by name with no alignment score (build §24)', async () => {
+    renderPosting(basePosting, NO_COMPENSATION, emptyComparison(), testDirection())
+    await screen.findByRole('heading', { name: 'Decision summary' })
+    expect(await screen.findByText('Technical actuarial leadership')).toBeTruthy()
+    expect(screen.getByText(/Current direction:/)).toBeTruthy()
+    expect(screen.getByText(/handled in the next phase/)).toBeTruthy()
+    expect(screen.getByText('Open direction').closest('a')?.getAttribute('href')).toBe('/future/directions/dir-1')
+    expect(screen.queryByText(/fit score|readiness|hiring|%.*align/i)).toBeNull()
+  })
+
+  it('degrades to the honest empty state if the Career Direction fetch fails', async () => {
+    vi.mocked(api.getRole).mockResolvedValue(basePosting)
+    vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: basePosting.id, enrichment: null })
+    vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
+    vi.mocked(api.compareRole).mockResolvedValue(emptyComparison())
+    vi.mocked(api.getSelectedCareerDirection).mockRejectedValue(new Error('down'))
+    render(
+      <MemoryRouter initialEntries={['/roles/role']}>
+        <Routes>
+          <Route path="/roles/:id" element={<RoleDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('heading', { name: 'Decision summary' })
+    expect(await screen.findByText(/couldn't be loaded/)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Requirements' })).toBeTruthy()
   })
 
   it('shows a complete requirement review without treating it as a problem', async () => {

@@ -117,7 +117,34 @@ evidence); generated questions are always framed as preparation hypotheses,
 never known employer questions, and no readiness/hiring-probability score of
 any kind was added. See
 [`docs/36-phase5-interview-lifecycle.md`](docs/36-phase5-interview-lifecycle.md).
-Career Direction / Target Discovery remains Phase 6.
+
+Phase 6 adds the other half of the product: a persistent, **property-first**
+way to answer "what kind of future career state do I actually want to
+pursue?", so the user no longer has to start from a job title. A new
+`jobber.career_direction` model (with its own `career_direction_dimension`
+rows, structurally separate from `preference_observation`) lets the user
+configure desired properties/trade-offs and typed practical constraints
+(geography, working mode, employment type, seniority, an optional
+compensation floor) manually, or generate 3-5 grounded, **unordered**
+hypotheses from that input plus preference evidence, read-only Profile360
+context, existing Targets and bounded market/archetype evidence — every
+factual claim in a hypothesis carries a validated source reference, and an
+invented reference, archetype id, or an under-grounded claim (e.g. "you
+already have this" with no Profile360 backing) gets the whole response
+rejected before anything is persisted. No hypothesis is ever ranked, scored,
+or labelled "best"/"recommended" — the schema has no field for one. A
+generated hypothesis becomes a Career Direction only when explicitly adopted,
+and saving/adopting one never selects it: exactly one Career Direction may be
+`selected` at a time, enforced at the database level, and only an explicit
+user action ever changes which one. `/future` is now this workspace's real
+home, Home's cockpit and the Opportunity Decision Workspace both name the
+selected direction (with no alignment score — that is explicitly Phase 7),
+and the existing Target/Pathways workflow can start from a direction and link
+back after saving, with no change to how Targets or Pathways work on their
+own. See
+[`docs/37-phase6-career-direction-target-discovery.md`](docs/37-phase6-career-direction-target-discovery.md).
+`You → Opportunity → Target` alignment and richer route optimisation remain
+Phase 7.
 
 ## Technical architecture
 

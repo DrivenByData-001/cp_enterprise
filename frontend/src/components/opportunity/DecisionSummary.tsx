@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import {
+  type CareerDirection,
   type ComparisonResult,
   type ComparisonStatus,
   type Role,
@@ -261,7 +262,45 @@ function EconomicsStateTile({
   )
 }
 
-function CareerDirectionTile() {
+/** Phase 6 (docs/37 build §24): shows the selected direction by name only —
+ * no opportunity-to-direction alignment score of any kind. That analysis is
+ * explicitly deferred to Phase 7 (`You → Opportunity → Target`); this tile
+ * only ever names the current direction and, when it has one, its linked
+ * Target, exactly like Home's own Career Direction card. A failed fetch
+ * degrades to the same honest "not selected" framing rather than blocking
+ * the rest of the Decision Summary. */
+function CareerDirectionTile({ direction, error }: { direction: CareerDirection | null; error: string | null }) {
+  if (error) {
+    return (
+      <section className="card" aria-labelledby="ds-direction-h">
+        <h3 id="ds-direction-h" style={{ marginTop: 0, fontSize: 14 }}>
+          Career direction
+        </h3>
+        <p role="alert" style={{ fontSize: 13, margin: 0 }}>Career direction couldn't be loaded.</p>
+      </section>
+    )
+  }
+  if (direction) {
+    return (
+      <section className="card" aria-labelledby="ds-direction-h">
+        <h3 id="ds-direction-h" style={{ marginTop: 0, fontSize: 14 }}>
+          Career direction
+        </h3>
+        <p style={{ fontSize: 13, margin: 0 }}>
+          <strong>Current direction:</strong> {direction.name}
+        </p>
+        {direction.target && (
+          <p className="secondary" style={{ fontSize: 12, margin: '4px 0 0' }}>Target: {direction.target.title}</p>
+        )}
+        <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+          Opportunity-to-direction alignment is handled in the next phase.
+        </p>
+        <p style={{ marginTop: 10, marginBottom: 0 }}>
+          <Link to={`/future/directions/${direction.id}`}>Open direction</Link>
+        </p>
+      </section>
+    )
+  }
   return (
     <section className="card" aria-labelledby="ds-direction-h">
       <h3 id="ds-direction-h" style={{ marginTop: 0, fontSize: 14 }}>
@@ -287,6 +326,8 @@ export function DecisionSummary({
   onRetryComparison,
   compensation,
   compensationError,
+  direction,
+  directionError,
 }: {
   role: Role
   comparison: ComparisonResult | null
@@ -294,6 +335,8 @@ export function DecisionSummary({
   onRetryComparison: () => void
   compensation: RoleCompensationResponse | null
   compensationError: string | null
+  direction: CareerDirection | null
+  directionError: string | null
 }) {
   return (
     <section aria-labelledby="decision-summary-h" style={{ marginTop: 16 }}>
@@ -304,7 +347,7 @@ export function DecisionSummary({
         <RequirementsStateTile role={role} />
         <EvidenceStateTile comparison={comparison} error={comparisonError} roleId={role.id} onRetry={onRetryComparison} />
         <EconomicsStateTile compensation={compensation} error={compensationError} />
-        <CareerDirectionTile />
+        <CareerDirectionTile direction={direction} error={directionError} />
       </div>
     </section>
   )
