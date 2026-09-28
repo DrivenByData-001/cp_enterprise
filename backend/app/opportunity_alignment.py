@@ -222,8 +222,24 @@ def _archetype_relationship(cur, opportunity_role: dict, target_role: dict | Non
     target_archetype = names.get(target_id) if target_id else None
     direction_archetype = (direction or {}).get("archetype")
 
-    same_as_target = bool(opp_archetype and target_archetype and opp_archetype["id"] == target_archetype["id"])
-    same_as_direction = bool(opp_archetype and direction_archetype and opp_archetype["id"] == direction_archetype["id"])
+    # A shared archetype only counts as a structural anchor while it is
+    # still active — a concept deprecated after assignment is stale
+    # vocabulary, and must not be able to drive same_destination_family,
+    # the strongest relationship state. `opp_archetype["id"] ==
+    # target_archetype["id"]` means both dicts describe the same concept
+    # row, so either side's `status` is the same value; checking one
+    # suffices. Displayed archetype facts themselves are shown regardless
+    # of status — only the same-family classification is gated.
+    same_as_target = bool(
+        opp_archetype and target_archetype
+        and opp_archetype["id"] == target_archetype["id"]
+        and opp_archetype["status"] == "active"
+    )
+    same_as_direction = bool(
+        opp_archetype and direction_archetype
+        and opp_archetype["id"] == direction_archetype["id"]
+        and opp_archetype["status"] == "active"
+    )
 
     return {
         "opportunity_archetype": opp_archetype,
@@ -368,11 +384,11 @@ _DIRECT_CONSTRAINT_FIELDS = (
 
 
 def _text_matches(desired: list[str], *observed_values: str | None) -> bool:
-    """Conservative, literal text comparison — case/whitespace-insensitive
-    equality or containment only. Never geocoding, never a learned or fuzzy
-    notion that two differently-named values are "the same place" (build
-    §11: "do not guess that two differently named locations are
-    equivalent")."""
+    """Case/whitespace-insensitive equality or containment — for the short,
+    effectively-controlled vocabularies (remote type, employment type,
+    seniority level) where a false-positive containment match is
+    implausible (this app has no "senior" vs "junior senior" collision).
+    Never used for geography — see `_location_matches`."""
     normalized_desired = [v.strip().casefold() for v in desired if v and v.strip()]
     for observed in observed_values:
         if not observed:
@@ -384,7 +400,26 @@ def _text_matches(desired: list[str], *observed_values: str | None) -> bool:
     return False
 
 
-def _one_constraint(key: str, label: str, desired: list[str], observed_values: tuple, *, observed) -> dict:
+def _location_matches(desired: list[str], *observed_values: str | None) -> bool:
+    """Exact, normalized match only — never containment. `location`/
+    `country` are plain, unnormalized free-text columns with no canonical
+    geography mapping in this repository, so containment produces real
+    false positives ("Ireland" containment-matching "Northern Ireland",
+    "York" containment-matching "New York") — exactly the "guess that two
+    differently named locations are equivalent" build §11 forbids. Exact
+    case/whitespace-insensitive string equality is the only comparison
+    defensible without geocoding or a canonical location table."""
+    normalized_desired = {v.strip().casefold() for v in desired if v and v.strip()}
+    for observed in observed_values:
+        if not observed:
+            continue
+        if observed.strip().casefold() in normalized_desired:
+            return True
+    return False
+
+
+def _one_constraint(key: str, label: str, desired: list[str], observed_values: tuple, *, observed,
+                    matcher=_text_matches) -> dict:
     if not desired:
         return {"constraint": key, "label": label, "status": "not_specified",
                 "observed_value": observed, "desired_value": desired,
@@ -393,7 +428,7 @@ def _one_constraint(key: str, label: str, desired: list[str], observed_values: t
         return {"constraint": key, "label": label, "status": "unknown",
                 "observed_value": observed, "desired_value": desired,
                 "reason": "This opportunity does not record a value for this field."}
-    matched = _text_matches(desired, *observed_values)
+    matched = matcher(desired, *observed_values)
     return {"constraint": key, "label": label, "status": "matches" if matched else "conflicts",
             "observed_value": observed, "desired_value": desired,
             "reason": (f"{observed!r} matches one of your stated preferences." if matched
@@ -456,6 +491,7 @@ def _direct_constraints(direction: dict, opportunity_role: dict, opportunity_com
         "locations", "Location", constraints.get("locations") or [],
         (opportunity_role.get("location"), opportunity_role.get("country")),
         observed=opportunity_role.get("location") or opportunity_role.get("country"),
+        matcher=_location_matches,
     )]
     for key, role_field, label in _DIRECT_CONSTRAINT_FIELDS:
         observed = opportunity_role.get(role_field)

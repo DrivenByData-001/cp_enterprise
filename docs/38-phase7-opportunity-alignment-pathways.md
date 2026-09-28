@@ -167,13 +167,21 @@ _classify_relationship`) — never a score. First match wins:
    respectively), which already encodes "structurally easier/more evidenced
    than the Target" (see `backend/app/stepping_stones.py`).
 
-Same-archetype-family requires a **reviewed** archetype assignment on both
-sides (`role_instance.archetype_concept_id`, the only field
-`archetype_classification.assign_archetype` ever writes) — never inferred
-from a title string or an embedding threshold. An opportunity with no
-reviewed archetype always reports `archetype_relationship.opportunity_archetype
-= null` and a `"No reviewed archetype is assigned to this posting."` note,
-and is never auto-classified as a side effect of alignment.
+Same-archetype-family requires a **reviewed and still-active** archetype
+assignment on both sides (`role_instance.archetype_concept_id`, the only
+field `archetype_classification.assign_archetype` ever writes) — never
+inferred from a title string or an embedding threshold. A concept can be
+deprecated after a role was assigned to it (the assignment is never
+cascade-cleared), so `_archetype_relationship` requires the *shared*
+concept's `status` to still be `active` before `same_as_target_archetype`/
+`same_as_direction_archetype` can be true — a deprecated shared archetype is
+stale vocabulary, not a reviewed structural anchor, and falls through to
+whatever the stepping-stone verdict alone would produce. The archetype facts
+themselves are still displayed regardless of status (transparency); only the
+same-family classification is gated. An opportunity with no reviewed
+archetype always reports `archetype_relationship.opportunity_archetype =
+null` and a `"No reviewed archetype is assigned to this posting."` note, and
+is never auto-classified as a side effect of alignment.
 
 Semantic similarity (`step["similarity_to_target"]`/`similarity_to_profile`,
 surfaced separately as `semantic_similarity`) never participates in this
@@ -190,15 +198,19 @@ a statement that the role has no value outside the selected Target
 ## Direction constraints and qualitative dimensions
 
 Direct constraints (`direction_constraints`) are evaluated only where
-structured role data genuinely supports it: `locations` (checked
-conservatively — case/whitespace-insensitive equality or containment
-against the role's `location` **and** `country` columns, never geocoded,
-never a fuzzy guess that two differently-named places are the same),
-`remote_types`, `employment_types`, `seniority_levels`, and
-`compensation_floor`. Each reports `matches` / `conflicts` / `unknown` /
-`not_specified` with the observed and desired values and a plain-language
-reason. An empty desired list is always `not_specified`, never a hard
-requirement satisfied by zero options.
+structured role data genuinely supports it: `locations` (`_location_matches`
+— exact, case/whitespace-insensitive equality against the role's `location`
+**or** `country` column, never containment: `location`/`country` are plain
+free-text columns with no canonical geography table behind them, so
+containment would false-positive "Ireland" against "Northern Ireland" or
+"York" against "New York" — exactly the fuzzy "two differently-named places
+are the same" guess this build forbids), `remote_types`, `employment_types`,
+`seniority_levels` (`_text_matches` — equality or containment is safe for
+these short, effectively-controlled vocabularies), and `compensation_floor`.
+Each reports `matches` / `conflicts` / `unknown` / `not_specified` with the
+observed and desired values and a plain-language reason. An empty desired
+list is always `not_specified`, never a hard requirement satisfied by zero
+options.
 
 The compensation floor comparison reuses the same currency/component-family/
 employment-basis compatibility rules `compensation_resolver.

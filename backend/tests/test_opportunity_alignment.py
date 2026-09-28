@@ -496,6 +496,23 @@ def test_no_archetype_never_infers_same_destination_family(client):
     assert body["archetype_relationship"]["note"] == "No reviewed archetype is assigned to this posting."
 
 
+def test_deprecated_shared_archetype_never_gives_same_destination_family(client):
+    """A concept can be deprecated after a role was assigned to it — the
+    assignment itself is not cleared. A shared-but-deprecated archetype is
+    stale vocabulary, not a reviewed structural anchor, and must not drive
+    the strongest relationship state."""
+    with db_cursor() as cur:
+        shared_archetype = _archetype(cur, "Retired Capital archetype")
+        scenario = _base_scenario(cur, opportunity_archetype=shared_archetype, target_archetype=shared_archetype)
+        cur.execute("UPDATE jobber.concept SET status = 'deprecated' WHERE id = %s", (shared_archetype,))
+        _selected_direction(cur, target_id=scenario["target_id"])
+    body = client.get(f"/api/roles/{scenario['opportunity_id']}/career-alignment").json()
+    assert body["relationship"]["state"] == "potential_step"
+    assert body["archetype_relationship"]["same_as_target_archetype"] is False
+    # Still shown for transparency — only the classification is gated.
+    assert body["archetype_relationship"]["opportunity_archetype"]["status"] == "deprecated"
+
+
 def test_semantic_similarity_alone_never_creates_a_relationship_state():
     """Direct unit check of the classifier's contract: it takes an
     `archetype_match` boolean and the stepping-stone verdict, never a
@@ -596,6 +613,32 @@ def test_direct_constraint_unknown_when_opportunity_field_missing(client):
     body = client.get(f"/api/roles/{opportunity_id}/career-alignment").json()
     by_key = {c["constraint"]: c for c in body["direction_constraints"]}
     assert by_key["remote_types"]["status"] == "unknown"
+
+
+def test_location_constraint_is_exact_match_never_substring_containment(client):
+    """Containment would false-positive "Ireland" against "Northern
+    Ireland" and "York" against "New York" — geography has no canonical
+    mapping in this repo, so only exact (normalized) equality is safe."""
+    with db_cursor() as cur:
+        northern_ireland = _role(cur, title="A role in Northern Ireland", location="Northern Ireland")
+        new_york = _role(cur, title="A role in New York", location="New York")
+        exact_london = _role(cur, title="A London role", location="London")
+        _selected_direction(cur, name="Ireland direction", constraints=CareerDirectionConstraints(locations=["Ireland"]))
+    body = client.get(f"/api/roles/{northern_ireland}/career-alignment").json()
+    location = next(c for c in body["direction_constraints"] if c["constraint"] == "locations")
+    assert location["status"] == "conflicts"
+
+    with db_cursor() as cur:
+        _selected_direction(cur, name="York direction", constraints=CareerDirectionConstraints(locations=["York"]))
+    body = client.get(f"/api/roles/{new_york}/career-alignment").json()
+    location = next(c for c in body["direction_constraints"] if c["constraint"] == "locations")
+    assert location["status"] == "conflicts"
+
+    with db_cursor() as cur:
+        _selected_direction(cur, name="London direction", constraints=CareerDirectionConstraints(locations=["London"]))
+    body = client.get(f"/api/roles/{exact_london}/career-alignment").json()
+    location = next(c for c in body["direction_constraints"] if c["constraint"] == "locations")
+    assert location["status"] == "matches"
 
 
 def test_compensation_floor_matches_and_conflicts(client):
