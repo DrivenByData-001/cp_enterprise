@@ -29,10 +29,10 @@ vi.mock('../lib/api', () => ({ api: {
   // archetype catalogue on mount. Both are plain reads that make no AI call.
   getRoleCompensation: vi.fn(), proposeRoleCompensation: vi.fn(), acceptRoleCompensation: vi.fn(),
   getArchetypeCatalogue: vi.fn(), proposeRoleArchetype: vi.fn(), setRoleArchetype: vi.fn(),
-  // Role Detail's Decision Summary also fetches the selected Career
-  // Direction (docs/37), same "each test mocks it itself" discipline as
+  // Role Detail's Decision Summary also fetches the career alignment
+  // (docs/38, Phase 7), same "each test mocks it itself" discipline as
   // compareRole above (`resetAllMocks` wipes any factory-level default).
-  getSelectedCareerDirection: vi.fn(),
+  getCareerAlignment: vi.fn(),
 } }))
 
 // Compensation for a role with no accepted evidence at all — the honest
@@ -59,6 +59,18 @@ export const NO_COMPENSATION = {
     notes: [], fingerprint: 'none',
   },
   observations: [],
+}
+// Role Detail's Decision Summary (docs/38, Phase 7) also fetches career
+// alignment for every posting it renders — same "each test mocks it itself"
+// discipline as EMPTY_COMPARISON below. The honest "no direction selected"
+// case, harmless for every test in this file that doesn't assert on it.
+export const NO_DIRECTION_ALIGNMENT = {
+  state: 'no_selected_direction' as const,
+  direction: null,
+  target: null,
+  opportunity: { id: 'role', title: 'role', organisation: null, archetype_concept_id: null },
+  message: 'Select a Career Direction to evaluate this opportunity against it.',
+  method: {},
 }
 // Role Detail's Decision Summary (docs/33) compares evidence for every
 // posting it renders. `resetAllMocks` below wipes any factory-level default
@@ -307,7 +319,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     const notice = await screen.findByText(/Requirements review pending/)
     expect(notice.textContent).toContain('2 item')
@@ -323,7 +335,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
       review_summary: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 2, extraction_attempted: true, needs_reextraction: 0, complete: false },
     }
     vi.mocked(api.compareRole).mockResolvedValue(comparison)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
     // SavedRoleBanner (shown on every step of this page) fetches the role on mount.
     vi.mocked(api.getRole).mockResolvedValue({ id: 'role', title: 'Actuary', organisation: null, location: null } as Role)
@@ -342,7 +354,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     const notice = await screen.findByText(/Requirements review pending/)
     expect(notice.textContent).toContain('1 item')
@@ -358,7 +370,7 @@ describe('incomplete-review wording covers unresolved vocabulary terms too', () 
       review_summary: { accepted: 3, unreviewed: 0, rejected: 0, unresolved_proposals: 0, extraction_attempted: true, needs_reextraction: 1, complete: false },
     }
     vi.mocked(api.compareRole).mockResolvedValue(comparison)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     vi.mocked(api.listDevelopmentActions).mockResolvedValue([])
     // SavedRoleBanner (shown on every step of this page) fetches the role on mount.
     vi.mocked(api.getRole).mockResolvedValue({ id: 'role', title: 'Actuary', organisation: null, location: null } as Role)
@@ -388,7 +400,7 @@ describe('Role Detail separates reviewed requirements from legacy skills', () =>
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
 
     await screen.findByText('Reviewed requirements')
@@ -413,7 +425,7 @@ describe('Role Detail separates reviewed requirements from legacy skills', () =>
     vi.mocked(api.getRoleContext).mockResolvedValue({ role_instance_id: 'role', enrichment: null })
     vi.mocked(api.getRoleCompensation).mockResolvedValue(NO_COMPENSATION)
     vi.mocked(api.compareRole).mockResolvedValue(EMPTY_COMPARISON)
-    vi.mocked(api.getSelectedCareerDirection).mockResolvedValue({ direction: null })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(NO_DIRECTION_ALIGNMENT)
     render(<MemoryRouter initialEntries={['/roles/role']}><Routes><Route path="/roles/:id" element={<RoleDetail />} /></Routes></MemoryRouter>)
     await screen.findByText('Reviewed requirements')
     expect(screen.queryByText('Legacy skills')).toBeNull()

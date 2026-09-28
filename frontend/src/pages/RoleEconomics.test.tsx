@@ -46,11 +46,18 @@ vi.mock('../lib/api', () => ({
         complete: true,
       },
     }),
-    // Role Detail's Decision Summary also fetches the selected Career
-    // Direction (docs/37), in the same parallel wave as compensation/
+    // Role Detail's Decision Summary also fetches the career alignment
+    // (docs/38, Phase 7), in the same parallel wave as compensation/
     // comparison, once the role loads — same harmless-default treatment as
     // compareRole above; no test in this file asserts on it.
-    getSelectedCareerDirection: vi.fn().mockResolvedValue({ direction: null }),
+    getCareerAlignment: vi.fn().mockResolvedValue({
+      state: 'no_selected_direction',
+      direction: null,
+      target: null,
+      opportunity: { id: 'role', title: 'role', organisation: null, archetype_concept_id: null },
+      message: 'Select a Career Direction to evaluate this opportunity against it.',
+      method: {},
+    }),
   },
 }))
 

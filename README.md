@@ -143,8 +143,36 @@ and the existing Target/Pathways workflow can start from a direction and link
 back after saving, with no change to how Targets or Pathways work on their
 own. See
 [`docs/37-phase6-career-direction-target-discovery.md`](docs/37-phase6-career-direction-target-discovery.md).
-`You → Opportunity → Target` alignment and richer route optimisation remain
-Phase 7.
+
+Phase 7 connects those pieces: for one real observed opportunity, **`You →
+Opportunity → Target`** answers how it relates to where the user is now and,
+when the selected Career Direction has a linked Target, to that Target too —
+reusing the existing Comparison engine for `You → Opportunity` and a new
+`stepping_stones.assess_specific_candidate` (the existing stepping-stone
+state machine, extracted so one opportunity can be assessed without scanning
+every captured posting) for `Opportunity → Target`. A small, named,
+rule-based relationship vocabulary (`same_destination_family`,
+`potential_step`, `no_identified_target_progress`,
+`not_more_reachable_than_target`, `relationship_unclear`,
+`target_already_evidenced`) replaces any numeric score — same-destination-
+family requires a reviewed archetype anchor on both sides, never a title or
+embedding guess, and every state carries a plain-language reason rather than
+a hidden weighted formula. Direction constraints (location, remote type,
+employment type, seniority, a typed compensation floor) are checked directly
+against a posting's own structured fields with no geocoding and no silent
+currency conversion; qualitative direction properties (autonomy, technical
+engagement, and the like) are always reported `not_structurally_assessed`
+rather than guessed from a title. The Opportunity Decision Workspace and the
+Application workspace both show this analysis (compact tile plus, on Role
+Detail, a fuller breakdown of which outstanding Target requirements the
+opportunity involves, leaves untouched, and adds on top), and Pathways gains
+a `?opportunity_id=` overlay showing the same analysis for a specific
+observed posting above its existing Direct/Intermediate-archetype routes —
+route depth stays exactly direct-plus-one-intermediate, with no general
+N-hop search. No AI call and no new opaque score exist anywhere in this
+phase. See
+[`docs/38-phase7-opportunity-alignment-pathways.md`](docs/38-phase7-opportunity-alignment-pathways.md).
+The fuller **Market Coverage & Confidence** product remains Phase 8.
 
 ## Technical architecture
 

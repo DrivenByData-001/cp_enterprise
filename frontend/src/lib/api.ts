@@ -2797,6 +2797,141 @@ export type PathwaysResult = {
   }
 }
 
+// --- Phase 7: opportunity alignment (docs/38) -------------------------------
+//
+// `You -> Opportunity -> Target`: how one observed posting relates to where
+// the user is now and, when the selected Career Direction has a linked
+// Target (or an explicit target_id is supplied — the Pathways overlay), to
+// that Target. Decision support only — no score, no fit percentage, no
+// recommendation to apply anywhere in this shape, matching every other
+// Phase 7 surface (Pathways, Comparison).
+
+export type AlignmentState = 'no_selected_direction' | 'direction_without_target' | 'insufficient_target_evidence' | 'target_available'
+
+export type RelationshipState =
+  | 'same_destination_family'
+  | 'potential_step'
+  | 'no_identified_target_progress'
+  | 'not_more_reachable_than_target'
+  | 'relationship_unclear'
+  | 'target_already_evidenced'
+
+export type AlignmentRelationship = { state: RelationshipState; label: string; reason: string }
+
+export type AlignmentRoleSummary = { id: string; title: string; organisation: string | null; archetype_concept_id: string | null }
+
+export type YouToOpportunity = {
+  counts: Record<ComparisonStatus, number>
+  requirements_reviewed: number
+  legacy_requirement_count: number
+  review_summary: RequirementReviewSummary
+  review_blockers: ReviewBlocker[]
+  blocking_gaps: GapConcept[]
+  unverified_required: (GapConcept & { status: ComparisonStatus })[]
+  embedding_similarity: number | null
+}
+
+export type TargetGapInvolved = {
+  concept_id: string
+  canonical_name: string | null
+  target_requirement_type: string | null
+  opportunity_requirement_type: string | null
+  person_evidence_status: ComparisonStatus | null
+  target_requirement_source: 'claim' | 'role_skill_observation' | null
+  opportunity_requirement_source: 'claim' | 'role_skill_observation' | null
+}
+
+export type TargetGapNotTouched = Omit<TargetGapInvolved, 'opportunity_requirement_type' | 'opportunity_requirement_source'>
+
+export type AdditionalOpportunityDemand = {
+  concept_id: string
+  canonical_name: string | null
+  opportunity_requirement_type: string | null
+  person_evidence_status: ComparisonStatus | null
+  opportunity_requirement_source: 'claim' | 'role_skill_observation' | null
+}
+
+export type OpportunityToTarget = {
+  target_gaps_involved: TargetGapInvolved[]
+  target_gaps_not_touched: TargetGapNotTouched[]
+  additional_opportunity_demands: AdditionalOpportunityDemand[]
+  legacy_requirements_involved: number
+  is_potential_step: boolean
+  candidate_required_gaps: number
+  candidate_missing_required: string[]
+  candidate_unverified_required: string[]
+  target_required_evidence_gaps: number
+  candidate_review_complete: boolean
+  candidate_review_blockers: ReviewBlocker[]
+  target_review_complete: boolean
+  target_review_blockers: ReviewBlocker[]
+  target_mapping_complete: boolean
+  target_mapping_unresolved: number
+}
+
+export type DirectConstraintStatus = 'matches' | 'conflicts' | 'unknown' | 'not_specified'
+
+export type DirectConstraint = {
+  constraint: string
+  label: string
+  status: DirectConstraintStatus
+  observed_value: unknown
+  desired_value: unknown
+  reason: string
+}
+
+export type QualitativeDimensionAssessment = {
+  dimension_code: string
+  desired_direction: 'toward' | 'away' | 'neutral'
+  importance: number
+  note: string | null
+  assessment: 'not_structurally_assessed'
+  reason: string
+}
+
+export type ArchetypeRelationship = {
+  opportunity_archetype: { id: string; canonical_name: string; status: string } | null
+  target_archetype: { id: string; canonical_name: string; status: string } | null
+  direction_archetype: CareerDirectionArchetypeSummary | null
+  same_as_target_archetype: boolean
+  same_as_direction_archetype: boolean
+  note: string | null
+}
+
+export type AlignmentEconomics = {
+  opportunity: ResolvedCompensation
+  vs_personal_earnings: PersonalComparison
+  target: ResolvedCompensation | null
+}
+
+export type AlignmentReview = {
+  opportunity: { complete: boolean; blockers: ReviewBlocker[]; legacy_requirement_count: number }
+  target: { complete: boolean; blockers: ReviewBlocker[]; mapping_complete: boolean; mapping_unresolved: number }
+}
+
+// Every field beyond `state`/`direction`/`target`/`opportunity`/`method` is
+// state-dependent (see backend/app/opportunity_alignment.py's module
+// docstring for exactly which fields each state returns) — optional here
+// rather than split into four separate response types, since every consumer
+// already has to branch on `state` first before reading anything else.
+export type OpportunityAlignment = {
+  state: AlignmentState
+  direction: CareerDirection | null
+  target: AlignmentRoleSummary | null
+  opportunity: AlignmentRoleSummary
+  message?: string
+  relationship?: AlignmentRelationship
+  you_to_opportunity?: YouToOpportunity
+  opportunity_to_target?: OpportunityToTarget
+  direction_constraints?: DirectConstraint[]
+  direction_dimensions?: QualitativeDimensionAssessment[]
+  archetype_relationship?: ArchetypeRelationship
+  economics?: AlignmentEconomics
+  review?: AlignmentReview
+  semantic_similarity?: { to_target: number | null; to_profile: number | null }
+  method: Record<string, string>
+}
+
 export const api = {
   previewTarget: (payload: { title: string; organisation?: string | null; is_imagined: boolean; description: string; supporting_material: string }) =>
     req<{ status: 'ok' | 'failed'; proposal: TargetDraft | null; error: string | null; extraction_run_id: string }>('/targets/preview', { method: 'POST', body: JSON.stringify(payload) }),
@@ -3221,6 +3356,18 @@ export const api = {
       `/career-directions/discovery-runs/${runId}/candidates/${candidateId}/adopt`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+
+  // --- Phase 7: opportunity alignment (docs/38) -------------------------------
+  // `target_id` overrides the selected Career Direction's own Target with an
+  // explicit one — the Pathways overlay, which already knows which Target
+  // it's showing and must agree with Role Detail's own (Direction-derived)
+  // answer for the same (opportunity, target) pair.
+  getCareerAlignment: (roleId: string, params: { target_id?: string } = {}) => {
+    const qs = new URLSearchParams()
+    if (params.target_id) qs.set('target_id', params.target_id)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return req<OpportunityAlignment>(`/roles/${roleId}/career-alignment${suffix}`)
+  },
 
   // --- Phase 3: capability catalogue + coverage -------------------------------
   listCapabilities: (params: { status?: string; q?: string } = {}) => {
