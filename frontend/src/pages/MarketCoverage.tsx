@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   api,
-  type Archetype,
   type ArchetypeEvidence,
   type CoverageDistributionItem,
   type CoverageFraction,
@@ -53,6 +52,38 @@ function FractionBar({ label, fraction }: { label: string; fraction: CoverageFra
   )
 }
 
+// A bar whose *visual width* scales against the largest bucket in its group
+// (so a small bucket isn't an invisible sliver next to a dominant one) while
+// the *displayed* count/denominator/percentage is a real, meaningful
+// statistic — never the chart-scaling value. The two are deliberately
+// different numbers and must never be conflated into one `proportion`
+// (unlike FractionBar, whose `fraction.total` is always the real
+// denominator both for the bar width and the text).
+function ScaledBar({ label, count, statTotal, barScaleTotal, meaning }: {
+  label: string
+  count: number
+  statTotal: number
+  barScaleTotal: number
+  meaning: string
+}) {
+  const pct = statTotal > 0 ? Math.round((count / statTotal) * 100) : null
+  const barPct = barScaleTotal > 0 ? Math.round((count / barScaleTotal) * 100) : 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }} title={meaning}>
+      <span style={{ width: 170, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </span>
+      <div style={{ flex: 1, background: 'var(--border)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+        <div style={{ width: `${barPct}%`, background: 'var(--series-1)', height: '100%' }} />
+      </div>
+      <span className="muted" style={{ width: 110, flexShrink: 0, textAlign: 'right' }}>
+        {count} of {statTotal}
+        {pct !== null ? ` (${pct}%)` : ''}
+      </span>
+    </div>
+  )
+}
+
 function DistributionBars({ items, total }: { items: CoverageDistributionItem[]; total: number }) {
   if (items.length === 0) return <p className="muted" style={{ fontSize: 13 }}>No values recorded in this scope.</p>
   return (
@@ -83,11 +114,11 @@ function SectionCard({ title, subtitle, children }: { title: string; subtitle?: 
 function FilterBar({
   filters,
   setFilters,
-  archetypes,
+  archetypeOptions,
 }: {
   filters: MarketCoverageFilters
   setFilters: (f: MarketCoverageFilters) => void
-  archetypes: Archetype[]
+  archetypeOptions: { archetype_concept_id: string; canonical_name: string }[]
 }) {
   const active = Object.values(filters).some((v) => v !== undefined && v !== '')
   return (
@@ -130,8 +161,8 @@ function FilterBar({
         onChange={(e) => setFilters({ ...filters, archetype_id: e.target.value || undefined })}
       >
         <option value="">Any archetype</option>
-        {archetypes.map((a) => (
-          <option key={a.id} value={a.id}>{a.canonical_name}</option>
+        {archetypeOptions.map((a) => (
+          <option key={a.archetype_concept_id} value={a.archetype_concept_id}>{a.canonical_name}</option>
         ))}
       </select>
       {active && <button onClick={() => setFilters({})}>Clear</button>}
@@ -173,6 +204,13 @@ function CorpusInScopeSection({ summary }: { summary: MarketCoverageSummary }) {
 
 function TimeCoverageSection({ summary }: { summary: MarketCoverageSummary }) {
   const { time, roles } = summary
+  // The bar's visual width scales against the largest year (pure chart
+  // legibility) — the displayed count/denominator/percentage is a
+  // completely separate number: each year's share of every captured
+  // posting in this scope (consistent with Trends' own "by year" chart,
+  // which uses the same scope-wide denominator). Never conflate the two —
+  // "10 of 20" must always mean 10 of 20 real postings, never 10 of "the
+  // tallest bar".
   const maxYearCount = Math.max(1, ...time.by_year.map((y) => y.count))
   return (
     <SectionCard title="Time coverage" subtitle="Capture recency is not posting recency — dates below are posting_date only.">
@@ -183,10 +221,13 @@ function TimeCoverageSection({ summary }: { summary: MarketCoverageSummary }) {
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 10 }}>
         {time.by_year.map((y) => (
-          <FractionBar
+          <ScaledBar
             key={y.value}
             label={String(y.value)}
-            fraction={{ count: y.count, total: maxYearCount, proportion: y.count / maxYearCount, meaning: `${y.count} posting(s) in ${y.value}` }}
+            count={y.count}
+            statTotal={roles.total}
+            barScaleTotal={maxYearCount}
+            meaning={`${y.count} of ${roles.total} captured postings in this scope are from ${y.value}`}
           />
         ))}
       </div>
@@ -407,13 +448,8 @@ export default function MarketCoverage() {
   }
 
   const [summary, setSummary] = useState<MarketCoverageSummary | null>(null)
-  const [archetypes, setArchetypes] = useState<Archetype[]>([])
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<ArchetypeEvidence | null>(null)
-
-  useEffect(() => {
-    api.listArchetypes().then(setArchetypes).catch(() => setArchetypes([]))
-  }, [])
 
   useEffect(() => {
     setSummary(null)
@@ -429,7 +465,7 @@ export default function MarketCoverage() {
         What your captured corpus covers — and what it cannot establish about the wider market.
       </p>
 
-      <FilterBar filters={filters} setFilters={setFilters} archetypes={archetypes} />
+      <FilterBar filters={filters} setFilters={setFilters} archetypeOptions={summary?.archetypes.filter_options ?? []} />
 
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
       {!summary && !error && <p className="muted" style={{ marginTop: 16 }}>Loading…</p>}

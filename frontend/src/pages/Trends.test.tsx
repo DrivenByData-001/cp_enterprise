@@ -113,6 +113,7 @@ function coverageSummary(overrides: Partial<MarketCoverageSummary['roles']> = {}
       active_archetypes_without_support_count: 0,
       unsupported_active_archetypes: [],
       support: [],
+      filter_options: [],
     },
     compensation: {
       coverage: {

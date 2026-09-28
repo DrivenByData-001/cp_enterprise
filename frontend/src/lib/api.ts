@@ -3102,6 +3102,11 @@ export type MarketCoverageArchetypes = {
   active_archetypes_without_support_count: number
   unsupported_active_archetypes: { archetype_concept_id: string; canonical_name: string }[]
   support: ArchetypeEvidence[]
+  // The whole active catalogue, independent of the current scope — for a
+  // filter control's own options, which must never shrink as the user
+  // narrows the scope (unlike `support`, which only lists archetypes with
+  // at least one supporting posting in the current scope).
+  filter_options: { archetype_concept_id: string; canonical_name: string }[]
 }
 
 export type MarketCoverageCompensation = {

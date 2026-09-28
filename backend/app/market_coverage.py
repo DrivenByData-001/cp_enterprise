@@ -612,6 +612,14 @@ def build_archetypes_block(
         "active_archetypes_without_support_count": active_total - supported_total,
         "unsupported_active_archetypes": unsupported,
         "support": support,
+        # The whole active catalogue, independent of the current scope — for
+        # a filter control's own options. Deliberately never narrowed to
+        # `support`'s scoped/supported-only subset: the same "stable filter
+        # options never shrink out from under the user as they filter"
+        # principle market_analytics.build_facets already applies to Market
+        # Summary's own filter bar (computed from every row, never the
+        # filtered subset).
+        "filter_options": [{"archetype_concept_id": a["id"], "canonical_name": a["canonical_name"]} for a in catalogue],
     }
 
 

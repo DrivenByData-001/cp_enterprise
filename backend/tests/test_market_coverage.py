@@ -480,6 +480,26 @@ def test_archetype_support_reviewed_requirement_count_and_dates_and_countries(cl
     assert row["distinct_country_count"] == 2
 
 
+def test_archetype_filter_options_never_shrink_with_scope(client):
+    """The filter-control's own options are the whole active catalogue,
+    independent of the current scope — never narrowed to `support`'s
+    scoped/supported-only subset, matching market_analytics.build_facets'
+    own "stable options never shrink as you filter" principle."""
+    with db_cursor() as cur:
+        supported = _archetype(cur, "Supported Archetype")
+        unsupported = _archetype(cur, "Unsupported Archetype")
+        _role(cur, "R1", archetype_concept_id=supported, country="Ireland")
+
+        whole_corpus = mc.build_coverage_summary(cur, mc.CoverageScope())
+        narrowed = mc.build_coverage_summary(cur, mc.CoverageScope(country="A Country That Matches Nothing"))
+
+    ids = {a["archetype_concept_id"] for a in whole_corpus["archetypes"]["filter_options"]}
+    assert ids == {supported, unsupported}
+    # Narrowing the scope to zero matching roles must not shrink the filter
+    # options — they are the same regardless of what's currently in scope.
+    assert narrowed["archetypes"]["filter_options"] == whole_corpus["archetypes"]["filter_options"]
+
+
 def test_archetype_compensation_benchmark_and_demand_availability(client):
     with db_cursor() as cur:
         archetype = _archetype(cur, "Senior Actuary")

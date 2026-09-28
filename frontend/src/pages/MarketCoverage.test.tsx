@@ -10,11 +10,13 @@ import { api, type CoverageFraction, type MarketCoverageSummary } from '../lib/a
 // nothing here renders as a single confidence score, and a fetch failure
 // never crashes the page.
 
+// The page derives its archetype filter options and drill-down detail
+// entirely from the one summary response (`archetypes.filter_options` /
+// `archetypes.support`) — it calls neither listArchetypes nor
+// getMarketCoverageArchetypeDetail, so a cold load is exactly one request.
 vi.mock('../lib/api', () => ({
   api: {
-    listArchetypes: vi.fn().mockResolvedValue([]),
     getMarketCoverageSummary: vi.fn(),
-    getMarketCoverageArchetypeDetail: vi.fn(),
   },
 }))
 
@@ -123,6 +125,7 @@ function buildSummary(overrides: Partial<MarketCoverageSummary> = {}): MarketCov
           evidence_depth: { state: 'supported', reason: `${total} supporting posting(s).` },
         },
       ],
+      filter_options: [{ archetype_concept_id: 'arch-1', canonical_name: 'Senior Actuary' }],
     },
     compensation: {
       coverage: {
@@ -195,6 +198,22 @@ describe('MarketCoverage page', () => {
     renderPage()
     await screen.findByText(/captured posting/)
     expect(screen.getByText(/6 of 10/)).toBeTruthy()
+  })
+
+  it('shows each year-bar fraction against the real corpus total, never the tallest bucket', async () => {
+    // 2023's bar is visually shorter than 2024's (4 vs 16 — real chart
+    // scaling), but its displayed fraction must read against the actual
+    // scope total (20), never against 2024's count (16) merely because
+    // 2024 happens to be the tallest bar on the chart.
+    const summary = buildSummary({ roles: { ...buildSummary().roles, total: 20 } })
+    summary.time.by_year = [{ value: 2023, count: 4 }, { value: 2024, count: 16 }]
+    vi.mocked(api.getMarketCoverageSummary).mockResolvedValue(summary)
+    renderPage()
+    await screen.findByText(/captured posting/)
+    expect(screen.getByText(/4 of 20/)).toBeTruthy()
+    expect(screen.getByText(/16 of 20/)).toBeTruthy()
+    expect(screen.queryByText(/4 of 16/)).toBeNull()
+    expect(screen.queryByText(/16 of 16/)).toBeNull()
   })
 
   it('discloses missing countries with an explicit denominator', async () => {
@@ -281,10 +300,16 @@ describe('MarketCoverage page', () => {
   it('opens an archetype drill-down card on row click', async () => {
     vi.mocked(api.getMarketCoverageSummary).mockResolvedValue(buildSummary())
     renderPage()
-    const row = await screen.findByText('Senior Actuary')
-    fireEvent.click(row)
-    // The reusable ArchetypeEvidenceCard renders the same archetype's full detail inline.
-    expect(await screen.findAllByText('Senior Actuary')).toHaveLength(2)
+    await screen.findByText(/captured posting/)
+    // "Senior Actuary" also appears as a filter-dropdown option — find the
+    // table row specifically, not just any matching text on the page.
+    const cells = await screen.findAllByText('Senior Actuary')
+    const tableCell = cells.find((el) => el.closest('tr'))
+    expect(tableCell).toBeTruthy()
+    fireEvent.click(tableCell!)
+    // The reusable ArchetypeEvidenceCard renders fields the bounded table
+    // row never shows — a reliable signal the full card opened.
+    expect(await screen.findByText('Demand derivation')).toBeTruthy()
   })
 
   it('never renders a numeric confidence score or gauge', async () => {
@@ -300,5 +325,14 @@ describe('MarketCoverage page', () => {
     vi.mocked(api.getMarketCoverageSummary).mockRejectedValue(new Error('network down'))
     renderPage()
     expect(await screen.findByText(/network down/)).toBeTruthy()
+  })
+
+  it('a cold load makes exactly one API request — archetype filter options come from the summary itself', async () => {
+    vi.mocked(api.getMarketCoverageSummary).mockResolvedValue(buildSummary())
+    renderPage()
+    await screen.findByText(/captured posting/)
+    expect(api.getMarketCoverageSummary).toHaveBeenCalledTimes(1)
+    // The dropdown is populated from the one response's archetypes.filter_options.
+    expect(screen.getByRole('option', { name: 'Senior Actuary' })).toBeTruthy()
   })
 })

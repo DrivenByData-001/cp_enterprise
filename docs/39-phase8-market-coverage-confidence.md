@@ -231,6 +231,17 @@ is identical across `build_archetypes_block`'s scoped table,
 `ArchetypeEvidence` type and `ArchetypeEvidencePanel` component (build §25)
 rely on this being one shape everywhere.
 
+`archetypes.filter_options` is a second, deliberately different list: the
+whole active catalogue's `{archetype_concept_id, canonical_name}`, always
+computed from `catalogue` (unscoped), never from `support`. This is for a
+filter control's own options, which must never shrink as the user narrows
+the scope — the same principle `market_analytics.build_facets` already
+applies to Market Summary's filter bar (computed from every row, never the
+currently-filtered subset). `support`, by contrast, only ever lists
+archetypes with at least one supporting posting in the *current* scope, so
+using it for filter options would make the archetype dropdown's own choices
+disappear as soon as a filter excluded their only supporting posting.
+
 No role is ever auto-classified by any Phase 8 GET (`test_no_archetype_auto_classification`).
 
 ## Compensation evidence (`compensation`)
@@ -334,10 +345,26 @@ coverage (with a bounded, clickable per-archetype table that opens the
 shared `ArchetypeEvidenceCard`), Compensation evidence, and "What this does
 not tell you" (the `limitations` list, always including the
 representativeness-unknown statement). Filters (`year_from`/`year_to`/
-`country`/`seniority_level`/`archetype_id`) live in the URL query string.
-Counts, numerator/denominator bars and bounded tables only — no gauge,
-speedometer, confidence ring, or red/amber/green verdict anywhere on the
-page or in this phase.
+`country`/`seniority_level`/`archetype_id`) live in the URL query string; the
+archetype filter's own options come from `archetypes.filter_options` in the
+same summary response (never a second `listArchetypes` request), and
+clicking a table row opens `ArchetypeEvidenceCard` directly from that row's
+already-fetched `ArchetypeEvidence` data (never a second
+`GET /api/market-coverage/archetypes/{id}` request) — a cold page load is
+exactly one API request. Counts, numerator/denominator bars and bounded
+tables only — no gauge, speedometer, confidence ring, or red/amber/green
+verdict anywhere on the page or in this phase.
+
+The Time coverage year-by-year chart is the one place a bar's *visual
+width* and its *displayed statistic* are deliberately different numbers:
+width scales against the tallest year bucket (pure chart legibility, via a
+dedicated `ScaledBar` component, never `FractionBar`), while the displayed
+count/denominator/percentage is always each year's share of every captured
+posting in the current scope (`roles.total` — the same convention Trends'
+own "by year" chart already uses). Conflating the two — showing a
+percentage computed against the chart-scaling maximum — would misrepresent
+a bar as a share of the corpus when it is actually only a share of the
+tallest bucket.
 
 Linked from `/future` ("How much evidence do I actually have?", under
 Supporting exploration), `/trends` (coverage strip), and Market Summary
@@ -429,14 +456,23 @@ confidence score is introduced.
 
 ## Performance / query counts
 
-- Market Coverage summary: **1 request**, ~13 bounded queries (one role+document
-  fetch; 4 for the bulk requirement-review summary; 1 for legacy-fallback
-  counts; 1 archetype catalogue; 2 archetype demand/comp availability;
-  1 compensation evidence fetch; 1 role-linked-compensation set; 2 for
-  `economics_freshness`) — none scale with role count beyond the one initial
-  fetch, and none loop per role or per archetype
-  (`test_summary_query_count_does_not_grow_with_role_count`).
-- Archetype detail drill-down: **1 request**, ~10 bounded queries.
+- Market Coverage page, cold load: **exactly 1 request**
+  (`GET /api/market-coverage/summary`, ~13 bounded backend queries — one
+  role+document fetch; 4 for the bulk requirement-review summary; 1 for
+  legacy-fallback counts; 1 archetype catalogue; 2 archetype demand/comp
+  availability; 1 compensation evidence fetch; 1 role-linked-compensation
+  set; 2 for `economics_freshness` — none scale with role count beyond the
+  one initial fetch, and none loop per role or per archetype;
+  `test_summary_query_count_does_not_grow_with_role_count`). The archetype
+  filter dropdown's options and the per-archetype drill-down card are both
+  populated straight from this one response (`archetypes.filter_options`,
+  `archetypes.support`) — the page calls neither `listArchetypes` nor the
+  dedicated archetype-detail endpoint.
+- `GET /api/market-coverage/archetypes/{id}` (~10 bounded queries) exists and
+  is exercised directly by its own backend tests, for a consumer that needs
+  one archetype's detail without the whole summary — the Market Coverage
+  page itself has no such need, since every archetype it can drill into is
+  already a full `ArchetypeEvidence` row in `archetypes.support`.
 - Trends: existing requests **+ 1** coverage request.
 - Career Direction discovery: server-side only, **no extra browser request**.
 - Opportunity alignment: composed server-side into the existing single
