@@ -185,7 +185,7 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
       {diff.evidence_strengthened.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--good)' }}>
-            {diff.evidence_strengthened.length} Target requirement{diff.evidence_strengthened.length === 1 ? '' : 's'} have stronger evidence than at your last checkpoint.
+            {diff.evidence_strengthened.length} Target requirement{diff.evidence_strengthened.length === 1 ? '' : 's'} {diff.evidence_strengthened.length === 1 ? 'has' : 'have'} stronger evidence than at your last checkpoint.
           </p>
           <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
             {diff.evidence_strengthened.map((e) => <li key={e.concept_id}>{requirementLine(e)}</li>)}
