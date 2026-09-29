@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
@@ -52,27 +52,33 @@ export default function Home() {
   const [checkpointLabel, setCheckpointLabel] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
 
-  const load = useCallback(() => {
-    let current = true
+  const request = useRef(0)
+  const [checkpointSaved, setCheckpointSaved] = useState(false)
+  const load = useCallback(async () => {
+    const version = ++request.current
     setLoading(true)
     setError(null)
-    api
-      .getCockpit()
-      .then((c) => { if (current) setCockpit(c) })
-      .catch((e) => { if (current) setError(e instanceof Error ? e.message : String(e)) })
-      .finally(() => { if (current) setLoading(false) })
-    return () => { current = false }
+    try {
+      const next = await api.getCockpit()
+      if (version === request.current) setCockpit(next)
+    } catch (e) {
+      if (version === request.current) setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (version === request.current) setLoading(false)
+    }
   }, [])
 
-  useEffect(() => load(), [load])
+  useEffect(() => { void load(); return () => { request.current += 1 } }, [load])
 
   const recordCheckpoint = async () => {
     setCheckpointBusy(true)
     setCheckpointError(null)
+    setCheckpointSaved(false)
     try {
       await api.recordProgressCheckpoint(checkpointLabel.trim() || undefined)
       setCheckpointLabel('')
-      load()
+      setCheckpointSaved(true)
+      await load()
     } catch (e) {
       setCheckpointError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -81,22 +87,26 @@ export default function Home() {
   }
 
   return (
-    <div>
-      <h1 style={{ fontSize: 22, margin: 0 }}>Career cockpit</h1>
+    <div className="career-home">
+      <p className="eyebrow">A little clarity. A meaningful next step.</p>
+      <h1>Your career workspace</h1>
       <p className="secondary" style={{ marginTop: 4, maxWidth: 680 }}>
-        Where you're trying to go, what's happening around that direction, what you're actively pursuing, and
-        whether your evidence position has changed.
+        Keep your direction in sight, move opportunities forward, and see the progress backed by your experience.
       </p>
 
-      {loading && !cockpit && <p className="muted">Loading…</p>}
-      {error && !cockpit && <p role="alert">Could not load your Career Cockpit: {error}</p>}
+      {loading && !cockpit && <div role="status" className="page-skeleton">Loading your workspace…<span /><span /><span /></div>}
+      {checkpointSaved && <p role="status" className="save-notice">Checkpoint saved. {error ? 'The refresh failed; your previous view is shown below.' : 'Your progress has been recorded.'}</p>}
+      {error && <div role="alert" className="error-notice"><p>{cockpit ? 'This view may be out of date.' : 'Could not load your Career Cockpit:'} {error}</p><button onClick={() => void load()}>Retry loading workspace</button></div>}
+      {loading && cockpit && <p role="status">Refreshing your workspace…</p>}
 
       {cockpit && (
         <>
-          <DirectionSection cockpit={cockpit} />
+          <NextActionsSection cockpit={cockpit} />
+          <div className="home-focus-grid"><DirectionSection cockpit={cockpit} />
           <TargetProgressSection
             cockpit={cockpit}
             checkpointBusy={checkpointBusy}
+            checkpointUnavailable={loading || !!error}
             checkpointError={checkpointError}
             checkpointLabel={checkpointLabel}
             setCheckpointLabel={setCheckpointLabel}
@@ -104,11 +114,11 @@ export default function Home() {
             historyOpen={historyOpen}
             setHistoryOpen={setHistoryOpen}
           />
-          <OpportunitiesSection cockpit={cockpit} />
+          </div><div className="home-focus-grid"><OpportunitiesSection cockpit={cockpit} />
           <ApplicationsSection cockpit={cockpit} />
-          <LearningSection cockpit={cockpit} />
+          </div><details className="supporting-context"><summary>Learning & market context <span>Explore the evidence behind your direction</span></summary><div className="home-focus-grid"><LearningSection cockpit={cockpit} />
           <MarketContextSection cockpit={cockpit} />
-          <NextActionsSection cockpit={cockpit} />
+          </div></details>
         </>
       )}
     </div>
@@ -123,11 +133,11 @@ function DirectionSection({ cockpit }: { cockpit: Cockpit }) {
   return (
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-direction-h">
       <h2 id="home-direction-h" style={{ fontSize: 16, marginTop: 0 }}>Current direction</h2>
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load your career direction: {section.reason}</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load your career direction: {section.reason}</p>}
       {section.state === 'no_direction' && (
         <>
           <p style={{ fontWeight: 600, margin: '4px 0' }}>Define or select a Career Direction</p>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             Explore existing targets, preferences and pathways, or design a new direction from your priorities.
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
@@ -139,12 +149,12 @@ function DirectionSection({ cockpit }: { cockpit: Cockpit }) {
       {(section.state === 'no_target' || section.state === 'with_target') && (
         <>
           <p style={{ fontWeight: 600, margin: '4px 0' }}>{section.direction.name}</p>
-          {section.direction.summary && <p className="secondary" style={{ fontSize: 13 }}>{section.direction.summary}</p>}
-          <p className="secondary" style={{ fontSize: 13 }}>
+          {section.direction.summary && <p className="secondary" style={{ fontSize: 14 }}>{section.direction.summary}</p>}
+          <p className="secondary" style={{ fontSize: 14 }}>
             {section.target ? `Target: ${section.target.title}` : 'No concrete Target linked yet.'}
           </p>
           {section.direction.top_dimensions.length > 0 && (
-            <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }} className="secondary">
+            <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 14 }} className="secondary">
               {section.direction.top_dimensions.map((d) => (
                 <li key={d.dimension_code}>
                   {d.dimension_code} ({d.desired_direction}, importance {d.importance})
@@ -180,14 +190,14 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
   return (
     <div style={{ marginTop: 12 }}>
       <p style={{ fontWeight: 600, margin: '4px 0' }}>Changes since {formatDate(since)}</p>
-      {nothingChanged && <p className="muted" style={{ fontSize: 13 }}>No evidence or Target-definition changes since your last checkpoint.</p>}
+      {nothingChanged && <p className="muted" style={{ fontSize: 14 }}>No evidence or Target-definition changes since your last checkpoint.</p>}
 
       {diff.evidence_strengthened.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--good)' }}>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--good)' }}>
             {diff.evidence_strengthened.length} Target requirement{diff.evidence_strengthened.length === 1 ? '' : 's'} {diff.evidence_strengthened.length === 1 ? 'has' : 'have'} stronger evidence than at your last checkpoint.
           </p>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {diff.evidence_strengthened.map((e) => <li key={e.concept_id}>{requirementLine(e)}</li>)}
           </ul>
         </div>
@@ -195,10 +205,10 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
 
       {diff.assertion_added.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--warning)' }}>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--warning)' }}>
             {diff.assertion_added.length} self-assertion{diff.assertion_added.length === 1 ? '' : 's'} added — still not accepted Profile360 evidence.
           </p>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {diff.assertion_added.map((e) => <li key={e.concept_id}>{requirementLine(e)}</li>)}
           </ul>
         </div>
@@ -206,10 +216,10 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
 
       {diff.evidence_weakened.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--critical)' }}>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--critical)' }}>
             {diff.evidence_weakened.length} requirement{diff.evidence_weakened.length === 1 ? '' : 's'} weakened or no longer supported.
           </p>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }}>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {diff.evidence_weakened.map((e) => <li key={e.concept_id}>{requirementLine(e)}</li>)}
           </ul>
         </div>
@@ -217,8 +227,8 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
 
       {hasDefChanges && (
         <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 13, fontWeight: 600 }}>The Target definition changed since your last checkpoint.</p>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }} className="secondary">
+          <p style={{ fontSize: 14, fontWeight: 600 }}>The Target definition changed since your last checkpoint.</p>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }} className="secondary">
             {defChanges.requirements_added.map((r) => <li key={`add-${r.concept_id}`}>Added: {r.canonical_name} ({r.requirement_type})</li>)}
             {defChanges.requirements_removed.map((r) => <li key={`rem-${r.concept_id}`}>Removed: {r.canonical_name} ({r.requirement_type})</li>)}
             {defChanges.requirement_type_changed.map((r) => (
@@ -232,9 +242,9 @@ function DiffSummary({ diff, since }: { diff: ProgressDiff; since: string | null
 }
 
 function CheckpointHistoryList({ history }: { history: ProgressCheckpointHistoryItem[] }) {
-  if (history.length === 0) return <p className="muted" style={{ fontSize: 13 }}>No checkpoints recorded yet.</p>
+  if (history.length === 0) return <p className="muted" style={{ fontSize: 14 }}>No checkpoints recorded yet.</p>
   return (
-    <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
+    <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 14 }}>
       {history.map((h) => (
         <li key={h.id}>
           {formatDate(h.created_at)} — {h.checkpoint_type}{h.label ? ` (“${h.label}”)` : ''} — {h.target_title ?? 'Target'}
@@ -248,10 +258,11 @@ function CheckpointHistoryList({ history }: { history: ProgressCheckpointHistory
 }
 
 function TargetProgressSection({
-  cockpit, checkpointBusy, checkpointError, checkpointLabel, setCheckpointLabel, onRecordCheckpoint, historyOpen, setHistoryOpen,
+  cockpit, checkpointBusy, checkpointUnavailable, checkpointError, checkpointLabel, setCheckpointLabel, onRecordCheckpoint, historyOpen, setHistoryOpen,
 }: {
   cockpit: Cockpit
   checkpointBusy: boolean
+  checkpointUnavailable: boolean
   checkpointError: string | null
   checkpointLabel: string
   setCheckpointLabel: (v: string) => void
@@ -265,11 +276,11 @@ function TargetProgressSection({
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-progress-h">
       <h2 id="home-progress-h" style={{ fontSize: 16, marginTop: 0 }}>Progress toward Target</h2>
 
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load Target progress: {section.reason}</p>}
-      {section.state === 'no_direction' && <p className="muted" style={{ fontSize: 13 }}>Select a Career Direction to see Target progress here.</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load Target progress: {section.reason}</p>}
+      {section.state === 'no_direction' && <p className="muted" style={{ fontSize: 14 }}>Select a Career Direction to see Target progress here.</p>}
       {section.state === 'no_target' && (
         <>
-          <p className="muted" style={{ fontSize: 13 }}>“{section.direction.name}” has no linked Target yet.</p>
+          <p className="muted" style={{ fontSize: 14 }}>“{section.direction.name}” has no linked Target yet.</p>
           <div className="actions" style={{ marginTop: 12 }}>
             <Link to={`/future/directions/${section.direction.id}`} className="button primary">Create or link a concrete Target</Link>
           </div>
@@ -279,7 +290,7 @@ function TargetProgressSection({
       {(section.state === 'no_checkpoint' || section.state === 'available') && (
         <>
           {!(section.current.review.target_review_complete && section.current.review.target_mapping_complete) && (
-            <p className="secondary" style={{ fontSize: 13 }}>
+            <p className="secondary" style={{ fontSize: 14 }}>
               Requirement review or Target mapping is incomplete — the counts below are structural facts, not a final comparison.
             </p>
           )}
@@ -287,21 +298,21 @@ function TargetProgressSection({
             {(['evidenced', 'partial', 'user_asserted', 'not_found'] as const).map((status) => (
               <div key={status}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: STATUS_COLOR[status] }}>{section.current.counts[status]}</div>
-                <div className="secondary" style={{ fontSize: 12 }}>{STATUS_LABEL[status]}</div>
+                <div className="secondary" style={{ fontSize: 14 }}>{STATUS_LABEL[status]}</div>
               </div>
             ))}
           </div>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             {section.current.counts.required_total} required requirement(s), {section.current.counts.blocking_required} blocking, {section.current.counts.unverified_required} unverified.
           </p>
 
           {section.state === 'no_checkpoint' && (
             <div style={{ marginTop: 12 }}>
-              <p className="secondary" style={{ fontSize: 13 }}>
+              <p className="secondary" style={{ fontSize: 14 }}>
                 This records today's derived Target evidence states so future changes can be compared. It does not create evidence or change your profile.
               </p>
               <div className="actions">
-                <button type="button" className="button primary" disabled={checkpointBusy} onClick={onRecordCheckpoint}>
+                <button type="button" className="button primary" disabled={checkpointBusy || checkpointUnavailable} onClick={onRecordCheckpoint}>
                   {checkpointBusy ? 'Recording…' : 'Record progress baseline'}
                 </button>
               </div>
@@ -309,7 +320,7 @@ function TargetProgressSection({
           )}
 
           {section.state === 'available' && section.comparison_state === 'limited' && (
-            <p className="secondary" style={{ fontSize: 13, marginTop: 12 }}>
+            <p className="secondary" style={{ fontSize: 14, marginTop: 12 }}>
               Progress comparison is limited until Target requirement review and mapping are complete — evidence-change
               comparison against your last checkpoint will resume automatically once they are.
             </p>
@@ -321,7 +332,7 @@ function TargetProgressSection({
 
           {section.state === 'available' && (
             <div style={{ marginTop: 12 }}>
-              <label htmlFor="checkpoint-label" className="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+              <label htmlFor="checkpoint-label" className="secondary" style={{ fontSize: 14, display: 'block', marginBottom: 4 }}>
                 Optional label
               </label>
               <input
@@ -333,13 +344,13 @@ function TargetProgressSection({
                 style={{ marginBottom: 8 }}
               />
               <div className="actions">
-                <button type="button" className="button primary" disabled={checkpointBusy} onClick={onRecordCheckpoint}>
+                <button type="button" className="button primary" disabled={checkpointBusy || checkpointUnavailable} onClick={onRecordCheckpoint}>
                   {checkpointBusy ? 'Recording…' : 'Record new checkpoint'}
                 </button>
               </div>
             </div>
           )}
-          {checkpointError && <p role="alert" style={{ fontSize: 13 }}>{checkpointError}</p>}
+          {checkpointError && <p role="alert" style={{ fontSize: 14 }}>{checkpointError}</p>}
 
           <div className="actions" style={{ marginTop: 12 }}>
             <Link to={`/pathways/${section.current.target.id}`}>View Pathways</Link>
@@ -363,8 +374,8 @@ function OpportunitiesSection({ cockpit }: { cockpit: Cockpit }) {
   return (
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-opportunities-h">
       <h2 id="home-opportunities-h" style={{ fontSize: 16, marginTop: 0 }}>Opportunities around this direction</h2>
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load recent opportunities: {section.reason}</p>}
-      {section.state === 'available' && section.items.length === 0 && <p className="muted" style={{ fontSize: 13 }}>No current roles captured yet.</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load recent opportunities: {section.reason}</p>}
+      {section.state === 'available' && section.items.length === 0 && <p className="muted" style={{ fontSize: 14 }}>No current roles captured yet.</p>}
       {section.state === 'available' && section.items.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, margin: '8px 0' }}>
           {section.items.map((item: CockpitOpportunityItem) => (
@@ -372,19 +383,19 @@ function OpportunitiesSection({ cockpit }: { cockpit: Cockpit }) {
               <Link to={`/roles/${item.role_instance_id}`} style={{ textDecoration: 'none' }}>
                 <strong>{item.title}</strong>
               </Link>
-              <div className="secondary" style={{ fontSize: 12 }}>
+              <div className="secondary" style={{ fontSize: 14 }}>
                 {item.organisation ?? 'Unknown org'}
                 {item.location ? ` · ${item.location}` : ''}
                 {item.posting_date ? ` · ${item.posting_date}` : ''}
                 {item.has_application && ' · Application in progress'}
               </div>
               {item.relationship && (
-                <div style={{ fontSize: 12 }} title={item.relationship.reason}>
+                <div style={{ fontSize: 14 }} title={item.relationship.reason}>
                   {item.relationship.label}
                   {item.target_gaps_involved.length > 0 && ` — involves ${item.target_gaps_involved.length} target gap(s)`}
                 </div>
               )}
-              {item.review_caveat && <div className="muted" style={{ fontSize: 11 }}>{item.review_caveat}</div>}
+              {item.review_caveat && <div className="muted" style={{ fontSize: 14 }}>{item.review_caveat}</div>}
             </div>
           ))}
         </div>
@@ -405,19 +416,19 @@ function ApplicationsSection({ cockpit }: { cockpit: Cockpit }) {
   return (
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-applications-h">
       <h2 id="home-applications-h" style={{ fontSize: 16, marginTop: 0 }}>Applications in motion</h2>
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load applications: {section.reason}</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load applications: {section.reason}</p>}
       {section.state === 'available' && (
         <>
           {section.active_count === 0 ? (
             <>
               <p style={{ fontWeight: 600, margin: '4px 0' }}>No applications yet</p>
-              <p className="secondary" style={{ fontSize: 13 }}>Choose an opportunity when you decide you want to pursue it.</p>
+              <p className="secondary" style={{ fontSize: 14 }}>Choose an opportunity when you decide you want to pursue it.</p>
             </>
           ) : (
             <>
-              <p className="secondary" style={{ fontSize: 13 }}>{section.active_count} active application(s).</p>
+              <p className="secondary" style={{ fontSize: 14 }}>{section.active_count} active application(s).</p>
               {section.next_interview && (
-                <p style={{ fontSize: 13 }}>
+                <p style={{ fontSize: 14 }}>
                   Next interview: <strong>{section.next_interview.role_title}</strong> — {formatDate(section.next_interview.event_at)}
                 </p>
               )}
@@ -425,7 +436,7 @@ function ApplicationsSection({ cockpit }: { cockpit: Cockpit }) {
                 {section.active_items.map((a) => (
                   <Link key={a.id} to={`/applications/${a.id}`} style={{ textDecoration: 'none' }}>
                     <strong>{a.role.title ?? 'Untitled role'}</strong>
-                    <div className="secondary" style={{ fontSize: 12 }}>{a.role.organisation ?? 'Unknown org'} · {a.status}</div>
+                    <div className="secondary" style={{ fontSize: 14 }}>{a.role.organisation ?? 'Unknown org'} · {a.status}</div>
                   </Link>
                 ))}
               </div>
@@ -433,8 +444,8 @@ function ApplicationsSection({ cockpit }: { cockpit: Cockpit }) {
           )}
           {section.recent_outcomes.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <p style={{ fontSize: 13, fontWeight: 600 }}>Recent outcomes</p>
-              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 13 }} className="secondary">
+              <p style={{ fontSize: 14, fontWeight: 600 }}>Recent outcomes</p>
+              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }} className="secondary">
                 {section.recent_outcomes.map((o) => (
                   <li key={o.id}>{o.event_type} — {o.role.title} — {formatDate(o.event_at)}{o.has_notes ? '' : ' (no notes)'}</li>
                 ))}
@@ -456,11 +467,11 @@ function ApplicationsSection({ cockpit }: { cockpit: Cockpit }) {
 function LearningItemRow({ item }: { item: CockpitLearningItem }) {
   return (
     <div>
-      <div className="secondary" style={{ fontSize: 12 }}>
+      <div className="secondary" style={{ fontSize: 14 }}>
         {item.role.title ?? 'Untitled role'} · {formatDate(item.date)} · {item.source_type === 'note' ? item.note_type : item.event_type}
       </div>
-      <p style={{ margin: '2px 0', fontSize: 13 }}>{item.text_preview}</p>
-      <div style={{ fontSize: 12 }}>
+      <p style={{ margin: '2px 0', fontSize: 14 }}>{item.text_preview}</p>
+      <div style={{ fontSize: 14 }}>
         {QUEUE_STATUS_LABEL[item.queue_status] ?? item.queue_status}
         {item.is_current_target_requirement && item.concept_canonical_name && (
           <span className="secondary"> · relates to Target requirement “{item.concept_canonical_name}” ({STATUS_LABEL[item.current_target_evidence_status ?? 'not_found']})</span>
@@ -476,9 +487,9 @@ function LearningSection({ cockpit }: { cockpit: Cockpit }) {
   return (
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-learning-h">
       <h2 id="home-learning-h" style={{ fontSize: 16, marginTop: 0 }}>Learning &amp; evidence</h2>
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load recent learning items: {section.reason}</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load recent learning items: {section.reason}</p>}
       {section.state === 'available' && section.items.length === 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>Application reflections and evidence examples will appear here when you record them.</p>
+        <p className="muted" style={{ fontSize: 14 }}>Application reflections and evidence examples will appear here when you record them.</p>
       )}
       {section.state === 'available' && section.items.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, margin: '8px 0' }}>
@@ -500,24 +511,24 @@ function MarketContextSection({ cockpit }: { cockpit: Cockpit }) {
   return (
     <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-market-h">
       <h2 id="home-market-h" style={{ fontSize: 16, marginTop: 0 }}>Market evidence behind this direction</h2>
-      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 13 }}>Could not load market context: {section.reason}</p>}
-      {section.state === 'no_direction' && <p className="muted" style={{ fontSize: 13 }}>Select a Career Direction to see market context here.</p>}
-      {section.state === 'no_archetype' && <p className="muted" style={{ fontSize: 13 }}>{section.reason ?? 'No archetype is assigned yet.'}</p>}
+      {section.state === 'unavailable' && <p role="alert" style={{ fontSize: 14 }}>Could not load market context: {section.reason}</p>}
+      {section.state === 'no_direction' && <p className="muted" style={{ fontSize: 14 }}>Select a Career Direction to see market context here.</p>}
+      {section.state === 'no_archetype' && <p className="muted" style={{ fontSize: 14 }}>{section.reason ?? 'No archetype is assigned yet.'}</p>}
       {section.state === 'available' && (
         <>
           <p style={{ fontWeight: 600, margin: '4px 0' }}>{section.canonical_name}</p>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             {section.assigned_posting_count} supporting posting(s), {section.reviewed_requirement_posting_count} with reviewed requirements
             {section.latest_known_posting_date ? `, latest ${formatDate(section.latest_known_posting_date)}` : ''}.
             {section.distinct_country_count > 0 && ` Represented across ${section.distinct_country_count} countries.`}
           </p>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             Evidence depth: {section.evidence_depth.state} — {section.evidence_depth.reason}
           </p>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             Compensation evidence: {section.compensation_benchmark_available ? 'available' : 'not yet available'}. Economics: {section.economics_freshness.state}.
           </p>
-          <p className="muted" style={{ fontSize: 12 }}>{section.representativeness.reason}</p>
+          <p className="muted" style={{ fontSize: 14 }}>{section.representativeness.reason}</p>
         </>
       )}
       <div className="actions" style={{ marginTop: 12 }}>
@@ -530,17 +541,12 @@ function MarketContextSection({ cockpit }: { cockpit: Cockpit }) {
 // --- Useful next actions (build §26/§27/§28) --------------------------------
 
 function NextActionsSection({ cockpit }: { cockpit: Cockpit }) {
-  return (
-    <section className="card" style={{ marginTop: 16 }} aria-labelledby="home-next-h">
-      <h2 id="home-next-h" style={{ fontSize: 16, marginTop: 0 }}>Useful next actions</h2>
-      <ol className="action-list">
-        {cockpit.next_actions.map((a) => (
-          <li key={a.code}>
-            <Link to={a.href}>{a.title}</Link>
-            <div className="secondary" style={{ fontSize: 13 }}>{a.reason}</div>
-          </li>
-        ))}
-      </ol>
-    </section>
-  )
+  const [first, ...rest] = cockpit.next_actions
+  return <section className="next-step" aria-labelledby="home-next-h">
+    <div><p className="eyebrow">Your next step</p><h2 id="home-next-h">Useful next actions</h2>
+      <p>{first?.reason ?? 'Take a moment to explore your direction or review the opportunities you have saved.'}</p>
+      <Link className="button primary" to={first?.href ?? '/future'}>{first?.title ?? 'Explore my future'} <span aria-hidden="true">↗</span></Link>
+      {rest.length > 0 && <details><summary>More ways to move forward ({rest.length})</summary><ul>{rest.map(a => <li key={a.code}><Link to={a.href}>{a.title}</Link><p>{a.reason}</p></li>)}</ul></details>}
+    </div><div className="journey-art" aria-hidden="true"><span /><span /><span /><b>↗</b></div>
+  </section>
 }

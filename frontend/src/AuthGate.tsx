@@ -27,8 +27,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (status === 'loading') {
     return (
-      <div className="app-shell">
-        <p className="muted">Loading…</p>
+      <div className="login-shell">
+        <p className="muted" role="status">Opening your workspace…</p>
       </div>
     )
   }

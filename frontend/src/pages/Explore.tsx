@@ -12,19 +12,19 @@ function CurrentDirectionCard({ direction, loading, error }: { direction: Career
     <section className="card" aria-labelledby="current-direction-h">
       <h2 id="current-direction-h" style={{ fontSize: 16, marginTop: 0 }}>Current direction</h2>
       {loading && <p className="muted">Loading…</p>}
-      {error && <p role="alert" style={{ fontSize: 13 }}>Could not load your current direction: {error}</p>}
+      {error && <p role="alert" style={{ fontSize: 14 }}>Could not load your current direction: {error}</p>}
       {!loading && !error && direction && (
         <>
           <p style={{ fontWeight: 600, margin: '4px 0' }}>{direction.name}</p>
           {direction.dimensions.length > 0 && (
-            <p className="secondary" style={{ fontSize: 13 }}>
+            <p className="secondary" style={{ fontSize: 14 }}>
               {direction.dimensions.slice(0, 3).map((d) => `${d.dimension_code} (${d.desired_direction})`).join(' · ')}
             </p>
           )}
           {direction.target ? (
-            <p className="secondary" style={{ fontSize: 13 }}>Target: {direction.target.title}</p>
+            <p className="secondary" style={{ fontSize: 14 }}>Target: {direction.target.title}</p>
           ) : (
-            <p className="muted" style={{ fontSize: 13 }}>No concrete Target linked yet.</p>
+            <p className="muted" style={{ fontSize: 14 }}>No concrete Target linked yet.</p>
           )}
           <div className="actions" style={{ marginTop: 12 }}>
             <Link to={`/future/directions/${direction.id}`} className="button primary">Open direction</Link>
@@ -61,16 +61,16 @@ function ExploringDirectionsCard({
     <section className="card" aria-labelledby="exploring-h">
       <h2 id="exploring-h" style={{ fontSize: 16, marginTop: 0 }}>Directions I'm exploring</h2>
       {loading && <p className="muted">Loading…</p>}
-      {error && <p role="alert" style={{ fontSize: 13 }}>Could not load your directions: {error}</p>}
+      {error && <p role="alert" style={{ fontSize: 14 }}>Could not load your directions: {error}</p>}
       {!loading && !error && exploring.length === 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>Nothing else in progress yet.</p>
+        <p className="muted" style={{ fontSize: 14 }}>Nothing else in progress yet.</p>
       )}
       {!loading && !error && exploring.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '8px 0' }}>
           {exploring.map((d) => (
             <Link key={d.id} to={`/future/directions/${d.id}`} style={{ textDecoration: 'none' }}>
               <strong>{d.name}</strong>
-              <div className="secondary" style={{ fontSize: 12 }}>
+              <div className="secondary" style={{ fontSize: 14 }}>
                 {d.origin === 'ai_adopted' ? 'AI-adopted' : 'User-defined'}{d.target ? ` · Target: ${d.target.title}` : ''}
               </div>
             </Link>
@@ -112,9 +112,13 @@ export default function Explore() {
     <div>
       <h1 style={{ fontSize: 22, margin: 0 }}>Explore my future</h1>
       <p className="secondary" style={{ marginTop: 4, maxWidth: 680 }}>
-        Define the future career state you want to pursue from its properties and trade-offs — before choosing a title — and see existing
-        targets, paths and market evidence.
+        Start with the work you want to do and the life you want it to fit. Explore possible roles, then choose a direction to work toward.
       </p>
+
+      <details className="workspace-guide"><summary>Direction, target, pathway — what’s the difference?</summary>
+        <p><strong>Your direction</strong> describes the work and conditions you want. <strong>A target</strong> is a specific role to aim toward. <strong>A pathway</strong> explores possible steps toward it, based on the evidence available.</p>
+        <p>An <strong>archetype</strong> groups similar kinds of work. A <strong>checkpoint</strong> is a saved view of your evidence, so you can see what changes over time.</p>
+      </details>
 
       <div className="hub-grid">
         <CurrentDirectionCard direction={selected} loading={selectedLoading} error={selectedError} />
@@ -122,16 +126,15 @@ export default function Explore() {
 
         <section className="card">
           <h2 style={{ fontSize: 16, marginTop: 0 }}>Discover possible directions</h2>
-          <p className="secondary" style={{ fontSize: 13 }}>
-            Start from properties — technical depth, leadership scope, compensation, geography — and generate grounded, unordered
-            hypotheses to review.
+          <p className="secondary" style={{ fontSize: 14 }}>
+            Tell us what matters: the work itself, leadership, pay and location. Explore ideas to consider, without committing to one yet.
           </p>
           <Link to="/future/build" className="button primary">Design a direction →</Link>
         </section>
 
         <section className="card">
           <h2 style={{ fontSize: 16, marginTop: 0 }}>Targets</h2>
-          <p className="secondary" style={{ fontSize: 13 }}>
+          <p className="secondary" style={{ fontSize: 14 }}>
             Existing targets are explicit roles or imagined role descriptions you want to examine in detail.
           </p>
           <div className="actions">
@@ -146,7 +149,7 @@ export default function Explore() {
         <div className="hub-grid" style={{ marginTop: 8 }}>
           <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>Pathways</h3>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 14 }}>
               Structural routes from your current evidence toward a target or archetype. No hiring probabilities or exact transition times
               are implied.
             </p>
@@ -154,12 +157,12 @@ export default function Explore() {
           </div>
           <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>Preferences</h3>
-            <p className="muted" style={{ fontSize: 13 }}>What matters to you — technical depth, challenge, working style.</p>
+            <p className="muted" style={{ fontSize: 14 }}>What matters to you — technical depth, challenge, working style.</p>
             <Link to="/preferences">Preferences →</Link>
           </div>
           <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>Understand the market</h3>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 14 }}>
               Historical roles and compensation evidence show patterns in the corpus — never a claim it is fully representative.
             </p>
             <div className="actions">
@@ -169,7 +172,7 @@ export default function Explore() {
           </div>
           <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>How much evidence do I actually have?</h3>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 14 }}>
               What the captured corpus covers, and what it cannot establish about the wider market — the evidence
               base behind every market-derived conclusion in this app.
             </p>
@@ -177,7 +180,7 @@ export default function Explore() {
           </div>
           <div>
             <h3 style={{ fontSize: 14, marginTop: 0 }}>Visual exploration</h3>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 14 }}>
               Optional semantic visualization of role similarity — not a career recommendation.
             </p>
             <Link to="/space">Career space →</Link>

@@ -1,32 +1,34 @@
+import { lazy, Suspense, useRef, useState } from 'react'
+import RouteErrorBoundary from './components/RouteErrorBoundary'
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './useAuth'
 import { hasLegacyRoleListQuery } from './lib/roleNavigation'
 import Home from './pages/Home'
-import Explore from './pages/Explore'
-import CareerDirectionBuilder from './pages/CareerDirectionBuilder'
-import CareerDirectionDetail from './pages/CareerDirectionDetail'
-import Applications from './pages/Applications'
-import ApplicationWorkspace from './pages/ApplicationWorkspace'
-import Dashboard from './pages/Dashboard'
-import RoleDetail from './pages/RoleDetail'
-import RoleEdit from './pages/RoleEdit'
-import RoleRequirements from './pages/RoleRequirements'
-import Import from './pages/Import'
-import Profile from './pages/Profile'
-import Profile360 from './pages/Profile360'
-import Comparison from './pages/Comparison'
-import Preferences from './pages/Preferences'
-import Space from './pages/Space'
-import Targets from './pages/Targets'
-import AddTarget from './pages/AddTarget'
-import Episodes from './pages/Episodes'
-import Vocabulary from './pages/Vocabulary'
-import Capabilities from './pages/Capabilities'
-import CapabilityCoverage from './pages/CapabilityCoverage'
-import Trends from './pages/Trends'
-import Economics from './pages/Economics'
-import Pathways from './pages/Pathways'
-import MarketCoverage from './pages/MarketCoverage'
+const Explore = lazy(() => import('./pages/Explore'))
+const CareerDirectionBuilder = lazy(() => import('./pages/CareerDirectionBuilder'))
+const CareerDirectionDetail = lazy(() => import('./pages/CareerDirectionDetail'))
+const Applications = lazy(() => import('./pages/Applications'))
+const ApplicationWorkspace = lazy(() => import('./pages/ApplicationWorkspace'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const RoleDetail = lazy(() => import('./pages/RoleDetail'))
+const RoleEdit = lazy(() => import('./pages/RoleEdit'))
+const RoleRequirements = lazy(() => import('./pages/RoleRequirements'))
+const Import = lazy(() => import('./pages/Import'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Profile360 = lazy(() => import('./pages/Profile360'))
+const Comparison = lazy(() => import('./pages/Comparison'))
+const Preferences = lazy(() => import('./pages/Preferences'))
+const Space = lazy(() => import('./pages/Space'))
+const Targets = lazy(() => import('./pages/Targets'))
+const AddTarget = lazy(() => import('./pages/AddTarget'))
+const Episodes = lazy(() => import('./pages/Episodes'))
+const Vocabulary = lazy(() => import('./pages/Vocabulary'))
+const Capabilities = lazy(() => import('./pages/Capabilities'))
+const CapabilityCoverage = lazy(() => import('./pages/CapabilityCoverage'))
+const Trends = lazy(() => import('./pages/Trends'))
+const Economics = lazy(() => import('./pages/Economics'))
+const Pathways = lazy(() => import('./pages/Pathways'))
+const MarketCoverage = lazy(() => import('./pages/MarketCoverage'))
 
 // `/` used to be the Roles list. Old bookmarks/links carrying its query
 // params (`?period=current` etc.) must keep working as Opportunities links,
@@ -56,12 +58,14 @@ const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string) =>
     label: 'Opportunities',
     match: (p) => p === '/opportunities' || p.startsWith('/roles/') || p.startsWith('/comparison/') || p.startsWith('/role-instances/'),
   },
-  { path: '/applications', label: 'Applications', match: (p) => p === '/applications' },
+  { path: '/applications', label: 'Applications', match: (p) => p === '/applications' || p.startsWith('/applications/') },
 ]
 
 function App() {
   const { logout } = useAuth()
   const { pathname } = useLocation()
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const menuButton = useRef<HTMLButtonElement>(null)
   const secondaryGroups = [
     {
       label: 'My profile & evidence',
@@ -89,16 +93,19 @@ function App() {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <header className="site-header"><strong>Career Navigator</strong></header>
-      <nav className="nav" aria-label="Main navigation">
+      <header className="site-header">
+        <NavLink to="/" className="brand" aria-label="Career Navigator home"><span className="brand-mark" aria-hidden="true">↗</span><span>Career Navigator<small>Your next chapter</small></span></NavLink>
+        <button ref={menuButton} className="tools-toggle" aria-expanded={toolsOpen} aria-controls="workspace-tools" onClick={() => setToolsOpen(v => !v)} onKeyDown={e => { if (e.key === 'Escape') setToolsOpen(false) }}>Menu</button>
+      </header>
+      <nav className="nav" aria-label="Main navigation" onClick={e => { if ((e.target as HTMLElement).closest('a')) setToolsOpen(false) }} onKeyDown={e => { if (e.key === 'Escape') { setToolsOpen(false); menuButton.current?.focus() } }}>
         <div className="nav-primary">
           {PRIMARY_LINKS.map(({ path, label, match }) => (
-            <NavLink key={path} to={path} end={path === '/'} className={() => (match(pathname) ? 'active' : '')}>
+            <NavLink key={path} to={path} end={path === '/'} aria-current={match(pathname) ? 'page' : undefined} className={() => (match(pathname) ? 'active' : '')}>
               {label}
             </NavLink>
           ))}
         </div>
-        <div className="nav-secondary">
+        <div id="workspace-tools" className={`workspace-tools${toolsOpen ? ' is-open' : ''}`}><p className="nav-caption">Your workspace</p><div className="nav-secondary">
           {secondaryGroups.map((group) => (
             <details key={group.label} className="nav-group">
               <summary className={group.links.some(([path]) => pathname === path || pathname.startsWith(path + '/')) ? 'active' : ''}>
@@ -123,8 +130,9 @@ function App() {
           Add posting
         </NavLink>
         <button type="button" className="nav-logout" onClick={logout} title="Sign out of Career Navigator">Log out</button>
-      </nav>
-      <main id="main-content">
+      </div></nav>
+      <main id="main-content" className="workspace-main" tabIndex={-1}>
+      <RouteErrorBoundary key={pathname}><Suspense fallback={<div role="status" className="page-skeleton">Loading your workspace…<span /><span /><span /></div>}>
       <Routes>
         <Route path="/" element={<Root />} />
         <Route path="/future" element={<Explore />} />
@@ -157,6 +165,7 @@ function App() {
         <Route path="/comparison/:id" element={<Comparison />} />
         <Route path="*" element={<div><h1>Page not found</h1><NavLink to="/">Return home</NavLink></div>} />
       </Routes>
+      </Suspense></RouteErrorBoundary>
       </main>
     </div>
   )
