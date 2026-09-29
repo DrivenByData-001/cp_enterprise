@@ -22,22 +22,24 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
   }
 
   return (
-    <div className="app-shell" style={{ maxWidth: 360, marginTop: '15vh' }}>
+    <div className="login-shell">
       <div className="card">
-        <h1 style={{ fontSize: 20, margin: '0 0 4px' }}>Career Navigator</h1>
-        <p className="secondary" style={{ margin: '0 0 16px', fontSize: 13 }}>
-          Private tool — sign in to continue.
+        <span className="brand-mark" aria-hidden="true">↗</span>
+        <p className="eyebrow">Career Navigator</p>
+        <h1>Welcome back.</h1>
+        <p className="secondary">
+          Your next chapter starts here. Sign in to your private career workspace.
         </p>
         <form onSubmit={handleSubmit}>
-          <input
+          <label>Password<input
             type="password"
             autoFocus
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            autoComplete="current-password"
             disabled={submitting}
             style={{ width: '100%', marginBottom: 10 }}
-          />
+          /></label>
           {error && (
             <p style={{ color: 'var(--critical)', fontSize: 13, margin: '0 0 10px' }} role="alert">
               {error}

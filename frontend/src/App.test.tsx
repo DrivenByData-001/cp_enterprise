@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { AuthContext } from './useAuth'
 import { api, type ApplicationListItem, type Cockpit, type Profile360Row, type Role, type RoleListResponse } from './lib/api'
+
+vi.mock('./pages/ApplicationWorkspace', () => ({ default: () => <h1>Application workspace</h1> }))
 
 vi.mock('./lib/api', () => ({
   api: {
@@ -73,7 +75,7 @@ describe('Root route compatibility layer', () => {
     vi.mocked(api.listRoles).mockResolvedValue(rolesResponse())
     vi.mocked(api.getProfile).mockResolvedValue(null)
     renderApp('/')
-    expect(await screen.findByRole('heading', { level: 1, name: 'Career cockpit' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Your career workspace' })).toBeTruthy()
   })
 
   it('redirects /?period=current to /opportunities?period=current', async () => {
@@ -106,7 +108,7 @@ describe('Root route compatibility layer', () => {
     vi.mocked(api.listRoles).mockResolvedValue(rolesResponse())
     vi.mocked(api.getProfile).mockResolvedValue(null)
     renderApp('/?utm_source=newsletter')
-    expect(await screen.findByRole('heading', { level: 1, name: 'Career cockpit' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Your career workspace' })).toBeTruthy()
   })
 })
 
@@ -169,7 +171,7 @@ describe('Add posting placement', () => {
     vi.mocked(api.listRoles).mockResolvedValue(rolesResponse())
     vi.mocked(api.getProfile).mockResolvedValue(null)
     renderApp('/')
-    await screen.findByRole('heading', { level: 1, name: 'Career cockpit' })
+    await screen.findByRole('heading', { level: 1, name: 'Your career workspace' })
     const links = screen.getAllByText('Add posting')
     expect(links.length).toBeGreaterThan(0)
     links.forEach((el) => expect((el.closest('a') as HTMLAnchorElement).getAttribute('href')).toBe('/import'))
@@ -201,7 +203,7 @@ describe('Accessibility', () => {
     vi.mocked(api.listRoles).mockResolvedValue(rolesResponse())
     vi.mocked(api.getProfile).mockResolvedValue(null)
     renderApp('/')
-    expect(await screen.findByRole('heading', { level: 1, name: 'Career cockpit' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Your career workspace' })).toBeTruthy()
     cleanup()
 
     renderApp('/future')
@@ -216,4 +218,22 @@ describe('Accessibility', () => {
     renderApp('/applications')
     expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeTruthy()
   })
+})
+
+it('retains Applications navigation on an application workspace', async () => {
+  renderApp('/applications/app-1')
+  await screen.findByRole('heading', { name: 'Application workspace' })
+  const link = screen.getByRole('link', { name: 'Applications' })
+  expect(link.classList.contains('active')).toBe(true)
+  expect(link.getAttribute('aria-current')).toBe('page')
+})
+
+it('opens secondary navigation and closes it with Escape', () => {
+  renderApp('/')
+  const button = screen.getByRole('button', { name: 'Menu' })
+  fireEvent.click(button)
+  expect(button.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.keyDown(screen.getByRole('navigation', { name: 'Main navigation' }), { key: 'Escape' })
+  expect(button.getAttribute('aria-expanded')).toBe('false')
+  expect(document.activeElement).toBe(button)
 })

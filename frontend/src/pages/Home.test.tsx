@@ -464,3 +464,27 @@ describe('Home — section failure isolation (build §37)', () => {
     expect(await screen.findByText(/Could not load your Career Cockpit/)).toBeTruthy()
   })
 })
+
+describe('Workspace recovery', () => {
+  it('retries an initial load failure without reloading the browser', async () => {
+    vi.mocked(api.getCockpit).mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(baseCockpit())
+    render(<MemoryRouter><Home /></MemoryRouter>)
+    fireEvent.click(await screen.findByText('Retry loading workspace'))
+    await screen.findByRole('heading', { name: 'Current direction' })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+  it('keeps successful checkpoint writes separate from failed refreshes', async () => {
+    const data = baseCockpit({ direction: withDirection({}, { id: 'target-1', title: 'Head of Capital', organisation: null }),
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] } })
+    vi.mocked(api.getCockpit).mockResolvedValueOnce(data).mockRejectedValueOnce(new Error('Refresh offline')).mockResolvedValueOnce(data)
+    render(<MemoryRouter><Home /></MemoryRouter>)
+    fireEvent.click(await screen.findByText('Record progress baseline'))
+    await screen.findByText(/This view may be out of date/)
+    expect(screen.getByText(/Checkpoint saved/)).toBeTruthy()
+    expect((screen.getByText('Record progress baseline') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByText('Retry loading workspace'))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(api.recordProgressCheckpoint).toHaveBeenCalledTimes(1)
+    expect(api.getCockpit).toHaveBeenCalledTimes(3)
+  })
+})

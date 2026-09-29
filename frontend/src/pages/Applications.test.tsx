@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Applications from './Applications'
 import { api, type ApplicationListItem, type ApplicationListResponse } from '../lib/api'
@@ -120,5 +120,34 @@ describe('Applications index — lifecycle summary (Phase 5, docs/36 §6)', () =
     await screen.findByText('Head of Capital')
     expect(screen.queryByText(/Next interview/)).toBeNull()
     expect(screen.queryByText(/Latest:/)).toBeNull()
+  })
+})
+
+describe('Application pagination and recovery', () => {
+  it('makes records beyond 200 accessible and filters on the server', async () => {
+    vi.mocked(api.listApplications).mockImplementation(async params => ({ items: [item({ role: { ...item().role, title: `Application ${Number(params?.offset ?? 0) + 1}` } })], total: 260, limit: 25, offset: params?.offset ?? 0 }))
+    render(<MemoryRouter initialEntries={['/applications?offset=200']}><Applications /></MemoryRouter>)
+    await screen.findByText('Application 201')
+    fireEvent.click(screen.getByText('Next page'))
+    await screen.findByText('Application 226')
+    fireEvent.change(screen.getByLabelText('Application status'), { target: { value: 'interviewing' } })
+    await waitFor(() => expect(api.listApplications).toHaveBeenLastCalledWith({ limit: 25, offset: 0, status: 'interviewing' }))
+    await screen.findByText('Application 1')
+  })
+  it('retries errors and distinguishes an empty filter from no applications', async () => {
+    vi.mocked(api.listApplications).mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(listResponse([]))
+    render(<MemoryRouter initialEntries={['/applications?status=closed']}><Applications /></MemoryRouter>)
+    fireEvent.click(await screen.findByText('Retry applications'))
+    await screen.findByText('No applications match this status.')
+    expect(screen.queryByText(/No applications yet/)).toBeNull()
+  })
+  it('ignores a stale page response after the filter changes', async () => {
+    let old!: (data: ApplicationListResponse) => void
+    vi.mocked(api.listApplications).mockReturnValueOnce(new Promise(resolve => { old = resolve })).mockResolvedValueOnce(listResponse([item({ role: { ...item().role, title: 'Latest filtered role' } })]))
+    renderPage()
+    fireEvent.change(screen.getByLabelText('Application status'), { target: { value: 'ready' } })
+    await screen.findByText('Latest filtered role')
+    old(listResponse([item()]))
+    await waitFor(() => expect(screen.queryByText('Head of Capital')).toBeNull())
   })
 })

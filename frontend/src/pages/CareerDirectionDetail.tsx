@@ -15,12 +15,12 @@ const STATE_LABEL: Record<CareerDirection['state'], string> = {
 
 function DesiredProperties({ direction, labels }: { direction: CareerDirection; labels: Record<string, string> }) {
   if (direction.dimensions.length === 0) {
-    return <p className="muted" style={{ fontSize: 13 }}>No desired properties recorded yet.</p>
+    return <p className="muted" style={{ fontSize: 14 }}>No desired properties recorded yet.</p>
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {direction.dimensions.map((d) => (
-        <div key={d.dimension_code} style={{ fontSize: 13 }}>
+        <div key={d.dimension_code} style={{ fontSize: 14 }}>
           <strong>{labels[d.dimension_code] ?? d.dimension_code}</strong> — {d.desired_direction} (importance {d.importance}/3)
           {d.note && <div className="secondary">{d.note}</div>}
         </div>
@@ -44,11 +44,11 @@ function ConstraintsSummary({ direction }: { direction: CareerDirection }) {
     })
   }
   if (c.other.length) rows.push({ label: 'Other context', value: c.other.join('; ') })
-  if (rows.length === 0) return <p className="muted" style={{ fontSize: 13 }}>No practical constraints recorded.</p>
+  if (rows.length === 0) return <p className="muted" style={{ fontSize: 14 }}>No practical constraints recorded.</p>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {rows.map((r) => (
-        <div key={r.label} style={{ fontSize: 13 }}>
+        <div key={r.label} style={{ fontSize: 14 }}>
           <strong>{r.label}:</strong> {r.value}
         </div>
       ))}
@@ -70,62 +70,62 @@ function RationaleSection({ direction }: { direction: CareerDirection }) {
   }, [direction.origin, direction.source_discovery_run_id])
 
   if (direction.origin !== 'ai_adopted') {
-    return <p className="secondary" style={{ fontSize: 13 }}>This direction was defined manually by you.</p>
+    return <p className="secondary" style={{ fontSize: 14 }}>This direction was defined manually by you.</p>
   }
-  if (error) return <p role="alert" style={{ fontSize: 13 }}>Could not load the discovery run this direction came from: {error}</p>
-  if (!run) return <p className="muted" style={{ fontSize: 13 }}>Loading provenance…</p>
+  if (error) return <p role="alert" style={{ fontSize: 14 }}>Could not load the discovery run this direction came from: {error}</p>
+  if (!run) return <p className="muted" style={{ fontSize: 14 }}>Loading provenance…</p>
 
   const candidate: CareerDirectionCandidate | undefined = run.output?.candidates.find((c) => c.id === direction.source_candidate_id)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <p className="secondary" style={{ fontSize: 13, margin: 0 }}>
+      <p className="secondary" style={{ fontSize: 14, margin: 0 }}>
         Adopted from an AI-generated hypothesis (discovery run {run.created_at.slice(0, 10)}). This was one reviewable hypothesis among
         several — never a ranked recommendation.
       </p>
       {!candidate && (
-        <p className="muted" style={{ fontSize: 13 }}>
+        <p className="muted" style={{ fontSize: 14 }}>
           The original candidate detail is no longer available in this run's record; only the direction's own saved dimensions/constraints
           remain.
         </p>
       )}
       {candidate && (
         <>
-          <p style={{ fontSize: 13, margin: 0 }}>{candidate.summary.text}</p>
+          <p style={{ fontSize: 14, margin: 0 }}>{candidate.summary.text}</p>
           {candidate.market_basis.length > 0 && (
             <div>
-              <strong style={{ fontSize: 12 }}>Market basis</strong>
-              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+              <strong style={{ fontSize: 14 }}>Market basis</strong>
+              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
                 {candidate.market_basis.map((m, i) => <li key={i}>{m.text}</li>)}
               </ul>
             </div>
           )}
           {candidate.person_basis.length > 0 && (
             <div>
-              <strong style={{ fontSize: 12 }}>Where your evidence overlaps</strong>
-              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+              <strong style={{ fontSize: 14 }}>Where your evidence overlaps</strong>
+              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
                 {candidate.person_basis.map((m, i) => <li key={i}>{m.text}</li>)}
               </ul>
             </div>
           )}
           <div>
-            <strong style={{ fontSize: 12 }}>Compensation context</strong>
-            <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+            <strong style={{ fontSize: 14 }}>Compensation context</strong>
+            <p className="muted" style={{ fontSize: 14, margin: '4px 0' }}>
               {candidate.compensation_context ? candidate.compensation_context.text : 'No comparable compensation evidence was available.'}
             </p>
           </div>
           {candidate.tradeoffs.length > 0 && (
             <div>
-              <strong style={{ fontSize: 12 }}>Trade-offs</strong>
-              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+              <strong style={{ fontSize: 14 }}>Trade-offs</strong>
+              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
                 {candidate.tradeoffs.map((t, i) => <li key={i}>{t.text}</li>)}
               </ul>
             </div>
           )}
           {candidate.unknowns.length > 0 && (
             <div>
-              <strong style={{ fontSize: 12 }}>Unknowns</strong>
-              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+              <strong style={{ fontSize: 14 }}>Unknowns</strong>
+              <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
                 {candidate.unknowns.map((u, i) => <li key={i}>{u.text}</li>)}
               </ul>
             </div>
@@ -160,7 +160,7 @@ function TargetSection({ direction, onLinked }: { direction: CareerDirection; on
   if (direction.target) {
     return (
       <div>
-        <p style={{ fontSize: 13, margin: '0 0 8px' }}>
+        <p style={{ fontSize: 14, margin: '0 0 8px' }}>
           <strong>{direction.target.title}</strong>{direction.target.organisation ? ` — ${direction.target.organisation}` : ''}
         </p>
         <div className="actions">
@@ -173,17 +173,17 @@ function TargetSection({ direction, onLinked }: { direction: CareerDirection; on
 
   return (
     <div>
-      <p className="secondary" style={{ fontSize: 13, marginTop: 0 }}>This is still a direction, not yet a concrete Target.</p>
+      <p className="secondary" style={{ fontSize: 14, marginTop: 0 }}>This is still a direction, not yet a concrete Target.</p>
       <div className="actions" style={{ marginBottom: 10 }}>
         <Link to={`/targets/new?direction_id=${direction.id}`} className="button primary">Create a Target from this direction</Link>
       </div>
       <details onToggle={loadTargets}>
-        <summary className="muted" style={{ fontSize: 13, cursor: 'pointer' }}>Link an existing Target instead</summary>
-        {error && <p role="alert" style={{ fontSize: 12 }}>{error}</p>}
+        <summary className="muted" style={{ fontSize: 14, cursor: 'pointer' }}>Link an existing Target instead</summary>
+        {error && <p role="alert" style={{ fontSize: 14 }}>{error}</p>}
         {!targets ? (
-          <p className="muted" style={{ fontSize: 12 }}>Loading targets…</p>
+          <p className="muted" style={{ fontSize: 14 }}>Loading targets…</p>
         ) : targets.length === 0 ? (
-          <p className="muted" style={{ fontSize: 12 }}>No existing targets to link.</p>
+          <p className="muted" style={{ fontSize: 14 }}>No existing targets to link.</p>
         ) : (
           <div className="actions" style={{ marginTop: 8 }}>
             <select value={selected} onChange={(e) => setSelected(e.target.value)}>
@@ -243,7 +243,7 @@ export default function CareerDirectionDetail() {
         <div>
           <h1 style={{ fontSize: 22, margin: 0 }}>{direction.name}</h1>
           {direction.summary && <p className="secondary" style={{ marginTop: 4, maxWidth: 640 }}>{direction.summary}</p>}
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted" style={{ fontSize: 14 }}>
             {STATE_LABEL[direction.state]} · {direction.origin === 'ai_adopted' ? 'AI-adopted, then reviewed and saved by you' : 'User-defined'} ·
             {' '}created {direction.created_at.slice(0, 10)}
           </p>
@@ -289,7 +289,7 @@ export default function CareerDirectionDetail() {
       {direction.archetype && (
         <section className="card" style={{ marginTop: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>Anchored market archetype</h2>
-          <p style={{ fontSize: 13 }}>
+          <p style={{ fontSize: 14 }}>
             <strong>{direction.archetype.canonical_name}</strong>
             {direction.archetype_evidence && (
               <span className="muted">
@@ -301,7 +301,7 @@ export default function CareerDirectionDetail() {
         </section>
       )}
 
-      <p className="muted" style={{ fontSize: 12, marginTop: 16 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 16 }}>
         <button type="button" onClick={() => navigate(-1)} style={{ border: 'none', background: 'none', padding: 0, textDecoration: 'underline', cursor: 'pointer' }}>
           Back
         </button>

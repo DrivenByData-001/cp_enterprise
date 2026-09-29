@@ -237,7 +237,7 @@ function renderWorkspace(
   if (learningState instanceof Error) vi.mocked(api.getApplicationLearningState).mockRejectedValue(learningState)
   else vi.mocked(api.getApplicationLearningState).mockResolvedValue(learningState)
   return render(
-    <MemoryRouter initialEntries={['/applications/app-1']}>
+    <MemoryRouter initialEntries={['/applications/app-1?section=all']}>
       <Routes>
         <Route path="/applications/:id" element={<ApplicationWorkspace />} />
       </Routes>
@@ -246,12 +246,12 @@ function renderWorkspace(
 }
 
 describe('Header', () => {
-  it('shows role, status control, and a link back to the opportunity', async () => {
+  it('shows role, status control, and a link back to applications', async () => {
     renderWorkspace(makeDetail(), makeEvidence())
     expect(await screen.findByRole('heading', { name: 'Head of Capital' })).toBeTruthy()
     expect(screen.getByText(/An insurer/)).toBeTruthy()
-    const back = screen.getByText('← Back to opportunity').closest('a') as HTMLAnchorElement
-    expect(back.getAttribute('href')).toBe('/roles/role-1')
+    const back = screen.getByText('← Back to applications').closest('a') as HTMLAnchorElement
+    expect(back.getAttribute('href')).toBe('/applications')
     expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
   })
 })
@@ -406,7 +406,7 @@ describe('Gaps and uncertainties', () => {
     vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
     vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
     render(
-      <MemoryRouter initialEntries={['/applications/app-1']}>
+      <MemoryRouter initialEntries={['/applications/app-1?section=all']}>
         <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
       </MemoryRouter>,
     )
@@ -443,7 +443,7 @@ describe('Application notes', () => {
     vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
 
     render(
-      <MemoryRouter initialEntries={['/applications/app-1']}>
+      <MemoryRouter initialEntries={['/applications/app-1?section=all']}>
         <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
       </MemoryRouter>,
     )
@@ -1053,5 +1053,21 @@ describe('Learning-loop promotion (Phase 9, docs/40)', () => {
     expect(api.createApplicationNote).not.toHaveBeenCalled()
     expect(api.updateApplicationNote).not.toHaveBeenCalled()
     expect(screen.getByText('No accepted profile evidence found.')).toBeTruthy()
+  })
+})
+
+describe('Application stage navigation', () => {
+  it('keeps unsaved evidence drafts when switching between stages', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ blocking_gaps: [{ id: 'c1', canonical_name: 'Python', type_code: 'tool' }] }))
+    await screen.findByRole('heading', { name: 'Head of Capital' })
+    fireEvent.click(screen.getByRole('link', { name: 'Evidence' }))
+    fireEvent.click(screen.getByText('Add an example for this application'))
+    fireEvent.change(screen.getByPlaceholderText(/Describe an example/), { target: { value: 'Unsaved project example' } })
+    fireEvent.click(screen.getByRole('link', { name: 'Documents' }))
+    expect(screen.queryByRole('heading', { name: 'Gaps and uncertainties' })).toBeNull()
+    fireEvent.click(screen.getByRole('link', { name: 'Evidence' }))
+    expect((screen.getByPlaceholderText(/Describe an example/) as HTMLTextAreaElement).value).toBe('Unsaved project example')
+    expect(api.getApplicationEvidence).toHaveBeenCalledTimes(1)
+    expect(api.createApplicationNote).not.toHaveBeenCalled()
   })
 })

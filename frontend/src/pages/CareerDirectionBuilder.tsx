@@ -48,19 +48,19 @@ function DimensionRow({
 }) {
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <strong style={{ fontSize: 13 }}>{dimension.label}</strong>
-      <p className="secondary" style={{ fontSize: 12, margin: 0 }}>{dimension.definition}</p>
+      <strong style={{ fontSize: 14 }}>{dimension.label}</strong>
+      <p className="secondary" style={{ fontSize: 14, margin: 0 }}>{dimension.definition}</p>
 
       {suggestion && suggestion.conflict && (
-        <p className="muted" style={{ fontSize: 11, margin: 0 }}>Mixed evidence recorded for this dimension — no suggestion, you decide.</p>
+        <p className="muted" style={{ fontSize: 14, margin: 0 }}>Mixed evidence recorded for this dimension — no suggestion, you decide.</p>
       )}
       {suggestion && !suggestion.conflict && suggestion.suggested_direction && (
-        <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+        <p className="muted" style={{ fontSize: 14, margin: 0 }}>
           Recorded preferences suggest: {suggestion.suggested_direction} ({suggestion.basis})
         </p>
       )}
       {suggestion && suggestion.recent_observations.length > 0 && (
-        <details style={{ fontSize: 11 }}>
+        <details style={{ fontSize: 14 }}>
           <summary className="muted">Recorded observations ({suggestion.recent_observations.length})</summary>
           <ul style={{ margin: '4px 0', paddingLeft: 16 }}>
             {suggestion.recent_observations.map((o) => (
@@ -73,7 +73,7 @@ function DimensionRow({
       )}
 
       <div className="form-grid">
-        <label style={{ fontSize: 13 }}>
+        <label style={{ fontSize: 14 }}>
           <span className="secondary">This direction</span>
           <select
             value={draft ? draft.desired_direction : ''}
@@ -90,7 +90,7 @@ function DimensionRow({
           </select>
         </label>
         {draft && (
-          <label style={{ fontSize: 13 }}>
+          <label style={{ fontSize: 14 }}>
             <span className="secondary">Importance</span>
             <select value={draft.importance} onChange={(e) => onChange({ ...draft, importance: Number(e.target.value) })}>
               <option value={1}>1 — mild</option>
@@ -101,7 +101,7 @@ function DimensionRow({
         )}
       </div>
       {draft && (
-        <label style={{ fontSize: 13 }}>
+        <label style={{ fontSize: 14 }}>
           <span className="secondary">Note (optional)</span>
           <input value={draft.note} maxLength={1000} onChange={(e) => onChange({ ...draft, note: e.target.value })} />
         </label>
@@ -113,7 +113,7 @@ function DimensionRow({
 function AlignmentChip({ alignment }: { alignment: string }) {
   const color = alignment === 'supports' ? 'var(--good)' : alignment === 'tension' ? 'var(--warning)' : 'var(--text-muted)'
   return (
-    <span style={{ fontSize: 11, color, border: `1px solid ${color}`, borderRadius: 999, padding: '1px 7px', whiteSpace: 'nowrap' }}>
+    <span style={{ fontSize: 14, color, border: `1px solid ${color}`, borderRadius: 999, padding: '1px 7px', whiteSpace: 'nowrap' }}>
       {alignment}
     </span>
   )
@@ -129,7 +129,7 @@ function CandidateCard({
   const [name, setName] = useState(candidate.name)
   return (
     <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <label style={{ fontSize: 13 }}>
+      <label style={{ fontSize: 14 }}>
         <span className="secondary">Name</span>
         <input value={name} maxLength={300} onChange={(e) => setName(e.target.value)} />
       </label>
@@ -137,10 +137,10 @@ function CandidateCard({
 
       {candidate.priority_alignment.length > 0 && (
         <div>
-          <strong style={{ fontSize: 12 }}>Priority alignment</strong>
+          <strong style={{ fontSize: 14 }}>Priority alignment</strong>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
             {candidate.priority_alignment.map((a, i) => (
-              <div key={i} style={{ fontSize: 12 }}>
+              <div key={i} style={{ fontSize: 14 }}>
                 <AlignmentChip alignment={a.alignment} /> <strong>{a.dimension_code}</strong>: {a.explanation}
               </div>
             ))}
@@ -150,8 +150,8 @@ function CandidateCard({
 
       {candidate.market_basis.length > 0 && (
         <div>
-          <strong style={{ fontSize: 12 }}>Market basis</strong>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+          <strong style={{ fontSize: 14 }}>Market basis</strong>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {candidate.market_basis.map((m, i) => <li key={i}>{m.text}</li>)}
           </ul>
         </div>
@@ -159,24 +159,24 @@ function CandidateCard({
 
       {candidate.person_basis.length > 0 && (
         <div>
-          <strong style={{ fontSize: 12 }}>Where your evidence already overlaps</strong>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+          <strong style={{ fontSize: 14 }}>Where your evidence already overlaps</strong>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {candidate.person_basis.map((m, i) => <li key={i}>{m.text}</li>)}
           </ul>
         </div>
       )}
 
       <div>
-        <strong style={{ fontSize: 12 }}>Compensation context</strong>
-        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+        <strong style={{ fontSize: 14 }}>Compensation context</strong>
+        <p className="muted" style={{ fontSize: 14, margin: '4px 0' }}>
           {candidate.compensation_context ? candidate.compensation_context.text : 'No comparable compensation evidence available for this hypothesis.'}
         </p>
       </div>
 
       {candidate.tradeoffs.length > 0 && (
         <div>
-          <strong style={{ fontSize: 12 }}>Trade-offs</strong>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+          <strong style={{ fontSize: 14 }}>Trade-offs</strong>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {candidate.tradeoffs.map((t, i) => <li key={i}>{t.text}</li>)}
           </ul>
         </div>
@@ -184,8 +184,8 @@ function CandidateCard({
 
       {candidate.unknowns.length > 0 && (
         <div>
-          <strong style={{ fontSize: 12 }}>Unknowns</strong>
-          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 12 }}>
+          <strong style={{ fontSize: 14 }}>Unknowns</strong>
+          <ul style={{ margin: '4px 0', paddingLeft: 18, fontSize: 14 }}>
             {candidate.unknowns.map((u, i) => <li key={i}>{u.text}</li>)}
           </ul>
         </div>
@@ -203,7 +203,7 @@ function CandidateCard({
 function CorpusDisclosurePanel({ disclosure }: { disclosure: CareerDirectionCorpusDisclosure }) {
   const topCountry = disclosure.country_concentration[0]
   return (
-    <div className="card" style={{ fontSize: 12, marginBottom: 12 }}>
+    <div className="card" style={{ fontSize: 14, marginBottom: 12 }}>
       <strong className="secondary" style={{ display: 'block', marginBottom: 4 }}>About this evidence</strong>
       <span className="muted">
         {disclosure.total_observed_postings} observed postings captured, {disclosure.postings_with_archetype_assignment} with an archetype
@@ -218,7 +218,7 @@ function CorpusDisclosurePanel({ disclosure }: { disclosure: CareerDirectionCorp
         <p className="muted" style={{ margin: '6px 0 0' }}>{disclosure.economics_freshness.reason}</p>
       )}
       <p style={{ margin: '6px 0 0' }}>
-        <Link to="/market/coverage" style={{ fontSize: 12 }}>See full market coverage</Link>
+        <Link to="/market/coverage" style={{ fontSize: 14 }}>See full market coverage</Link>
       </p>
     </div>
   )
@@ -341,7 +341,7 @@ export default function CareerDirectionBuilder() {
             Use my recorded preferences as a starting point
           </button>
         </div>
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted" style={{ fontSize: 14 }}>
           Nothing below is pre-filled from what the system thinks it knows — set only what you actually want to state for this direction.
         </p>
         <div className="hub-grid">
@@ -440,8 +440,8 @@ export default function CareerDirectionBuilder() {
           {discoverBusy ? 'Generating…' : 'Generate direction hypotheses'}
         </button>
       </div>
-      {!name.trim() && <p className="muted" style={{ fontSize: 12 }}>Manual save needs a name above; generating hypotheses does not.</p>}
-      <p className="muted" style={{ fontSize: 12 }}>
+      {!name.trim() && <p className="muted" style={{ fontSize: 14 }}>Manual save needs a name above; generating hypotheses does not.</p>}
+      <p className="muted" style={{ fontSize: 14 }}>
         AI generation sends the properties above to your configured provider and records the run for review. No direction is saved or
         selected until you explicitly save or adopt one.
       </p>
@@ -451,10 +451,10 @@ export default function CareerDirectionBuilder() {
       {discoverResult && (
         <section style={{ marginTop: 24 }}>
           <h2 style={{ fontSize: 18 }}>AI-generated hypotheses for review</h2>
-          <p className="secondary" style={{ fontSize: 13 }}>None are selected or saved automatically.</p>
+          <p className="secondary" style={{ fontSize: 14 }}>None are selected or saved automatically.</p>
           <CorpusDisclosurePanel disclosure={discoverResult.corpus_disclosure} />
           {discoverResult.caveats.length > 0 && (
-            <ul className="muted" style={{ fontSize: 12 }}>
+            <ul className="muted" style={{ fontSize: 14 }}>
               {discoverResult.caveats.map((c, i) => <li key={i}>{c}</li>)}
             </ul>
           )}
@@ -463,7 +463,7 @@ export default function CareerDirectionBuilder() {
               <p style={{ margin: 0 }}>
                 {discoverResult.result.insufficient_evidence_reason ?? 'No grounded hypothesis could be produced from the available evidence.'}
               </p>
-              <p className="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
+              <p className="secondary" style={{ fontSize: 14, marginBottom: 0 }}>
                 You can still save a direction manually above, or adjust your inputs and try again.
               </p>
             </div>

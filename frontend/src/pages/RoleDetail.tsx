@@ -32,7 +32,7 @@ function SkillChip({ skill }: { skill: RoleSkill }) {
         border: '1px solid var(--border)',
         borderRadius: 999,
         padding: '4px 10px',
-        fontSize: 12,
+        fontSize: 14,
         opacity: skill.requirement_type === 'preferred' ? 0.7 : 1,
       }}
     >
@@ -82,7 +82,7 @@ function formatTeamSize(size: TeamSizeEstimate): string {
 
 function RoleContextRow({ children, basis }: { children: React.ReactNode; basis: RoleContextBasis }) {
   return (
-    <div className="secondary" style={{ fontSize: 13, marginTop: 4, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+    <div className="secondary" style={{ fontSize: 14, marginTop: 4, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
       <span style={{ flex: 1 }}>{children}</span>
       <BasisBadge basis={basis} />
     </div>
@@ -124,7 +124,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Day in the Life</h3>
-          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 520 }}>
+          <p className="muted" style={{ fontSize: 14, margin: 0, maxWidth: 520 }}>
             An occupational sketch of this role, generated on demand — never based on your own profile. "From advert"
             claims are directly supported by the source posting; "Inferred" claims are reasonable occupational
             judgement, not a guarantee.
@@ -132,10 +132,10 @@ function RoleContextSection({ roleId }: { roleId: string }) {
         </div>
         {enrichment && (
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
-            <div className="muted" style={{ fontSize: 11 }}>
+            <div className="muted" style={{ fontSize: 14 }}>
               Generated {new Date(enrichment.generated_at).toLocaleDateString()} · v{enrichment.generator_version}
             </div>
-            <button onClick={() => run('regenerate')} disabled={busy} style={{ marginTop: 4, fontSize: 12, padding: '3px 10px' }}>
+            <button onClick={() => run('regenerate')} disabled={busy} style={{ marginTop: 4, fontSize: 14, padding: '3px 10px' }}>
               {busy ? 'Regenerating…' : 'Regenerate'}
             </button>
           </div>
@@ -143,7 +143,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
       </div>
 
       {error && (
-        <p style={{ color: 'var(--critical)', fontSize: 13, marginTop: 10 }}>{error}</p>
+        <p style={{ color: 'var(--critical)', fontSize: 14, marginTop: 10 }}>{error}</p>
       )}
 
       {!enrichment && (
@@ -158,20 +158,20 @@ function RoleContextSection({ roleId }: { roleId: string }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 12 }}>
           {enrichment.day_in_life.length > 0 && (
             <div>
-              <strong style={{ fontSize: 13 }}>Typical day</strong>
+              <strong style={{ fontSize: 14 }}>Typical day</strong>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                 {enrichment.day_in_life.map((item, i) => (
                   <div key={i} style={{ display: 'flex', gap: 10 }}>
-                    <span className="muted" style={{ fontSize: 12, width: 64, flexShrink: 0 }}>
+                    <span className="muted" style={{ fontSize: 14, width: 64, flexShrink: 0 }}>
                       {item.time_or_phase}
                     </span>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', gap: 6, alignItems: 'center' }}>
                         {item.activity}
                         <BasisBadge basis={item.basis} />
                       </div>
                       {item.detail && (
-                        <div className="secondary" style={{ fontSize: 12, marginTop: 2 }}>
+                        <div className="secondary" style={{ fontSize: 14, marginTop: 2 }}>
                           {item.detail}
                         </div>
                       )}
@@ -184,20 +184,20 @@ function RoleContextSection({ roleId }: { roleId: string }) {
 
           {enrichment.typical_week.length > 0 && (
             <div>
-              <strong style={{ fontSize: 13 }}>Typical week</strong>
+              <strong style={{ fontSize: 14 }}>Typical week</strong>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
                 {enrichment.typical_week.map((item, i) => (
                   <div key={i} style={{ display: 'flex', gap: 10 }}>
-                    <span className="muted" style={{ fontSize: 12, width: 90, flexShrink: 0 }}>
+                    <span className="muted" style={{ fontSize: 14, width: 90, flexShrink: 0 }}>
                       {item.day_or_theme}
                     </span>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', gap: 6, alignItems: 'center' }}>
                         {item.activity}
                         <BasisBadge basis={item.basis} />
                       </div>
                       {item.detail && (
-                        <div className="secondary" style={{ fontSize: 12, marginTop: 2 }}>
+                        <div className="secondary" style={{ fontSize: 14, marginTop: 2 }}>
                           {item.detail}
                         </div>
                       )}
@@ -210,7 +210,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
 
           {(enrichment.team_context.expected_team_size || enrichment.team_context.team_work.length > 0) && (
             <div>
-              <strong style={{ fontSize: 13 }}>Team</strong>
+              <strong style={{ fontSize: 14 }}>Team</strong>
               {enrichment.team_context.expected_team_size && (
                 <RoleContextRow basis={enrichment.team_context.expected_team_size.basis}>
                   Expected team size: {formatTeamSize(enrichment.team_context.expected_team_size)}
@@ -226,7 +226,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
 
           {(enrichment.manager_context.likely_manager_title || enrichment.manager_context.dynamic) && (
             <div>
-              <strong style={{ fontSize: 13 }}>Reports to / management dynamic</strong>
+              <strong style={{ fontSize: 14 }}>Reports to / management dynamic</strong>
               {enrichment.manager_context.likely_manager_title && (
                 <RoleContextRow basis={enrichment.manager_context.title_basis ?? 'inferred'}>
                   {enrichment.manager_context.likely_manager_title}
@@ -242,7 +242,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
 
           {enrichment.stakeholder_context.stakeholders.length > 0 && (
             <div>
-              <strong style={{ fontSize: 13 }}>Key stakeholders</strong>
+              <strong style={{ fontSize: 14 }}>Key stakeholders</strong>
               {enrichment.stakeholder_context.stakeholders.map((s, i) => (
                 <RoleContextRow key={i} basis={s.basis}>
                   {s.text}
@@ -253,7 +253,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
 
           {enrichment.career_progression.length > 0 && (
             <div>
-              <strong style={{ fontSize: 13 }}>Career progression</strong>
+              <strong style={{ fontSize: 14 }}>Career progression</strong>
               {enrichment.career_progression.map((c, i) => (
                 <RoleContextRow key={i} basis={c.basis}>
                   {c.step}
@@ -263,7 +263,7 @@ function RoleContextSection({ roleId }: { roleId: string }) {
           )}
 
           {enrichment.caveats && (
-            <p className="muted" style={{ fontSize: 12, margin: 0, fontStyle: 'italic' }}>
+            <p className="muted" style={{ fontSize: 14, margin: 0, fontStyle: 'italic' }}>
               {enrichment.caveats}
             </p>
           )}
@@ -294,12 +294,12 @@ function ExtractionQualityNotice({ role }: { role: Role }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong>Partial extraction</strong>
-          <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
+          <p className="secondary" style={{ margin: '4px 0 0', fontSize: 14 }}>
             The source for this role may be incomplete or uncertain — this is a usable extraction, not a failure, and
             it's eligible for later review.
           </p>
           {notes && (
-            <p className="secondary" style={{ margin: '6px 0 0', fontSize: 13 }}>
+            <p className="secondary" style={{ margin: '6px 0 0', fontSize: 14 }}>
               {notes}
             </p>
           )}
@@ -454,7 +454,7 @@ export default function RoleDetail() {
   return (
     <div>
       {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
-      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 13 }}>
+      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 14 }}>
         ← Back to {isTarget ? 'targets' : 'opportunities'}
       </Link>
 
@@ -475,7 +475,7 @@ export default function RoleDetail() {
                 border: isTarget ? '1px solid var(--border)' : undefined,
               }}
             />
-            <span className="secondary" style={{ fontSize: 13 }}>
+            <span className="secondary" style={{ fontSize: 14 }}>
               {isTarget
                 ? role.node_type === 'target_imagined'
                   ? 'Target · imagined'
@@ -496,7 +496,7 @@ export default function RoleDetail() {
               used to be. Targets keep their own large similarity treatment
               on the right; it is never shown this small/secondary for them. */}
           {!isTarget && (
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>
               {role.posting_date ? `Posted ${role.posting_date}` : 'Posting date unknown'}
               {role.captured_at ? ` · captured ${role.captured_at.slice(0, 10)}` : ''}
               {role.similarity !== null ? ` · ${Math.round(role.similarity! * 100)}% similarity to profile` : ''}
@@ -504,7 +504,7 @@ export default function RoleDetail() {
           )}
           {!isTarget && role.url && (
             <div style={{ marginTop: 4 }}>
-              <a href={role.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 12 }}>
+              <a href={role.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 14 }}>
                 View original posting ↗
               </a>
             </div>
@@ -515,7 +515,7 @@ export default function RoleDetail() {
             <div style={{ fontSize: 28, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
               {role.similarity !== null ? `${Math.round(role.similarity! * 100)}%` : '—'}
             </div>
-            <div className="muted" style={{ fontSize: 12 }}>
+            <div className="muted" style={{ fontSize: 14 }}>
               narrative similarity
             </div>
           </div>
@@ -650,7 +650,7 @@ export default function RoleDetail() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {role.skill_decomposition.map((s, i) => (
               <div key={i}>
-                <strong style={{ fontSize: 13 }}>{s.skill}</strong>
+                <strong style={{ fontSize: 14 }}>{s.skill}</strong>
                 {s.examples.length > 0 && (
                   <ul className="secondary" style={{ margin: '4px 0 0', paddingLeft: 20 }}>
                     {s.examples.map((ex, j) => (
@@ -670,10 +670,10 @@ export default function RoleDetail() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {role.technical_subjects.map((s, i) => (
               <div key={i}>
-                <strong style={{ fontSize: 13 }}>{s.subject}</strong>
+                <strong style={{ fontSize: 14 }}>{s.subject}</strong>
                 {s.why && <p className="secondary" style={{ margin: '2px 0' }}>{s.why}</p>}
                 {s.resources.length > 0 && (
-                  <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                  <p className="muted" style={{ margin: 0, fontSize: 14 }}>
                     Resources: {s.resources.join(', ')}
                   </p>
                 )}
@@ -702,7 +702,7 @@ export default function RoleDetail() {
       {role.legacy_skills && role.legacy_skills.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Legacy skills</h3>
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
             Extracted, not yet reviewed as requirements — never treated as equivalent to the reviewed list above.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -724,13 +724,13 @@ export default function RoleDetail() {
           {role.description && <p className="secondary">{role.description}</p>}
           {role.requirements && (
             <>
-              <strong style={{ fontSize: 13 }}>Requirements</strong>
+              <strong style={{ fontSize: 14 }}>Requirements</strong>
               <p className="secondary">{role.requirements}</p>
             </>
           )}
           {role.responsibilities && (
             <>
-              <strong style={{ fontSize: 13 }}>Responsibilities</strong>
+              <strong style={{ fontSize: 14 }}>Responsibilities</strong>
               <p className="secondary">{role.responsibilities}</p>
             </>
           )}
@@ -744,7 +744,7 @@ export default function RoleDetail() {
       {!role.description && !role.requirements && !role.responsibilities && role.source_document_text && (
         <div className="card" style={{ marginTop: 16 }}>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Captured source text</h3>
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
             This role was captured as raw source text rather than a structured extraction — shown verbatim below.
           </p>
           <p className="secondary" style={{ whiteSpace: 'pre-wrap' }}>
@@ -771,7 +771,7 @@ export default function RoleDetail() {
           Next actions
         </h2>
         {applyError && (
-          <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+          <p role="alert" style={{ color: 'var(--critical)', fontSize: 14 }}>
             Couldn't open the application: {applyError}
           </p>
         )}

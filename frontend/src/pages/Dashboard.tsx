@@ -34,7 +34,7 @@ function ExtractionQualityBadge({ role }: { role: Role }) {
     <span
       title="This extraction was flagged incomplete/uncertain — open the role for details. Eligible for later review."
       style={{
-        fontSize: 11,
+        fontSize: 14,
         color: 'var(--warning)',
         border: '1px solid var(--warning)',
         borderRadius: 999,
@@ -175,7 +175,7 @@ export default function Dashboard() {
           Current's own well-documented undated-but-newly-saved carve-out
           below. */}
       <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16, padding: '8px 12px' }}>
-        <span className="secondary" style={{ fontSize: 13 }}>
+        <span className="secondary" style={{ fontSize: 14 }}>
           Showing:
         </span>
         <select aria-label="Posting period" value={period} onChange={(e) => update('period', e.target.value)}>
@@ -187,7 +187,7 @@ export default function Dashboard() {
         </select>
         {period === 'year' && (
           <>
-            <span className="secondary" style={{ fontSize: 13 }}>
+            <span className="secondary" style={{ fontSize: 14 }}>
               Posting year:
             </span>
             <select aria-label="Posting year" value={year} onChange={(e) => update('year', e.target.value)}>
@@ -201,17 +201,17 @@ export default function Dashboard() {
           </>
         )}
         {period === 'current' && (
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted" style={{ fontSize: 14 }}>
             Roles posted this calendar year, plus newly captured roles whose posting date is not known.
           </span>
         )}
         {(period === 'all' || period === 'year') && (
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted" style={{ fontSize: 14 }}>
             Historical roles included — the full captured corpus spans {yearRange ? `${yearRange.min}–${yearRange.max}` : 'multiple years'}.
           </span>
         )}
         {period === 'unknown_date' && (
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted" style={{ fontSize: 14 }}>
             Roles with no known posting date — never assumed to be the date they were captured.
           </span>
         )}
@@ -234,7 +234,7 @@ export default function Dashboard() {
             key={r.id}
             to={`/roles/${r.id}`}
             state={{ returnTo: `/opportunities?${params.toString()}` }}
-            className="card"
+            className="card opportunity-card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -243,11 +243,11 @@ export default function Dashboard() {
                 style={{ width: 10, height: 10, borderRadius: '50%', background: trackColor(r.career_track), flexShrink: 0 }}
               />
               <div>
-                <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   {r.title}
                   <ExtractionQualityBadge role={r} />
                 </div>
-                <div className="secondary" style={{ fontSize: 13 }}>
+                <div className="secondary" style={{ fontSize: 14 }}>
                   {r.organisation ?? 'Unknown org'}
                   {r.location ? ` · ${r.location}` : ''}
                   {r.posting_date ? ` · ${r.posting_date}` : ''}
@@ -258,7 +258,7 @@ export default function Dashboard() {
               <div style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
                 {r.similarity !== null ? `${Math.round(r.similarity * 100)}%` : '—'}
               </div>
-              <div className="muted" style={{ fontSize: 12 }}>
+              <div className="muted" style={{ fontSize: 14 }}>
                 similarity
               </div>
             </div>
@@ -268,7 +268,7 @@ export default function Dashboard() {
 
       {total > 0 && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
-          <span className="muted" style={{ fontSize: 13 }}>
+          <span className="muted" style={{ fontSize: 14 }}>
             {pageStart}–{pageEnd} of {total}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>

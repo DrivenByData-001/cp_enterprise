@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import {
   api,
   type ApplicationArtifact,
@@ -183,7 +183,7 @@ function LearningActionRow({
   if (!status || status === 'not_queued') {
     return (
       <div className="actions" style={{ marginTop: 6 }}>
-        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
           {busy ? 'Sending…' : 'Send to Profile360 for review'}
         </button>
       </div>
@@ -192,8 +192,8 @@ function LearningActionRow({
   if (status === 'source_changed_since_queue') {
     return (
       <div className="actions" style={{ marginTop: 6, alignItems: 'center' }}>
-        <span className="muted" style={{ fontSize: 12 }}>{QUEUE_STATUS_LABEL[status]}</span>
-        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+        <span className="muted" style={{ fontSize: 14 }}>{QUEUE_STATUS_LABEL[status]}</span>
+        <button type="button" onClick={onPromote} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
           {busy ? 'Requeuing…' : 'Requeue'}
         </button>
       </div>
@@ -201,7 +201,7 @@ function LearningActionRow({
   }
   return (
     <div style={{ marginTop: 6 }}>
-      <span className="muted" style={{ fontSize: 12 }}>{QUEUE_STATUS_LABEL[status]}</span>
+      <span className="muted" style={{ fontSize: 14 }}>{QUEUE_STATUS_LABEL[status]}</span>
     </div>
   )
 }
@@ -224,7 +224,7 @@ function NoteComposer({
   const [text, setText] = useState('')
   return (
     <div className="card" style={{ marginTop: 8, padding: 10 }}>
-      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+      <label style={{ display: 'block', fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
         {conceptId ? 'Example for this application' : 'General note'}
       </label>
       <textarea
@@ -288,17 +288,17 @@ function NoteItem({
         <div>
           <span
             className="muted"
-            style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3 }}
+            style={{ fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.3 }}
           >
             {note.note_type === 'evidence_example' ? 'Application-only example' : 'General note'}
           </span>
           <p style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{note.note_text}</p>
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-          <button type="button" onClick={() => setEditing(true)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+          <button type="button" onClick={() => setEditing(true)} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
             Edit
           </button>
-          <button type="button" onClick={onDelete} disabled={busy} style={{ fontSize: 12, padding: '3px 8px', color: 'var(--critical)' }}>
+          <button type="button" onClick={onDelete} disabled={busy} style={{ fontSize: 14, padding: '3px 8px', color: 'var(--critical)' }}>
             Delete
           </button>
         </div>
@@ -334,7 +334,7 @@ function EventComposer({
 
   return (
     <div className="card" style={{ marginTop: 8, padding: 10 }}>
-      <label style={{ display: 'block', fontSize: 12 }}>
+      <label style={{ display: 'block', fontSize: 14 }}>
         Event type
         <select
           value={eventType}
@@ -348,7 +348,7 @@ function EventComposer({
           ))}
         </select>
       </label>
-      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+      <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
         Date/time
         <input
           type="datetime-local"
@@ -357,7 +357,7 @@ function EventComposer({
           style={{ display: 'block', marginTop: 4 }}
         />
       </label>
-      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+      <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
         Label (optional) — stage, format, etc.
         <input
           value={label ?? ''}
@@ -366,7 +366,7 @@ function EventComposer({
           style={{ width: '100%' }}
         />
       </label>
-      <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+      <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
         Notes (optional)
         <textarea rows={3} value={notes ?? ''} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
       </label>
@@ -431,18 +431,18 @@ function EventRow({
     <div className="card" style={{ marginTop: 8, padding: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div>
-          <strong style={{ fontSize: 13 }}>{EVENT_TYPE_LABEL[event.event_type]}</strong>
-          {event.label && <span className="secondary" style={{ fontSize: 13 }}> — {event.label}</span>}
-          <div className="muted" style={{ fontSize: 11 }}>
+          <strong style={{ fontSize: 14 }}>{EVENT_TYPE_LABEL[event.event_type]}</strong>
+          {event.label && <span className="secondary" style={{ fontSize: 14 }}> — {event.label}</span>}
+          <div className="muted" style={{ fontSize: 14 }}>
             {formatEventAt(event.event_at)}
           </div>
-          {event.notes && <p style={{ margin: '4px 0 0', fontSize: 13, whiteSpace: 'pre-wrap' }}>{event.notes}</p>}
+          {event.notes && <p style={{ margin: '4px 0 0', fontSize: 14, whiteSpace: 'pre-wrap' }}>{event.notes}</p>}
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-          <button type="button" onClick={() => setEditing(true)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+          <button type="button" onClick={() => setEditing(true)} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
             Edit
           </button>
-          <button type="button" onClick={onDelete} disabled={busy} style={{ fontSize: 12, padding: '3px 8px', color: 'var(--critical)' }}>
+          <button type="button" onClick={onDelete} disabled={busy} style={{ fontSize: 14, padding: '3px 8px', color: 'var(--critical)' }}>
             Delete
           </button>
         </div>
@@ -485,26 +485,26 @@ function LifecycleSection({
       <h2 id="lifecycle-h" style={{ fontSize: 18, marginTop: 0 }}>
         Lifecycle
       </h2>
-      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         What happened with this application, recorded by you. This never changes the status above automatically.
       </p>
-      <p className="secondary" style={{ fontSize: 13, marginTop: 4 }}>
+      <p className="secondary" style={{ fontSize: 14, marginTop: 4 }}>
         Current status: <strong>{APPLICATION_STATUSES.find((s) => s.value === status)?.label ?? status}</strong>
       </p>
 
       {eventsError && (
-        <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+        <p role="alert" style={{ color: 'var(--critical)', fontSize: 14 }}>
           Timeline couldn't be loaded: {eventsError}
         </p>
       )}
       {actionError && (
-        <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>
+        <p role="alert" style={{ color: 'var(--critical)', fontSize: 14 }}>
           {actionError}
         </p>
       )}
 
       {events && upcoming && (
-        <p role="status" style={{ fontSize: 13, color: 'var(--series-1)', fontWeight: 600 }}>
+        <p role="status" style={{ fontSize: 14, color: 'var(--series-1)', fontWeight: 600 }}>
           Upcoming: {EVENT_TYPE_LABEL[upcoming.event_type]}
           {upcoming.label ? ` — ${upcoming.label}` : ''} on {formatEventAt(upcoming.event_at)}
         </p>
@@ -567,8 +567,8 @@ function CheckRow({ heading, children, tone }: { heading: string; children: Reac
   const color = tone === 'critical' ? 'var(--critical)' : tone === 'warning' ? 'var(--warning)' : undefined
   return (
     <div style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-      <strong style={{ fontSize: 13, color }}>{heading}</strong>
-      <p className="secondary" style={{ margin: '2px 0 0', fontSize: 13 }}>
+      <strong style={{ fontSize: 14, color }}>{heading}</strong>
+      <p className="secondary" style={{ margin: '2px 0 0', fontSize: 14 }}>
         {children}
       </p>
     </div>
@@ -667,7 +667,7 @@ function EvidenceToUse({ items }: { items: ApplicationEvidenceItem[] }) {
       <h2 id="evidence-to-use-h" style={{ fontSize: 18, marginTop: 0 }}>
         Evidence to use
       </h2>
-      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         The strongest currently accepted evidence for each requirement. An application-only example is never presented
         as accepted Profile360 evidence.
       </p>
@@ -675,18 +675,18 @@ function EvidenceToUse({ items }: { items: ApplicationEvidenceItem[] }) {
         {items.map((item) => (
           <div key={item.concept.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-              <strong style={{ fontSize: 13 }}>{item.concept.canonical_name}</strong>
-              <span style={{ fontSize: 12, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{STATUS_LABEL[item.status]}</span>
+              <strong style={{ fontSize: 14 }}>{item.concept.canonical_name}</strong>
+              <span style={{ fontSize: 14, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{STATUS_LABEL[item.status]}</span>
             </div>
-            <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+            <div className="muted" style={{ fontSize: 14, marginTop: 2 }}>
               {item.role_requirement_reviewed ? 'Reviewed requirement' : 'Legacy role extraction — not human-reviewed'}
               {` · ${item.role_side.requirement_type}`}
             </div>
-            <p className="secondary" style={{ fontSize: 13, margin: '4px 0 0' }}>
+            <p className="secondary" style={{ fontSize: 14, margin: '4px 0 0' }}>
               {personSideSummary(item)}
             </p>
             {item.notes.length > 0 && (
-              <p style={{ fontSize: 12, margin: '4px 0 0', color: 'var(--series-1)' }}>
+              <p style={{ fontSize: 14, margin: '4px 0 0', color: 'var(--series-1)' }}>
                 Application-only example added ({item.notes.length}) — does not change the status above.
               </p>
             )}
@@ -718,24 +718,24 @@ function GapRow({
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 13 }}>{concept.canonical_name}</strong>
-        <span style={{ fontSize: 12, color: STATUS_COLOR[status], fontWeight: 600 }}>{STATUS_LABEL[status]}</span>
+        <strong style={{ fontSize: 14 }}>{concept.canonical_name}</strong>
+        <span style={{ fontSize: 14, color: STATUS_COLOR[status], fontWeight: 600 }}>{STATUS_LABEL[status]}</span>
       </div>
-      <p className="secondary" style={{ fontSize: 13, margin: '4px 0 0' }}>
+      <p className="secondary" style={{ fontSize: 14, margin: '4px 0 0' }}>
         {status === 'not_found'
           ? 'No accepted evidence found for this requirement. This does not mean you lack the capability.'
           : 'Some evidence exists but does not yet fully verify this requirement.'}
       </p>
       {existingNotes.length > 0 && (
-        <p style={{ fontSize: 12, margin: '4px 0 0', color: 'var(--series-1)' }}>
+        <p style={{ fontSize: 14, margin: '4px 0 0', color: 'var(--series-1)' }}>
           Application-only example added ({existingNotes.length}).
         </p>
       )}
       <div className="actions" style={{ marginTop: 8 }}>
-        <button type="button" onClick={() => setComposing((c) => !c)} style={{ fontSize: 12, padding: '4px 10px' }}>
+        <button type="button" onClick={() => setComposing((c) => !c)} style={{ fontSize: 14, padding: '4px 10px' }}>
           {composing ? 'Cancel' : 'Add an example for this application'}
         </button>
-        <Link to={`/comparison/${roleId}`} style={{ fontSize: 12 }}>
+        <Link to={`/comparison/${roleId}`} style={{ fontSize: 14 }}>
           Review my evidence
         </Link>
       </div>
@@ -748,7 +748,7 @@ function GapRow({
           onCancel={() => setComposing(false)}
         />
       )}
-      <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+      <p className="muted" style={{ fontSize: 14, margin: '6px 0 0' }}>
         Or continue without adding anything — a gap here never blocks the application.
       </p>
     </div>
@@ -816,12 +816,12 @@ function SourceRefs({ refs, manifest }: { refs: string[]; manifest: SourceManife
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        style={{ fontSize: 11, padding: '1px 6px', marginLeft: 6, verticalAlign: 'middle' }}
+        style={{ fontSize: 14, padding: '1px 6px', marginLeft: 6, verticalAlign: 'middle' }}
       >
         {open ? 'Hide sources' : `Sources (${refs.length})`}
       </button>
       {open && (
-        <ul style={{ margin: '4px 0 4px 0', paddingLeft: 18, fontSize: 11 }}>
+        <ul style={{ margin: '4px 0 4px 0', paddingLeft: 18, fontSize: 14 }}>
           {entries.map((e) => (
             <li key={e.ref}>
               <span className="muted">{CATEGORY_LABELS[e.category]}:</span> {e.label}
@@ -966,9 +966,9 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
         <SourcedBlock block={c.positioning_statement} manifest={manifest} />
         {c.themes.length > 0 && (
           <>
-            <strong style={{ fontSize: 12 }}>Themes</strong>
+            <strong style={{ fontSize: 14 }}>Themes</strong>
             {c.themes.map((t, i) => (
-              <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+              <p key={i} style={{ margin: '4px 0', fontSize: 14 }}>
                 <strong>{t.title}:</strong> {t.message}
                 <SourceRefs refs={t.source_refs} manifest={manifest} />
               </p>
@@ -977,9 +977,9 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
         )}
         {c.requirements_to_lead_with.length > 0 && (
           <>
-            <strong style={{ fontSize: 12 }}>Requirements to lead with</strong>
+            <strong style={{ fontSize: 14 }}>Requirements to lead with</strong>
             {c.requirements_to_lead_with.map((r, i) => (
-              <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+              <p key={i} style={{ margin: '4px 0', fontSize: 14 }}>
                 {r.reason}
                 <SourceRefs refs={r.source_refs} manifest={manifest} />
               </p>
@@ -988,9 +988,9 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
         )}
         {c.gaps_and_cautions.length > 0 && (
           <>
-            <strong style={{ fontSize: 12 }}>Gaps and cautions</strong>
+            <strong style={{ fontSize: 14 }}>Gaps and cautions</strong>
             {c.gaps_and_cautions.map((g, i) => (
-              <p key={i} style={{ margin: '4px 0', fontSize: 13, color: 'var(--warning)' }}>
+              <p key={i} style={{ margin: '4px 0', fontSize: 14, color: 'var(--warning)' }}>
                 {g.message}
                 <SourceRefs refs={g.source_refs} manifest={manifest} />
               </p>
@@ -998,12 +998,12 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
           </>
         )}
         {c.language_to_mirror.length > 0 && (
-          <p style={{ fontSize: 13 }}>
+          <p style={{ fontSize: 14 }}>
             <strong>Language to mirror:</strong> {c.language_to_mirror.join(' · ')}
           </p>
         )}
         {c.avoid_claiming.length > 0 && (
-          <p style={{ fontSize: 13, color: 'var(--critical)' }}>
+          <p style={{ fontSize: 14, color: 'var(--critical)' }}>
             <strong>Avoid claiming:</strong> {c.avoid_claiming.join(' · ')}
           </p>
         )}
@@ -1017,14 +1017,14 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
         <SourcedBlock block={c.profile_summary} manifest={manifest} />
         {c.experience.map((e, i) => (
           <div key={i} style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-            <strong style={{ fontSize: 13 }}>
+            <strong style={{ fontSize: 14 }}>
               {e.title ?? 'Unknown role'} — {e.organisation ?? 'Unknown organisation'}
             </strong>
-            {!e.episode_found && <span style={{ color: 'var(--critical)', fontSize: 11 }}> (episode no longer available)</span>}
-            <div className="muted" style={{ fontSize: 11 }}>
+            {!e.episode_found && <span style={{ color: 'var(--critical)', fontSize: 14 }}> (episode no longer available)</span>}
+            <div className="muted" style={{ fontSize: 14 }}>
               {formatDate(e.start_date)} – {formatDate(e.end_date)}
             </div>
-            <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>
+            <ul style={{ margin: '4px 0 0 18px', fontSize: 14 }}>
               {e.bullets.map((b, j) => (
                 <li key={j}>
                   {b.text}
@@ -1035,12 +1035,12 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
           </div>
         ))}
         {c.skills.length > 0 && (
-          <p style={{ fontSize: 13, marginTop: 10 }}>
+          <p style={{ fontSize: 14, marginTop: 10 }}>
             <strong>Skills:</strong> {c.skills.map((s) => s.text).join(' · ')}
           </p>
         )}
         {c.omissions_or_cautions.length > 0 && (
-          <p style={{ fontSize: 12, color: 'var(--warning)' }}>{c.omissions_or_cautions.join(' · ')}</p>
+          <p style={{ fontSize: 14, color: 'var(--warning)' }}>{c.omissions_or_cautions.join(' · ')}</p>
         )}
       </div>
     )
@@ -1049,13 +1049,13 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
     const c = content as CoverLetterContent
     return (
       <div>
-        <p style={{ fontSize: 13 }}>{c.salutation}</p>
+        <p style={{ fontSize: 14 }}>{c.salutation}</p>
         <SourcedBlock block={c.opening} manifest={manifest} />
         {c.body.map((b, i) => (
           <SourcedBlock key={i} block={b} manifest={manifest} />
         ))}
         <SourcedBlock block={c.closing} manifest={manifest} />
-        <p style={{ fontSize: 13 }}>{c.sign_off}</p>
+        <p style={{ fontSize: 14 }}>{c.sign_off}</p>
       </div>
     )
   }
@@ -1066,14 +1066,14 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
         <SourcedBlock block={c.opening} manifest={manifest} />
         {c.sections.map((s, i) => (
           <div key={i} style={{ marginTop: 8 }}>
-            <strong style={{ fontSize: 13 }}>{s.heading}</strong>
+            <strong style={{ fontSize: 14 }}>{s.heading}</strong>
             {s.paragraphs.map((p, j) => (
               <SourcedBlock key={j} block={p} manifest={manifest} />
             ))}
           </div>
         ))}
         {c.gaps_addressed.length > 0 && (
-          <p style={{ fontSize: 12, color: 'var(--warning)' }}>
+          <p style={{ fontSize: 14, color: 'var(--warning)' }}>
             <strong>Gaps addressed:</strong> {c.gaps_addressed.join(' · ')}
           </p>
         )}
@@ -1085,9 +1085,9 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
     <div>
       {c.focus_areas.length > 0 && (
         <>
-          <strong style={{ fontSize: 12 }}>Focus areas</strong>
+          <strong style={{ fontSize: 14 }}>Focus areas</strong>
           {c.focus_areas.map((f, i) => (
-            <p key={i} style={{ margin: '4px 0', fontSize: 13 }}>
+            <p key={i} style={{ margin: '4px 0', fontSize: 14 }}>
               <strong>{f.title}:</strong> {f.why_it_matters}
               <SourceRefs refs={f.source_refs} manifest={manifest} />
             </p>
@@ -1096,19 +1096,19 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
       )}
       {c.questions.length > 0 && (
         <>
-          <strong style={{ fontSize: 12 }}>Practice questions</strong>
-          <p className="muted" style={{ fontSize: 11, margin: '2px 0 6px' }}>
+          <strong style={{ fontSize: 14 }}>Practice questions</strong>
+          <p className="muted" style={{ fontSize: 14, margin: '2px 0 6px' }}>
             Practice questions based on this role's requirements — not known employer questions.
           </p>
           {c.questions.map((q, i) => (
             <div key={i} style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-              <p style={{ margin: '4px 0', fontSize: 13 }}>
+              <p style={{ margin: '4px 0', fontSize: 14 }}>
                 <strong>{q.question}</strong> <span className="muted">({q.question_type})</span>
                 <SourceRefs refs={q.source_refs} manifest={manifest} />
               </p>
-              <p style={{ fontSize: 13, margin: '4px 0' }}>{q.answer_plan.approach}</p>
+              <p style={{ fontSize: 14, margin: '4px 0' }}>{q.answer_plan.approach}</p>
               {q.answer_plan.evidence_points.length > 0 && (
-                <ul style={{ margin: '4px 0 0 18px', fontSize: 13 }}>
+                <ul style={{ margin: '4px 0 0 18px', fontSize: 14 }}>
                   {q.answer_plan.evidence_points.map((e, j) => (
                     <li key={j}>
                       {e.text}
@@ -1118,7 +1118,7 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
                 </ul>
               )}
               {q.answer_plan.cautions.map((caution, j) => (
-                <p key={j} style={{ fontSize: 12, margin: '4px 0', color: 'var(--warning)' }}>
+                <p key={j} style={{ fontSize: 14, margin: '4px 0', color: 'var(--warning)' }}>
                   {caution.text}
                   <SourceRefs refs={caution.source_refs} manifest={manifest} />
                 </p>
@@ -1129,7 +1129,7 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
       )}
       {c.questions_to_ask.length > 0 && (
         <>
-          <strong style={{ fontSize: 12 }}>Questions to ask</strong>
+          <strong style={{ fontSize: 14 }}>Questions to ask</strong>
           {c.questions_to_ask.map((q, i) => (
             <SourcedBlock key={i} block={q} manifest={manifest} />
           ))}
@@ -1137,14 +1137,14 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
       )}
       {c.closing_points.length > 0 && (
         <>
-          <strong style={{ fontSize: 12 }}>Closing points</strong>
+          <strong style={{ fontSize: 14 }}>Closing points</strong>
           {c.closing_points.map((p, i) => (
             <SourcedBlock key={i} block={p} manifest={manifest} />
           ))}
         </>
       )}
       {c.prep_checklist.length > 0 && (
-        <p style={{ fontSize: 13 }}>
+        <p style={{ fontSize: 14 }}>
           <strong>Prep checklist:</strong> {c.prep_checklist.join(' · ')}
         </p>
       )}
@@ -1156,11 +1156,11 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
 
 function ListEditor({ label, value, onChange }: { label: string; value: string[]; onChange: (v: string[]) => void }) {
   return (
-    <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+    <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
       {label}
       <textarea
         rows={2}
-        style={{ width: '100%', fontSize: 13 }}
+        style={{ width: '100%', fontSize: 14 }}
         value={value.join('\n')}
         onChange={(e) => onChange(e.target.value.split('\n'))}
         placeholder="One per line"
@@ -1182,32 +1182,32 @@ function ArtifactEditor({
     const c = draft as PositioningContent
     return (
       <div>
-        <label style={{ display: 'block', fontSize: 12 }}>
+        <label style={{ display: 'block', fontSize: 14 }}>
           Positioning statement
           <textarea
             rows={3}
-            style={{ width: '100%', fontSize: 13 }}
+            style={{ width: '100%', fontSize: 14 }}
             value={c.positioning_statement.text}
             onChange={(e) => onChange({ ...c, positioning_statement: { ...c.positioning_statement, text: e.target.value } })}
           />
         </label>
         {c.themes.map((t, i) => (
-          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          <label key={i} style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
             Theme: {t.title}
             <textarea
               rows={2}
-              style={{ width: '100%', fontSize: 13 }}
+              style={{ width: '100%', fontSize: 14 }}
               value={t.message}
               onChange={(e) => onChange({ ...c, themes: c.themes.map((x, j) => (j === i ? { ...x, message: e.target.value } : x)) })}
             />
           </label>
         ))}
         {c.requirements_to_lead_with.map((r, i) => (
-          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          <label key={i} style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
             Reason to lead with this requirement
             <textarea
               rows={2}
-              style={{ width: '100%', fontSize: 13 }}
+              style={{ width: '100%', fontSize: 14 }}
               value={r.reason}
               onChange={(e) =>
                 onChange({ ...c, requirements_to_lead_with: c.requirements_to_lead_with.map((x, j) => (j === i ? { ...x, reason: e.target.value } : x)) })
@@ -1216,11 +1216,11 @@ function ArtifactEditor({
           </label>
         ))}
         {c.gaps_and_cautions.map((g, i) => (
-          <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+          <label key={i} style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
             Gap/caution
             <textarea
               rows={2}
-              style={{ width: '100%', fontSize: 13 }}
+              style={{ width: '100%', fontSize: 14 }}
               value={g.message}
               onChange={(e) => onChange({ ...c, gaps_and_cautions: c.gaps_and_cautions.map((x, j) => (j === i ? { ...x, message: e.target.value } : x)) })}
             />
@@ -1235,25 +1235,25 @@ function ArtifactEditor({
     const c = draft as CVContent
     return (
       <div>
-        <label style={{ display: 'block', fontSize: 12 }}>
+        <label style={{ display: 'block', fontSize: 14 }}>
           Profile summary
           <textarea
             rows={3}
-            style={{ width: '100%', fontSize: 13 }}
+            style={{ width: '100%', fontSize: 14 }}
             value={c.profile_summary.text}
             onChange={(e) => onChange({ ...c, profile_summary: { ...c.profile_summary, text: e.target.value } })}
           />
         </label>
         {c.experience.map((entry, i) => (
           <div key={i} style={{ marginTop: 8 }}>
-            <div className="muted" style={{ fontSize: 12 }}>
+            <div className="muted" style={{ fontSize: 14 }}>
               {entry.title} — {entry.organisation}
             </div>
             {entry.bullets.map((b, j) => (
               <textarea
                 key={j}
                 rows={2}
-                style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+                style={{ width: '100%', fontSize: 14, marginTop: 4 }}
                 value={b.text}
                 onChange={(e) =>
                   onChange({
@@ -1270,7 +1270,7 @@ function ArtifactEditor({
         {c.skills.map((s, i) => (
           <input
             key={i}
-            style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+            style={{ width: '100%', fontSize: 14, marginTop: 4 }}
             value={s.text}
             onChange={(e) => onChange({ ...c, skills: c.skills.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
           />
@@ -1283,30 +1283,30 @@ function ArtifactEditor({
     const c = draft as CoverLetterContent
     return (
       <div>
-        <label style={{ display: 'block', fontSize: 12 }}>
+        <label style={{ display: 'block', fontSize: 14 }}>
           Salutation
-          <input style={{ width: '100%', fontSize: 13 }} value={c.salutation} onChange={(e) => onChange({ ...c, salutation: e.target.value })} />
+          <input style={{ width: '100%', fontSize: 14 }} value={c.salutation} onChange={(e) => onChange({ ...c, salutation: e.target.value })} />
         </label>
-        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
           Opening
-          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
+          <textarea rows={2} style={{ width: '100%', fontSize: 14 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
         </label>
         {c.body.map((b, i) => (
           <textarea
             key={i}
             rows={3}
-            style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+            style={{ width: '100%', fontSize: 14, marginTop: 8 }}
             value={b.text}
             onChange={(e) => onChange({ ...c, body: c.body.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
           />
         ))}
-        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
           Closing
-          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.closing.text} onChange={(e) => onChange({ ...c, closing: { ...c.closing, text: e.target.value } })} />
+          <textarea rows={2} style={{ width: '100%', fontSize: 14 }} value={c.closing.text} onChange={(e) => onChange({ ...c, closing: { ...c.closing, text: e.target.value } })} />
         </label>
-        <label style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        <label style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
           Sign-off
-          <input style={{ width: '100%', fontSize: 13 }} value={c.sign_off} onChange={(e) => onChange({ ...c, sign_off: e.target.value })} />
+          <input style={{ width: '100%', fontSize: 14 }} value={c.sign_off} onChange={(e) => onChange({ ...c, sign_off: e.target.value })} />
         </label>
       </div>
     )
@@ -1315,14 +1315,14 @@ function ArtifactEditor({
     const c = draft as SupportingStatementContent
     return (
       <div>
-        <label style={{ display: 'block', fontSize: 12 }}>
+        <label style={{ display: 'block', fontSize: 14 }}>
           Opening
-          <textarea rows={2} style={{ width: '100%', fontSize: 13 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
+          <textarea rows={2} style={{ width: '100%', fontSize: 14 }} value={c.opening.text} onChange={(e) => onChange({ ...c, opening: { ...c.opening, text: e.target.value } })} />
         </label>
         {c.sections.map((s, i) => (
           <div key={i} style={{ marginTop: 8 }}>
             <input
-              style={{ width: '100%', fontSize: 13, fontWeight: 600 }}
+              style={{ width: '100%', fontSize: 14, fontWeight: 600 }}
               value={s.heading}
               onChange={(e) => onChange({ ...c, sections: c.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })}
             />
@@ -1330,7 +1330,7 @@ function ArtifactEditor({
               <textarea
                 key={k}
                 rows={2}
-                style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+                style={{ width: '100%', fontSize: 14, marginTop: 4 }}
                 value={p.text}
                 onChange={(e) =>
                   onChange({
@@ -1352,11 +1352,11 @@ function ArtifactEditor({
   return (
     <div>
       {c.focus_areas.map((f, i) => (
-        <label key={i} style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
+        <label key={i} style={{ display: 'block', fontSize: 14, marginTop: 8 }}>
           Focus area: {f.title}
           <textarea
             rows={2}
-            style={{ width: '100%', fontSize: 13 }}
+            style={{ width: '100%', fontSize: 14 }}
             value={f.why_it_matters}
             onChange={(e) => onChange({ ...c, focus_areas: c.focus_areas.map((x, j) => (j === i ? { ...x, why_it_matters: e.target.value } : x)) })}
           />
@@ -1364,20 +1364,20 @@ function ArtifactEditor({
       ))}
       {c.questions.map((q, i) => (
         <div key={i} style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-          <label style={{ display: 'block', fontSize: 12 }}>
+          <label style={{ display: 'block', fontSize: 14 }}>
             Question
             <textarea
               rows={2}
-              style={{ width: '100%', fontSize: 13 }}
+              style={{ width: '100%', fontSize: 14 }}
               value={q.question}
               onChange={(e) => onChange({ ...c, questions: c.questions.map((x, j) => (j === i ? { ...x, question: e.target.value } : x)) })}
             />
           </label>
-          <label style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+          <label style={{ display: 'block', fontSize: 14, marginTop: 4 }}>
             Approach
             <textarea
               rows={2}
-              style={{ width: '100%', fontSize: 13 }}
+              style={{ width: '100%', fontSize: 14 }}
               value={q.answer_plan.approach}
               onChange={(e) =>
                 onChange({
@@ -1391,7 +1391,7 @@ function ArtifactEditor({
             <textarea
               key={k}
               rows={2}
-              style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+              style={{ width: '100%', fontSize: 14, marginTop: 4 }}
               value={ep.text}
               onChange={(e) =>
                 onChange({
@@ -1415,7 +1415,7 @@ function ArtifactEditor({
             <textarea
               key={k}
               rows={2}
-              style={{ width: '100%', fontSize: 13, marginTop: 4 }}
+              style={{ width: '100%', fontSize: 14, marginTop: 4 }}
               value={caution.text}
               onChange={(e) =>
                 onChange({
@@ -1441,7 +1441,7 @@ function ArtifactEditor({
         <textarea
           key={i}
           rows={2}
-          style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+          style={{ width: '100%', fontSize: 14, marginTop: 8 }}
           value={q.text}
           onChange={(e) => onChange({ ...c, questions_to_ask: c.questions_to_ask.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
         />
@@ -1450,7 +1450,7 @@ function ArtifactEditor({
         <textarea
           key={i}
           rows={2}
-          style={{ width: '100%', fontSize: 13, marginTop: 8 }}
+          style={{ width: '100%', fontSize: 14, marginTop: 8 }}
           value={p.text}
           onChange={(e) => onChange({ ...c, closing_points: c.closing_points.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })}
         />
@@ -1470,8 +1470,8 @@ function GenerationContextCard({ evidence, hasAdoptedPositioning }: { evidence: 
   const pending = review ? review.unreviewed + review.unresolved_proposals + review.needs_reextraction : 0
   const examples = evidence.notes.filter((n) => n.note_type === 'evidence_example').length
   return (
-    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12 }}>
-      <strong style={{ fontSize: 13 }}>What a new draft will use</strong>
+    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 14 }}>
+      <strong style={{ fontSize: 14 }}>What a new draft will use</strong>
       <p className="secondary" style={{ margin: '4px 0 0' }}>
         {pluralize(reviewed, 'reviewed requirement')} will be used
         {pending > 0 ? ` · ${pluralize(pending, 'pending/unreviewed item')} excluded` : ''}
@@ -1491,10 +1491,10 @@ function GenerationContextCard({ evidence, hasAdoptedPositioning }: { evidence: 
 
 function StateBadge({ artifact }: { artifact: ApplicationArtifact }) {
   if (artifact.status === 'active' && artifact.stale) {
-    return <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 600 }}>Current — but stale</span>
+    return <span style={{ fontSize: 14, color: 'var(--warning)', fontWeight: 600 }}>Current — but stale</span>
   }
-  if (artifact.status === 'active') return <span style={{ fontSize: 11, color: 'var(--good)', fontWeight: 600 }}>Current</span>
-  return <span style={{ fontSize: 11, color: 'var(--series-1)', fontWeight: 600 }}>Draft awaiting review</span>
+  if (artifact.status === 'active') return <span style={{ fontSize: 14, color: 'var(--good)', fontWeight: 600 }}>Current</span>
+  return <span style={{ fontSize: 14, color: 'var(--series-1)', fontWeight: 600 }}>Draft awaiting review</span>
 }
 
 function ArtifactStageCard({
@@ -1565,18 +1565,18 @@ function ArtifactStageCard({
         <h3 id={`stage-${artifactType}-h`} style={{ fontSize: 16, margin: 0 }}>
           {ARTIFACT_LABELS[artifactType]}
         </h3>
-        {shown ? <StateBadge artifact={shown} /> : <span className="muted" style={{ fontSize: 11 }}>Not generated</span>}
+        {shown ? <StateBadge artifact={shown} /> : <span className="muted" style={{ fontSize: 14 }}>Not generated</span>}
       </div>
 
       {(active || draft) && (
         <div className="actions" style={{ marginTop: 6 }}>
           {active && (
-            <button type="button" onClick={() => setViewing('active')} disabled={viewing === 'active'} style={{ fontSize: 12, padding: '3px 8px' }}>
+            <button type="button" onClick={() => setViewing('active')} disabled={viewing === 'active'} style={{ fontSize: 14, padding: '3px 8px' }}>
               View current
             </button>
           )}
           {draft && (
-            <button type="button" onClick={() => setViewing('draft')} disabled={viewing === 'draft'} style={{ fontSize: 12, padding: '3px 8px' }}>
+            <button type="button" onClick={() => setViewing('draft')} disabled={viewing === 'draft'} style={{ fontSize: 14, padding: '3px 8px' }}>
               View draft
             </button>
           )}
@@ -1584,12 +1584,12 @@ function ArtifactStageCard({
       )}
 
       {shown && shown.grounding_status === 'user_edited_not_revalidated' && (
-        <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        <p className="muted" style={{ fontSize: 14, marginTop: 6 }}>
           User edited — source trace has not been automatically revalidated after this edit.
         </p>
       )}
       {shown && shown.status === 'active' && shown.stale && (
-        <p role="status" style={{ fontSize: 12, color: 'var(--warning)', marginTop: 6 }}>
+        <p role="status" style={{ fontSize: 14, color: 'var(--warning)', marginTop: 6 }}>
           Evidence or application context has changed since this version was generated. You can keep using it or regenerate.
         </p>
       )}
@@ -1605,22 +1605,22 @@ function ArtifactStageCard({
         </div>
       )}
 
-      {!shown && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Not generated yet.</p>}
+      {!shown && <p className="muted" style={{ fontSize: 14, marginTop: 8 }}>Not generated yet.</p>}
 
-      {error && <p role="alert" style={{ color: 'var(--critical)', fontSize: 12, marginTop: 8 }}>{error}</p>}
+      {error && <p role="alert" style={{ color: 'var(--critical)', fontSize: 14, marginTop: 8 }}>{error}</p>}
 
       <div className="actions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
         {shown && !editing && (
           <>
-            <button type="button" onClick={() => startEdit(shown)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+            <button type="button" onClick={() => startEdit(shown)} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
               Edit
             </button>
             {viewing === 'draft' && draft && (
               <>
-                <button type="button" className="primary" onClick={() => handleAdopt(draft.id)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+                <button type="button" className="primary" onClick={() => handleAdopt(draft.id)} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
                   Adopt
                 </button>
-                <button type="button" onClick={() => handleDiscard(draft.id)} disabled={busy} style={{ fontSize: 12, padding: '3px 8px' }}>
+                <button type="button" onClick={() => handleDiscard(draft.id)} disabled={busy} style={{ fontSize: 14, padding: '3px 8px' }}>
                   Discard
                 </button>
               </>
@@ -1628,14 +1628,14 @@ function ArtifactStageCard({
             <button
               type="button"
               onClick={async () => { setCopyStatus((await copyToClipboard(renderArtifactMarkdown(artifactType, shown.content))) ? 'Copied' : 'Copy failed'); setTimeout(() => setCopyStatus(null), 2000) }}
-              style={{ fontSize: 12, padding: '3px 8px' }}
+              style={{ fontSize: 14, padding: '3px 8px' }}
             >
               {copyStatus ?? 'Copy as Markdown'}
             </button>
             <button
               type="button"
               onClick={() => downloadText(`${artifactType}.md`, renderArtifactMarkdown(artifactType, shown.content))}
-              style={{ fontSize: 12, padding: '3px 8px' }}
+              style={{ fontSize: 14, padding: '3px 8px' }}
             >
               Download .md
             </button>
@@ -1643,10 +1643,10 @@ function ArtifactStageCard({
         )}
         {editing && shown && (
           <>
-            <button type="button" className="primary" disabled={busy} onClick={() => handleSaveEdit(shown.id)} style={{ fontSize: 12, padding: '3px 8px' }}>
+            <button type="button" className="primary" disabled={busy} onClick={() => handleSaveEdit(shown.id)} style={{ fontSize: 14, padding: '3px 8px' }}>
               {busy ? 'Saving…' : 'Save edit'}
             </button>
-            <button type="button" disabled={busy} onClick={() => setEditing(false)} style={{ fontSize: 12, padding: '3px 8px' }}>
+            <button type="button" disabled={busy} onClick={() => setEditing(false)} style={{ fontSize: 14, padding: '3px 8px' }}>
               Cancel
             </button>
           </>
@@ -1656,12 +1656,12 @@ function ArtifactStageCard({
       {!editing && (
         <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
           <details>
-            <summary style={{ fontSize: 12, cursor: 'pointer' }}>{active || draft ? 'Regenerate' : 'Generate'} with optional guidance</summary>
+            <summary style={{ fontSize: 14, cursor: 'pointer' }}>{active || draft ? 'Regenerate' : 'Generate'} with optional guidance</summary>
             <div style={{ marginTop: 6 }}>
               <textarea
                 rows={2}
                 placeholder="Optional guidance — tone, emphasis, specific instructions…"
-                style={{ width: '100%', fontSize: 13 }}
+                style={{ width: '100%', fontSize: 14 }}
                 value={guidance}
                 onChange={(e) => setGuidance(e.target.value)}
               />
@@ -1670,12 +1670,12 @@ function ArtifactStageCard({
                 placeholder="Target words (optional)"
                 min={50}
                 max={5000}
-                style={{ width: 180, fontSize: 13, marginTop: 6 }}
+                style={{ width: 180, fontSize: 14, marginTop: 6 }}
                 value={targetWords}
                 onChange={(e) => setTargetWords(e.target.value)}
               />
               <div className="actions" style={{ marginTop: 6 }}>
-                <button type="button" className="primary" disabled={busy} onClick={handleGenerate} style={{ fontSize: 12, padding: '3px 8px' }}>
+                <button type="button" className="primary" disabled={busy} onClick={handleGenerate} style={{ fontSize: 14, padding: '3px 8px' }}>
                   {busy ? 'Generating…' : active || draft ? 'Regenerate' : 'Generate'}
                 </button>
               </div>
@@ -1711,7 +1711,7 @@ function ApplicationPackageSection({
       <ArtifactStageCard applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onChanged={onChanged} />
       <ArtifactStageCard applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onChanged={onChanged} />
       <h3 style={{ fontSize: 15, marginTop: 16 }}>Supporting material</h3>
-      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         Optional — generate either or both only if this application needs them.
       </p>
       <ArtifactStageCard applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onChanged={onChanged} />
@@ -1734,15 +1734,15 @@ function InterviewContextCard({ events, status }: { events: ApplicationEvent[] |
   const latestWithNotes = events?.find((e) => e.notes)
   return (
     <div className="card" style={{ padding: 10, marginBottom: 12 }}>
-      <strong style={{ fontSize: 13 }}>Interview context</strong>
-      <p className="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>
+      <strong style={{ fontSize: 14 }}>Interview context</strong>
+      <p className="secondary" style={{ margin: '4px 0 0', fontSize: 14 }}>
         Current status: {APPLICATION_STATUSES.find((s) => s.value === status)?.label ?? status}.{' '}
         {upcoming
           ? `Next: ${EVENT_TYPE_LABEL[upcoming.event_type]}${upcoming.label ? ` — ${upcoming.label}` : ''} on ${formatEventAt(upcoming.event_at)}.`
           : 'No interview currently scheduled.'}
       </p>
       {latestWithNotes && (
-        <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 14 }}>
           Latest note ({EVENT_TYPE_LABEL[latestWithNotes.event_type]}): {latestWithNotes.notes}
         </p>
       )}
@@ -1759,8 +1759,8 @@ function InterviewReadinessCard({ ctx }: { ctx: InterviewGenerationContextSummar
     ctx.active_supporting_statement_available && 'supporting statement',
   ].filter((x): x is string => Boolean(x))
   return (
-    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12 }}>
-      <strong style={{ fontSize: 13 }}>What this prep will use</strong>
+    <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 14 }}>
+      <strong style={{ fontSize: 14 }}>What this prep will use</strong>
       <p className="secondary" style={{ margin: '4px 0 0' }}>
         {pluralize(ctx.reviewed_requirements_used, 'reviewed requirement')} will be used
         {ctx.pending_unreviewed_excluded > 0 ? ` · ${pluralize(ctx.pending_unreviewed_excluded, 'pending/unreviewed item')} excluded` : ''}
@@ -1840,7 +1840,7 @@ function ApplicationNotesSection({
       <h2 id="app-notes-h" style={{ fontSize: 18, marginTop: 0 }}>
         Application notes
       </h2>
-      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         Notes here are specific to this application. They never become Profile360 claims, mappings or evidence
         unless you explicitly send one to Profile360 for review.
       </p>
@@ -1879,6 +1879,13 @@ function ApplicationNotesSection({
 
 export default function ApplicationWorkspace() {
   const { id } = useParams()
+  const [stageParams, setStageParams] = useSearchParams()
+  const location = useLocation()
+  const returnTo = useRef(typeof location.state?.returnTo === 'string' && /^\/applications(?:\?|$)/.test(location.state.returnTo) ? location.state.returnTo : '/applications')
+  const stages = ['overview', 'evidence', 'documents', 'interviews', 'all'] as const
+  const requestedStage = stageParams.get('section') ?? 'overview'
+  const stage = stages.some(s => s === requestedStage) ? requestedStage : 'overview'
+  const visible = (name: string) => stage === 'all' || stage === name
   const currentId = useRef(id)
 
   const [detail, setDetail] = useState<ApplicationDetail | null>(null)
@@ -2149,8 +2156,8 @@ export default function ApplicationWorkspace() {
 
   return (
     <div>
-      <Link to={`/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
-        ← Back to opportunity
+      <Link to={returnTo.current} className="muted" style={{ fontSize: 14 }}>
+        ← Back to applications
       </Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 12, flexWrap: 'wrap', gap: 12 }}>
@@ -2160,12 +2167,12 @@ export default function ApplicationWorkspace() {
             {role.organisation ?? 'Unknown org'}
             {role.location ? ` · ${role.location}` : ''}
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>
             Created {formatDateTime(application.created_at)} · updated {formatDateTime(application.updated_at)}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <label htmlFor="application-status" className="muted" style={{ fontSize: 12, display: 'block' }}>
+          <label htmlFor="application-status" className="muted" style={{ fontSize: 14, display: 'block' }}>
             Application status
           </label>
           <select
@@ -2183,44 +2190,39 @@ export default function ApplicationWorkspace() {
           </select>
         </div>
       </div>
-      {statusError && <p role="alert" style={{ color: 'var(--critical)', fontSize: 13 }}>{statusError}</p>}
+      {statusError && <p role="alert" style={{ color: 'var(--critical)', fontSize: 14 }}>{statusError}</p>}
 
-      <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+      <p className="muted" style={{ fontSize: 14, marginTop: 8 }}>
         This status is set by you — it never changes automatically based on the preparation checks below.
       </p>
 
+      <nav className="workspace-stages" aria-label="Application stages">
+        {stages.map((name, index) => <Link key={name} to={{ pathname: location.pathname, search: (() => { const p = new URLSearchParams(stageParams); p.set('section', name); return p.toString() })() }}
+          state={{ returnTo: returnTo.current }} aria-current={stage === name ? 'page' : undefined}>
+          {name !== 'all' && <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>}{name === 'all' ? 'All sections' : name.charAt(0).toUpperCase() + name.slice(1)}
+        </Link>)}
+      </nav>
+      <p className="stage-help">{stage === 'overview' ? 'Start with your preparation checks, then gather examples in Evidence.' : stage === 'evidence' ? 'Bring together the examples and experience you want to draw on. Draft edits stay here when you switch stages.' : stage === 'documents' ? 'Prepare and review your application materials before using them.' : stage === 'interviews' ? 'Keep your interview preparation, dates and reflections together.' : 'Your complete workspace, in one view.'}</p>
+      <div hidden={!visible('overview')} className="workspace-panel" aria-label="Overview section">
       {/* Phase 7 (docs/38 build §16): compact, read-only — never mutates
           application status or artifacts, and a failed fetch here never
           blanks the rest of the workspace (build §26). */}
       <div style={{ marginTop: 16 }}>
         <AlignmentDecisionTile alignment={alignment} error={alignmentError} onRetry={loadAlignment} />
         {alignment?.target && (
-          <p style={{ marginTop: 8, fontSize: 13 }}>
+          <p style={{ marginTop: 8, fontSize: 14 }}>
             <Link to={`/pathways/${alignment.target.id}?opportunity_id=${role.id}`}>View this opportunity in Pathways</Link>
           </p>
         )}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <LifecycleSection
-          status={application.status}
-          events={events}
-          eventsError={eventsError}
-          busy={eventBusy}
-          actionError={eventActionError}
-          onAdd={handleAddEvent}
-          onSave={handleSaveEvent}
-          onDelete={handleDeleteEvent}
-          learningState={learningState}
-          promoteBusyKey={promoteBusyKey}
-          onPromoteEvent={handlePromoteEvent}
-        />
       </div>
 
       <div className="home-grid" style={{ marginTop: 16 }}>
         <PreparationChecks detail={detail} evidence={evidence} />
       </div>
 
+      <button className="button primary" onClick={() => setStageParams(prev => { const p = new URLSearchParams(prev); p.set('section', 'evidence'); return p }, { state: { returnTo: returnTo.current } })}>Continue to evidence →</button>
+      </div>
+      <div hidden={!visible('evidence')} className="workspace-panel" aria-label="Evidence section">
       {evidenceError && (
         <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>
           Evidence couldn't be loaded: {evidenceError}
@@ -2237,7 +2239,7 @@ export default function ApplicationWorkspace() {
       {noteError && <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>{noteError}</p>}
       {promoteError && <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>{promoteError}</p>}
       {learningStateError && (
-        <p className="muted" style={{ marginTop: 16, fontSize: 12 }}>
+        <p className="muted" style={{ marginTop: 16, fontSize: 14 }}>
           Profile360 review status couldn't be checked just now: {learningStateError}
         </p>
       )}
@@ -2255,6 +2257,8 @@ export default function ApplicationWorkspace() {
         />
       </div>
 
+      </div>
+      <div hidden={!visible('documents')} className="workspace-panel" aria-label="Documents section">
       {artifactsError && (
         <p role="alert" style={{ color: 'var(--critical)', marginTop: 16 }}>
           Application package couldn't be loaded: {artifactsError}
@@ -2265,6 +2269,24 @@ export default function ApplicationWorkspace() {
         <ApplicationPackageSection applicationId={application.id} evidence={evidence} artifactsData={artifactsData} onChanged={loadArtifacts} />
       </div>
 
+      </div>
+      <div hidden={!visible('interviews')} className="workspace-panel" aria-label="Interviews section">
+      <div style={{ marginTop: 16 }}>
+        <LifecycleSection
+          status={application.status}
+          events={events}
+          eventsError={eventsError}
+          busy={eventBusy}
+          actionError={eventActionError}
+          onAdd={handleAddEvent}
+          onSave={handleSaveEvent}
+          onDelete={handleDeleteEvent}
+          learningState={learningState}
+          promoteBusyKey={promoteBusyKey}
+          onPromoteEvent={handlePromoteEvent}
+        />
+      </div>
+
       <InterviewStage
         applicationId={application.id}
         status={application.status}
@@ -2272,6 +2294,7 @@ export default function ApplicationWorkspace() {
         artifactsData={artifactsData}
         onChanged={loadArtifacts}
       />
+      </div>
     </div>
   )
 }
