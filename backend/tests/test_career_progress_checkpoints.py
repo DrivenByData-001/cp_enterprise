@@ -477,3 +477,42 @@ def test_full_checkpoint_diff_via_api_reflects_a_new_accepted_claim(client):
     assert progress["state"] == "available"
     strengthened_ids = {e["concept_id"] for e in progress["diff"]["evidence_strengthened"]}
     assert gap in strengthened_ids
+
+
+def test_comparison_limited_while_mapping_incomplete_then_resumes_automatically(client):
+    """While the *current* Target's mapping (or review) is incomplete, the
+    diff is withheld and `comparison_state` says so explicitly — but current
+    structural counts and the review/mapping flags stay fully visible. The
+    moment mapping is resolved, the normal diff resumes on the very next
+    read — there is no separate "resume" action, since comparison_state is
+    derived fresh from current state on every call."""
+    with db_cursor() as cur:
+        target_id, evidenced, gap = _target_with_one_evidenced_one_gap(cur)
+        _selected_direction(cur, target_id=target_id)
+
+    baseline = client.post("/api/cockpit/progress/checkpoints").json()
+    assert baseline["checkpoint_type"] == "baseline"
+
+    with db_cursor() as cur:
+        _unmapped_observation(cur, target_id, "Some unmapped skill")
+        _evidence_for(cur, gap, name="Capital management")  # would show as strengthened, if not withheld
+
+    limited = client.get("/api/cockpit/progress").json()
+    assert limited["state"] == "available"
+    assert limited["comparison_state"] == "limited"
+    assert limited["diff"] is None
+    # Current structural counts and the "needs attention" signal remain visible.
+    assert limited["current"]["counts"]["evidenced"] == 2
+    assert limited["current"]["review"]["target_mapping_complete"] is False
+
+    with db_cursor() as cur:
+        cur.execute(
+            "DELETE FROM jobber.role_skill_observation WHERE role_instance_id = %s AND canonical_concept_id IS NULL",
+            (target_id,),
+        )
+
+    resumed = client.get("/api/cockpit/progress").json()
+    assert resumed["comparison_state"] == "normal"
+    assert resumed["current"]["review"]["target_mapping_complete"] is True
+    strengthened_ids = {e["concept_id"] for e in resumed["diff"]["evidence_strengthened"]}
+    assert gap in strengthened_ids

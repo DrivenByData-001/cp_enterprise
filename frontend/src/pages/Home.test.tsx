@@ -74,7 +74,7 @@ function emptyDiff(): ProgressDiff {
 function baseCockpit(overrides: Partial<Cockpit> = {}): Cockpit {
   return {
     direction: noDirection,
-    target_progress: { state: 'no_direction', direction: null, current: null, checkpoint: null, diff: null, history: [] },
+    target_progress: { state: 'no_direction', direction: null, current: null, checkpoint: null, comparison_state: null, diff: null, history: [] },
     opportunities: { state: 'available', items: [] },
     applications: { state: 'available', active_count: 0, by_status: {}, active_items: [], next_interview: null, recent_outcomes: [] },
     learning: { state: 'available', items: [] },
@@ -159,7 +159,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
   it('shows current evidence counts distinctly (evidenced/partial/asserted/not_found)', async () => {
     await renderHome(baseCockpit({
       direction: withTarget,
-      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, diff: null, history: [] },
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] },
     }))
     const section = await findSection('Progress toward Target')
     expect(within(section).getAllByText('1')).toHaveLength(2) // evidenced=1 and not_found=1
@@ -170,7 +170,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
   it('with no comparable checkpoint, offers "Record progress baseline" with a non-evidence explanation', async () => {
     await renderHome(baseCockpit({
       direction: withTarget,
-      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, diff: null, history: [] },
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] },
     }))
     expect(await screen.findByText('Record progress baseline')).toBeTruthy()
     expect(screen.getByText(/does not create evidence or change your profile/)).toBeTruthy()
@@ -179,7 +179,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
   it('recording a baseline is POST-only on click, never automatic on mount', async () => {
     await renderHome(baseCockpit({
       direction: withTarget,
-      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, diff: null, history: [] },
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] },
     }))
     await screen.findByText('Record progress baseline')
     expect(api.recordProgressCheckpoint).not.toHaveBeenCalled()
@@ -190,7 +190,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
   it('refreshes the Cockpit after recording a baseline', async () => {
     await renderHome(baseCockpit({
       direction: withTarget,
-      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, diff: null, history: [] },
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] },
     }))
     await screen.findByText('Record progress baseline')
     vi.mocked(api.getCockpit).mockResolvedValue(baseCockpit({
@@ -198,7 +198,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff: emptyDiff(), history: [],
+        comparison_state: 'normal', diff: emptyDiff(), history: [],
       },
     }))
     fireEvent.click(screen.getByText('Record progress baseline'))
@@ -213,7 +213,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState({ counts: { requirements_total: 2, required_total: 2, evidenced: 2, partial: 0, user_asserted: 0, not_found: 0, blocking_required: 0, unverified_required: 0 } }),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-02-01T00:00:00Z' },
-        diff, history: [],
+        comparison_state: 'normal', diff, history: [],
       },
     }))
     expect(await screen.findByText(/Changes since/)).toBeTruthy()
@@ -228,10 +228,37 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff, history: [],
+        comparison_state: 'normal', diff, history: [],
       },
     }))
     expect(await screen.findByText(/weakened or no longer supported/)).toBeTruthy()
+  })
+
+  it('suppresses evidence-diff language and shows a limited-comparison note while review/mapping is incomplete', async () => {
+    await renderHome(baseCockpit({
+      direction: withTarget,
+      target_progress: {
+        state: 'available',
+        direction: { id: 'dir-1', name: 'X' },
+        current: currentState({ review: { target_review_complete: true, target_mapping_complete: false } }),
+        checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
+        comparison_state: 'limited',
+        diff: null,
+        history: [],
+      },
+    }))
+    const section = await findSection('Progress toward Target')
+    // Current structural counts remain visible (evidenced=1, not_found=1).
+    expect(within(section).getAllByText('1')).toHaveLength(2)
+    // "Needs attention" messaging stays visible.
+    expect(within(section).getByText(/incomplete/)).toBeTruthy()
+    expect(within(section).getByText(/Progress comparison is limited/)).toBeTruthy()
+    // No evidence-strengthened/weakened language, and no diff heading.
+    expect(within(section).queryByText(/stronger evidence/)).toBeNull()
+    expect(within(section).queryByText(/weakened or no longer supported/)).toBeNull()
+    expect(within(section).queryByText(/Changes since/)).toBeNull()
+    // Recording a new checkpoint is still offered.
+    expect(within(section).getByText('Record new checkpoint')).toBeTruthy()
   })
 
   it('shows Target-definition changes separately from evidence progress', async () => {
@@ -241,7 +268,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff, history: [],
+        comparison_state: 'normal', diff, history: [],
       },
     }))
     expect(await screen.findByText('The Target definition changed since your last checkpoint.')).toBeTruthy()
@@ -251,7 +278,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
   it('a new Target with no comparable checkpoint shows "no checkpoint", not a stale comparison', async () => {
     await renderHome(baseCockpit({
       direction: withTarget,
-      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, diff: null, history: [] },
+      target_progress: { state: 'no_checkpoint', direction: { id: 'dir-1', name: 'X' }, current: currentState(), checkpoint: null, comparison_state: null, diff: null, history: [] },
     }))
     expect(await screen.findByText('Record progress baseline')).toBeTruthy()
     expect(screen.queryByText(/Changes since/)).toBeNull()
@@ -263,7 +290,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff: emptyDiff(), history: [],
+        comparison_state: 'normal', diff: emptyDiff(), history: [],
       },
     }))
     const input = await screen.findByLabelText('Optional label')
@@ -278,7 +305,7 @@ describe('Home — Target progress (build §18/§29/§30/§31)', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff: emptyDiff(),
+        comparison_state: 'normal', diff: emptyDiff(),
         history: [{ id: 'cp-1', checkpoint_type: 'baseline', label: 'First look', created_at: '2026-01-01T00:00:00Z', target_role_instance_id: 'target-1', target_title: 'Head of Capital', counts: { evidenced: 1, requirements_total: 2 } }],
       },
     }))
@@ -413,7 +440,7 @@ describe('Home — no overall score anywhere', () => {
       target_progress: {
         state: 'available', direction: { id: 'dir-1', name: 'X' }, current: currentState(),
         checkpoint: { id: 'cp-1', career_direction_id: 'dir-1', target_role_instance_id: 'target-1', checkpoint_type: 'baseline', label: null, state_schema_version: 1, state: currentState(), source_revision: {}, created_at: '2026-01-01T00:00:00Z' },
-        diff: emptyDiff(), history: [],
+        comparison_state: 'normal', diff: emptyDiff(), history: [],
       },
     }))
     await screen.findByText('Progress toward Target')

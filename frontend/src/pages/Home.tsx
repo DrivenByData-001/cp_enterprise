@@ -308,7 +308,14 @@ function TargetProgressSection({
             </div>
           )}
 
-          {section.state === 'available' && section.diff && (
+          {section.state === 'available' && section.comparison_state === 'limited' && (
+            <p className="secondary" style={{ fontSize: 13, marginTop: 12 }}>
+              Progress comparison is limited until Target requirement review and mapping are complete — evidence-change
+              comparison against your last checkpoint will resume automatically once they are.
+            </p>
+          )}
+
+          {section.state === 'available' && section.comparison_state === 'normal' && section.diff && (
             <DiffSummary diff={section.diff} since={section.checkpoint?.created_at ?? null} />
           )}
 

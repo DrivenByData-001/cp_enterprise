@@ -26,7 +26,7 @@ vi.mock('./lib/api', () => ({
 function emptyCockpit(): Cockpit {
   return {
     direction: { state: 'no_direction', direction: null, target: null },
-    target_progress: { state: 'no_direction', direction: null, current: null, checkpoint: null, diff: null, history: [] },
+    target_progress: { state: 'no_direction', direction: null, current: null, checkpoint: null, comparison_state: null, diff: null, history: [] },
     opportunities: { state: 'available', items: [] },
     applications: { state: 'available', active_count: 0, by_status: {}, active_items: [], next_interview: null, recent_outcomes: [] },
     learning: { state: 'available', items: [] },

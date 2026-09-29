@@ -3242,15 +3242,25 @@ export type ProgressDiff = {
   unchanged_count: number
 }
 
+// "normal": the diff below compares two fully-reviewed/mapped states.
+// "limited": the *current* Target's requirement review or mapping is
+// incomplete, so an evidence-status diff against an earlier checkpoint
+// would be comparing against a still-moving target — `diff` is withheld,
+// but `current` (and its own `review` flags) is still returned in full.
+// Derived fresh on every read, never persisted, so the normal diff resumes
+// automatically the next time review/mapping are complete.
+export type ComparisonState = 'normal' | 'limited'
+
 export type CockpitTargetProgress =
   | { state: 'unavailable'; reason: string }
-  | { state: 'no_direction'; direction: null; current: null; checkpoint: null; diff: null; history: [] }
-  | { state: 'no_target'; direction: { id: string; name: string }; current: null; checkpoint: null; diff: null; history: [] }
+  | { state: 'no_direction'; direction: null; current: null; checkpoint: null; comparison_state: null; diff: null; history: [] }
+  | { state: 'no_target'; direction: { id: string; name: string }; current: null; checkpoint: null; comparison_state: null; diff: null; history: [] }
   | {
       state: 'no_checkpoint' | 'available'
       direction: { id: string; name: string }
       current: CockpitCurrentTargetState
       checkpoint: ProgressCheckpoint | null
+      comparison_state: ComparisonState | null
       diff: ProgressDiff | null
       history: ProgressCheckpointHistoryItem[]
     }

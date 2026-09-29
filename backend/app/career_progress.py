@@ -296,15 +296,27 @@ def read_progress(cur, direction: dict | None) -> dict:
     """GET /api/cockpit/progress (build §5) — read-only, never writes a
     checkpoint. Returns an honest `state` for every stage: no Direction, a
     Direction with no Target, a Target with no comparable checkpoint yet, or
-    a full current-vs-checkpoint comparison."""
+    a full current-vs-checkpoint comparison.
+
+    `comparison_state` ("normal" | "limited" | None) gates the diff
+    specifically, not the current structural counts: while the *current*
+    Target's requirement review or mapping is incomplete, an evidence-status
+    diff against an earlier checkpoint would be comparing a still-moving
+    target, so `comparison_state` is "limited" and `diff` is withheld —
+    `current` (and its own `review` flags) are still returned in full, so
+    the structural counts and the "needs attention" signal remain visible.
+    This is computed fresh from the *current* state on every call, never
+    persisted, so the normal diff resumes automatically the next time
+    review/mapping are complete — no separate "resume" step exists."""
     if direction is None:
-        return {"state": "no_direction", "direction": None, "current": None, "checkpoint": None, "diff": None, "history": []}
+        return {"state": "no_direction", "direction": None, "current": None, "checkpoint": None, "comparison_state": None, "diff": None, "history": []}
     if direction.get("target") is None:
         return {
             "state": "no_target",
             "direction": {"id": direction["id"], "name": direction["name"]},
             "current": None,
             "checkpoint": None,
+            "comparison_state": None,
             "diff": None,
             "history": [],
         }
@@ -313,13 +325,18 @@ def read_progress(cur, direction: dict | None) -> dict:
     history = checkpoint_history(cur, direction["id"])
     latest = latest_comparable_checkpoint(cur, direction["id"], current["target"]["id"])
     if latest is None:
-        return {"state": "no_checkpoint", "direction": current["direction"], "current": current, "checkpoint": None, "diff": None, "history": history}
+        return {
+            "state": "no_checkpoint", "direction": current["direction"], "current": current,
+            "checkpoint": None, "comparison_state": None, "diff": None, "history": history,
+        }
 
+    review_complete = current["review"]["target_review_complete"] and current["review"]["target_mapping_complete"]
     return {
         "state": "available",
         "direction": current["direction"],
         "current": current,
         "checkpoint": latest,
-        "diff": diff_checkpoint(latest["state"], current),
+        "comparison_state": "normal" if review_complete else "limited",
+        "diff": diff_checkpoint(latest["state"], current) if review_complete else None,
         "history": history,
     }
