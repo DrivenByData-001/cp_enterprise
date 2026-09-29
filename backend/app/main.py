@@ -17,6 +17,7 @@ from .routes import (
     auth as auth_routes,
     capabilities,
     career_directions,
+    cockpit,
     comparison,
     concept_dossier,
     concepts,
@@ -137,6 +138,7 @@ app.include_router(role_economics.router, dependencies=_protected)
 app.include_router(pathways.router, dependencies=_protected)
 app.include_router(applications.router, dependencies=_protected)
 app.include_router(application_artifacts.router, dependencies=_protected)
+app.include_router(cockpit.router, dependencies=_protected)
 
 
 @app.get("/api/health")

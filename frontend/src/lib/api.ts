@@ -3153,6 +3153,243 @@ export type MarketCoverageFilters = {
   archetype_id?: string
 }
 
+// --- Phase 9: Career Cockpit + Learning Loop (docs/40) -----------------------
+//
+// One composed, read-only GET (`getCockpit`) backs the whole Home page —
+// see build §16/§37/§40. Every section below can independently be
+// `{ state: 'unavailable'; reason: string }` (failure isolation, build
+// §37) alongside its own real states; callers must check `state` before
+// reading a section's other fields. No score/percentage/AI verdict
+// anywhere in this shape (build §54).
+
+export type CockpitEvidenceStatus = ComparisonStatus
+
+export type CockpitRequirementState = {
+  concept_id: string
+  canonical_name: string
+  requirement_type: string | null
+  status: CockpitEvidenceStatus
+}
+
+export type CockpitDevelopmentActionCounts = { open: number; done: number }
+
+export type CockpitCurrentTargetState = {
+  direction: { id: string; name: string }
+  target: { id: string; title: string | null }
+  review: { target_review_complete: boolean; target_mapping_complete: boolean }
+  counts: {
+    requirements_total: number
+    required_total: number
+    evidenced: number
+    partial: number
+    user_asserted: number
+    not_found: number
+    blocking_required: number
+    unverified_required: number
+  }
+  requirements: CockpitRequirementState[]
+  development_actions: CockpitDevelopmentActionCounts
+}
+
+export type ProgressCheckpoint = {
+  id: string
+  career_direction_id: string
+  target_role_instance_id: string | null
+  checkpoint_type: 'baseline' | 'checkpoint'
+  label: string | null
+  state_schema_version: number
+  state: CockpitCurrentTargetState
+  source_revision: { evidence_revision?: string; engine_version?: string; [k: string]: unknown }
+  created_at: string
+}
+
+export type ProgressCheckpointHistoryItem = {
+  id: string
+  checkpoint_type: 'baseline' | 'checkpoint'
+  label: string | null
+  created_at: string
+  target_role_instance_id: string | null
+  target_title: string | null
+  counts: Partial<CockpitCurrentTargetState['counts']>
+}
+
+export type ProgressRequirementTransition = {
+  concept_id: string
+  canonical_name: string
+  requirement_type: string | null
+  previous_status: CockpitEvidenceStatus
+  current_status: CockpitEvidenceStatus
+}
+
+export type ProgressRequirementSummary = { concept_id: string; canonical_name: string; requirement_type: string | null }
+
+export type ProgressRequirementTypeChange = {
+  concept_id: string
+  canonical_name: string
+  previous_requirement_type: string | null
+  current_requirement_type: string | null
+}
+
+export type ProgressDiff = {
+  evidence_strengthened: ProgressRequirementTransition[]
+  assertion_added: ProgressRequirementTransition[]
+  evidence_weakened: ProgressRequirementTransition[]
+  target_definition_changed: {
+    requirements_added: ProgressRequirementSummary[]
+    requirements_removed: ProgressRequirementSummary[]
+    requirement_type_changed: ProgressRequirementTypeChange[]
+  }
+  unchanged_count: number
+}
+
+// "normal": the diff below compares two fully-reviewed/mapped states.
+// "limited": the *current* Target's requirement review or mapping is
+// incomplete, so an evidence-status diff against an earlier checkpoint
+// would be comparing against a still-moving target — `diff` is withheld,
+// but `current` (and its own `review` flags) is still returned in full.
+// Derived fresh on every read, never persisted, so the normal diff resumes
+// automatically the next time review/mapping are complete.
+export type ComparisonState = 'normal' | 'limited'
+
+export type CockpitTargetProgress =
+  | { state: 'unavailable'; reason: string }
+  | { state: 'no_direction'; direction: null; current: null; checkpoint: null; comparison_state: null; diff: null; history: [] }
+  | { state: 'no_target'; direction: { id: string; name: string }; current: null; checkpoint: null; comparison_state: null; diff: null; history: [] }
+  | {
+      state: 'no_checkpoint' | 'available'
+      direction: { id: string; name: string }
+      current: CockpitCurrentTargetState
+      checkpoint: ProgressCheckpoint | null
+      comparison_state: ComparisonState | null
+      diff: ProgressDiff | null
+      history: ProgressCheckpointHistoryItem[]
+    }
+
+export type CockpitOpportunityItem = {
+  role_instance_id: string
+  title: string
+  organisation: string | null
+  location: string | null
+  posting_date: string | null
+  relationship: AlignmentRelationship | null
+  target_gaps_involved: string[]
+  review_caveat: string | null
+  has_application: boolean
+}
+
+export type CockpitOpportunities = { state: 'unavailable'; reason: string } | { state: 'available'; items: CockpitOpportunityItem[] }
+
+export type CockpitApplicationSummary = {
+  id: string
+  role_instance_id: string
+  status: ApplicationStatus
+  role: { title: string; organisation: string | null }
+  latest_event: { event_type: ApplicationEventType; event_at: string } | null
+  next_interview: { event_at: string; label: string | null } | null
+}
+
+export type CockpitNextInterview = {
+  application_id: string
+  role_title: string
+  organisation: string | null
+  event_at: string
+  label: string | null
+}
+
+export type CockpitOutcomeEvent = {
+  id: string
+  event_type: ApplicationEventType
+  event_at: string
+  application_id: string
+  role: { title: string; organisation: string | null }
+  has_notes: boolean
+}
+
+export type CockpitApplications =
+  | { state: 'unavailable'; reason: string }
+  | {
+      state: 'available'
+      active_count: number
+      by_status: Partial<Record<ApplicationStatus, number>>
+      active_items: CockpitApplicationSummary[]
+      next_interview: CockpitNextInterview | null
+      recent_outcomes: CockpitOutcomeEvent[]
+    }
+
+export type LearningQueueStatus = 'not_queued' | 'queued_pending' | 'processed_by_profile360' | 'source_changed_since_queue'
+
+export type CockpitLearningItem = {
+  source_type: 'note' | 'event'
+  source_id: string
+  application_id: string
+  role: { title: string; organisation: string | null }
+  date: string
+  text_preview: string
+  concept_id: string | null
+  concept_canonical_name: string | null
+  note_type: ApplicationNoteType | null
+  event_type: ApplicationEventType | null
+  queue_status: LearningQueueStatus
+  is_current_target_requirement: boolean
+  current_target_evidence_status: CockpitEvidenceStatus | null
+}
+
+export type CockpitLearning = { state: 'unavailable'; reason: string } | { state: 'available'; items: CockpitLearningItem[] }
+
+export type CockpitMarketContext =
+  | { state: 'unavailable'; reason: string }
+  | { state: 'no_direction' | 'no_archetype'; reason?: string }
+  | ({ state: 'available'; representativeness: { known: false; reason: string } } & ArchetypeEvidence)
+
+export type CockpitNextAction = {
+  code: string
+  title: string
+  reason: string
+  href: string
+  urgency_days?: number
+}
+
+export type CockpitDirection =
+  | { state: 'unavailable'; reason: string }
+  | { state: 'no_direction'; direction: null; target: null }
+  | {
+      state: 'no_target' | 'with_target'
+      direction: {
+        id: string
+        name: string
+        summary: string
+        selected_at: string | null
+        constraints: CareerDirectionConstraints
+        top_dimensions: CareerDirectionDimension[]
+        archetype: CareerDirectionArchetypeSummary | null
+      }
+      target: CareerDirectionTargetSummary | null
+    }
+
+export type Cockpit = {
+  direction: CockpitDirection
+  target_progress: CockpitTargetProgress
+  opportunities: CockpitOpportunities
+  applications: CockpitApplications
+  learning: CockpitLearning
+  market_context: CockpitMarketContext
+  next_actions: CockpitNextAction[]
+}
+
+export type ApplicationLearningStateItem = {
+  source_type: 'note' | 'event'
+  source_id: string
+  queue_source_key: string
+  status: LearningQueueStatus
+  note_type?: ApplicationNoteType
+  concept_id?: string | null
+  event_type?: ApplicationEventType
+}
+
+export type ApplicationLearningState = { notes: ApplicationLearningStateItem[]; events: ApplicationLearningStateItem[] }
+
+export type PromoteResult = { status: LearningQueueStatus; queue_source_key: string }
+
 export const api = {
   previewTarget: (payload: { title: string; organisation?: string | null; is_imagined: boolean; description: string; supporting_material: string }) =>
     req<{ status: 'ok' | 'failed'; proposal: TargetDraft | null; error: string | null; extraction_run_id: string }>('/targets/preview', { method: 'POST', body: JSON.stringify(payload) }),
@@ -3833,4 +4070,15 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : ''
     return req<ArchetypeEvidence & { found: boolean }>(`/market-coverage/archetypes/${archetypeId}${suffix}`)
   },
+
+  // --- Phase 9: Career Cockpit + Learning Loop (docs/40) -------------------
+  getCockpit: () => req<Cockpit>('/cockpit'),
+  getCockpitProgress: () => req<CockpitTargetProgress>('/cockpit/progress'),
+  recordProgressCheckpoint: (label?: string) =>
+    req<ProgressCheckpoint>('/cockpit/progress/checkpoints', { method: 'POST', body: JSON.stringify({ label: label ?? null }) }),
+  getApplicationLearningState: (id: string) => req<ApplicationLearningState>(`/applications/${id}/learning-state`),
+  promoteApplicationNote: (id: string, noteId: string) =>
+    req<PromoteResult>(`/applications/${id}/notes/${noteId}/promote`, { method: 'POST' }),
+  promoteApplicationEvent: (id: string, eventId: string) =>
+    req<PromoteResult>(`/applications/${id}/events/${eventId}/promote`, { method: 'POST' }),
 }

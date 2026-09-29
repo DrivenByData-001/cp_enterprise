@@ -200,6 +200,46 @@ states, or route depth/order. No AI, no new durable table, no automatic data
 repair anywhere in this phase. See
 [`docs/39-phase8-market-coverage-confidence.md`](docs/39-phase8-market-coverage-confidence.md).
 
+Phase 9 is the final planned product phase: it turns Home (`/`) into a real
+**Career Cockpit** and closes the loop **Direction → Target → Opportunities →
+Applications → Outcomes → Learning → Evidence → updated Target progress**,
+composing the eight phases above rather than adding a new subsystem. One
+composed, read-only `GET /api/cockpit` (`app/career_cockpit.py`) replaces the
+page's previous four independent requests, with each of its six sections
+opening its own connection so one section's failure — Market Coverage, say —
+can never blank Applications or Opportunities alongside it. A small new
+longitudinal model, `jobber.career_progress_checkpoint`, lets the user
+explicitly record a **progress checkpoint** — a historical, append-only
+snapshot of the selected Target's *derived* evidence state (reusing the exact
+canonical comparison Target/Pathways/Comparison already compute, never a
+second derivation) — and compares it to the current state on every later
+visit: which requirements gained real accepted evidence
+(`evidence_strengthened`), which gained only a self-asserted, still-
+unaccepted claim (`assertion_added` — kept structurally apart from
+strengthened evidence, since an assertion is not accepted evidence), which
+regressed (`evidence_weakened`, never hidden), and which reflect the Target's
+own definition changing rather than an evidence change. No score or
+percentage is computed anywhere in that comparison. The other half of the
+phase is a **learning loop**: application-local notes and lifecycle-event
+reflections (Phase 3/5) can now be explicitly sent to Profile360 for review —
+writing only to `profile360.manual_import_queue`, the same table
+`profile360_promotion.py` already writes for capability assertions, via a
+second independent writer with the same upsert-and-reset-processed
+convention. Queueing (and even Profile360 later marking an item processed)
+never itself changes any capability or Target-gap status — only a genuine,
+separately-created accepted Profile360 claim and mapping can, and when one
+does, it flows back into the Cockpit's current Target state and checkpoint
+diff automatically. Recent Opportunities on the Cockpit reuse Phase 7's exact
+relationship states through a new batched helper
+(`opportunity_alignment.bulk_target_relationship`) rather than one alignment
+call per posting, and Market context reuses Phase 8's coverage service
+unchanged. A deterministic, explainable "Useful next actions" list (never
+"best next move") replaces guesswork about what to do next, ordered by a
+fixed, documented workflow/urgency precedence — never a career-quality
+ranking. No AI call, no overall career/readiness score, and no automatic
+Profile360 write exist anywhere in this phase. See
+[`docs/40-phase9-career-cockpit-learning-loop.md`](docs/40-phase9-career-cockpit-learning-loop.md).
+
 ## Technical architecture
 
 The newest surface is **Pathways** — see [Economic pathways, compensation and archetype context](docs/30-economic-pathways.md): your current or latest-known earnings from accepted profile360 evidence, what a target and each useful intermediate archetype would pay (always with the basis the figure came from), the structural gaps between you and them, and the market option value of closing each gap. Route depth in this version is deliberately limited to direct plus one intermediate archetype.
