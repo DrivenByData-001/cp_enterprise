@@ -164,6 +164,39 @@ def fetch_rows(cur, table: str, limit: int = 50, offset: int = 0) -> list[dict]:
     return cur.fetchall()
 
 
+# Mapping state lives in jobber (profile360 stays read-only). A row is
+# "unmapped" when it has no accepted or unreviewed mapping: unreviewed rows
+# belong to the review queue, accepted rows are mapped, and rejected-only rows
+# are eligible again. Mapping is many-to-many, so this is an existence check.
+_MAPPING_TABLES = {
+    "claims": ("profile360_claim_mapping", "profile360_claim_id"),
+    "capabilities": ("profile360_capability_mapping", "profile360_capability_id"),
+}
+
+
+def fetch_unmapped_rows(cur, table: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    _require_allowed(table)
+    mapping_table, mapping_col = _MAPPING_TABLES[table]
+    columns = list_columns(cur, table)
+    pk = _primary_key_column(cur, table)
+    order_by = _order_by_clause(columns)
+    try:
+        cur.execute(
+            f"""
+            SELECT t.* FROM profile360.{table} t
+            WHERE NOT EXISTS (
+                SELECT 1 FROM jobber.{mapping_table} m
+                WHERE m.{mapping_col} = t.{pk} AND m.review_status IN ('accepted', 'unreviewed')
+            )
+            ORDER BY t.{order_by} LIMIT %s OFFSET %s
+            """,
+            (limit, offset),
+        )
+    except psycopg.errors.UndefinedTable as e:
+        raise Profile360UnavailableError(f"profile360.{table} does not exist on this connection.") from e
+    return cur.fetchall()
+
+
 def get_row(cur, table: str, row_id) -> dict | None:
     _require_allowed(table)
     pk = _primary_key_column(cur, table)
@@ -180,8 +213,9 @@ def row_exists(cur, table: str, row_id) -> bool:
 
 # --- Convenience wrappers -----------------------------------------------
 
-def list_claims(cur, limit: int = 50, offset: int = 0) -> list[dict]:
-    return fetch_rows(cur, "claims", limit=limit, offset=offset)
+def list_claims(cur, limit: int = 50, offset: int = 0, unmapped: bool = False) -> list[dict]:
+    fetch = fetch_unmapped_rows if unmapped else fetch_rows
+    return fetch(cur, "claims", limit=limit, offset=offset)
 
 
 def get_claim(cur, claim_id) -> dict | None:
@@ -214,8 +248,9 @@ def list_snapshots(cur, limit: int = 50, offset: int = 0) -> list[dict]:
     return fetch_rows(cur, "snapshots", limit=limit, offset=offset)
 
 
-def list_capabilities(cur, limit: int = 50, offset: int = 0) -> list[dict]:
-    return fetch_rows(cur, "capabilities", limit=limit, offset=offset)
+def list_capabilities(cur, limit: int = 50, offset: int = 0, unmapped: bool = False) -> list[dict]:
+    fetch = fetch_unmapped_rows if unmapped else fetch_rows
+    return fetch(cur, "capabilities", limit=limit, offset=offset)
 
 
 def get_capability(cur, capability_id) -> dict | None:

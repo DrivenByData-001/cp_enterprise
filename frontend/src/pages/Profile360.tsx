@@ -58,7 +58,7 @@ function RowCard({ row, kind, onMapped }: { row: Profile360Row; kind: Kind; onMa
   )
 }
 
-function MappingQueue({ kind }: { kind: Kind }) {
+function MappingQueue({ kind, onReviewed }: { kind: Kind; onReviewed: () => void }) {
   const [mappings, setMappings] = useState<Profile360Mapping[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -72,6 +72,7 @@ function MappingQueue({ kind }: { kind: Kind }) {
   const review = async (id: string, action: 'accept' | 'reject') => {
     await api.reviewProfile360Mapping(id, kind, action)
     await reload()
+    onReviewed() // accept/reject changes which rows count as unmapped
   }
 
   if (error) return <p style={{ color: 'var(--critical)' }}>{error}</p>
@@ -101,18 +102,31 @@ export default function Profile360() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [queueVersion, setQueueVersion] = useState(0)
+  const [unmappedVersion, setUnmappedVersion] = useState(0)
 
-  const load = () => (tab === 'claim' ? api.listProfile360Claims() : api.listProfile360Capabilities())
+  const load = () =>
+    tab === 'claim' ? api.listProfile360Claims(50, 0, true) : api.listProfile360Capabilities(50, 0, true)
 
   useEffect(() => {
-    setLoading(true)
+    // Only the first load of a tab shows the full-page spinner; refreshes
+    // after map/review swap the list in place so the queue keeps its state.
+    let cancelled = false
     setError(null)
     load()
-      .then(setRows)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
+      .then((r) => !cancelled && setRows(r))
+      .catch((e) => !cancelled && setError(String(e)))
+      .finally(() => !cancelled && setLoading(false))
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
+  }, [tab, unmappedVersion])
+
+  const switchTab = (next: Kind) => {
+    if (next === tab) return
+    setLoading(true)
+    setTab(next)
+  }
 
   return (
     <div>
@@ -123,10 +137,10 @@ export default function Profile360() {
       </p>
 
       <div style={{ display: 'flex', gap: 8, margin: '16px 0' }}>
-        <button className={tab === 'claim' ? 'primary' : ''} onClick={() => setTab('claim')}>
+        <button className={tab === 'claim' ? 'primary' : ''} onClick={() => switchTab('claim')}>
           Claims
         </button>
-        <button className={tab === 'capability' ? 'primary' : ''} onClick={() => setTab('capability')}>
+        <button className={tab === 'capability' ? 'primary' : ''} onClick={() => switchTab('capability')}>
           Capabilities
         </button>
       </div>
@@ -146,14 +160,17 @@ export default function Profile360() {
             {rows.length === 0 && <p className="muted">Nothing here.</p>}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.map((r) => (
-                <RowCard key={String(r.id)} row={r} kind={tab} onMapped={async () => setQueueVersion((v) => v + 1)} />
+                <RowCard key={String(r.id)} row={r} kind={tab} onMapped={async () => {
+                    setQueueVersion((v) => v + 1)
+                    setUnmappedVersion((v) => v + 1)
+                  }} />
               ))}
             </div>
           </section>
 
           <section>
             <h2 style={{ fontSize: 16 }}>Review queue</h2>
-            <MappingQueue key={`${tab}-${queueVersion}`} kind={tab} />
+            <MappingQueue key={`${tab}-${queueVersion}`} kind={tab} onReviewed={() => setUnmappedVersion((v) => v + 1)} />
           </section>
         </>
       )}
