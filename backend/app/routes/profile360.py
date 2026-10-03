@@ -19,10 +19,10 @@ def _row_with_display(row: dict) -> dict:
 
 
 @router.get("/claims")
-def list_claims(limit: int = 50, offset: int = 0):
+def list_claims(limit: int = 50, offset: int = 0, unmapped: bool = False):
     with db_cursor() as cur:
         try:
-            rows = p360.list_claims(cur, limit=limit, offset=offset)
+            rows = p360.list_claims(cur, limit=limit, offset=offset, unmapped=unmapped)
         except p360.Profile360UnavailableError as e:
             raise HTTPException(503, str(e)) from e
     return [_row_with_display(r) for r in rows]
@@ -41,10 +41,10 @@ def get_claim(claim_id: str):
 
 
 @router.get("/capabilities")
-def list_capabilities(limit: int = 50, offset: int = 0):
+def list_capabilities(limit: int = 50, offset: int = 0, unmapped: bool = False):
     with db_cursor() as cur:
         try:
-            rows = p360.list_capabilities(cur, limit=limit, offset=offset)
+            rows = p360.list_capabilities(cur, limit=limit, offset=offset, unmapped=unmapped)
         except p360.Profile360UnavailableError as e:
             raise HTTPException(503, str(e)) from e
     return [_row_with_display(r) for r in rows]

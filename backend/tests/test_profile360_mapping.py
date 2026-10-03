@@ -202,3 +202,87 @@ def test_mapping_review_endpoint(client, monkeypatch):
 
     listed = client.get("/api/profile360/mappings", params={"kind": "claim", "review_status": "accepted"})
     assert any(m["id"] == mapping_id for m in listed.json())
+
+
+# --- "Unmapped" list semantics (accepted/unreviewed consume; rejected doesn't) ---
+
+_KINDS = {
+    "claim": ("claims", "profile360_claim_mapping", "profile360_claim_id", "jobber_concept_id"),
+    "capability": ("capabilities", "profile360_capability_mapping", "profile360_capability_id", "jobber_capability_concept_id"),
+}
+
+
+def _new_subject(cur, kind: str, label: str) -> str:
+    return _insert_fake_claim(cur, label) if kind == "claim" else _insert_fake_capability(cur, label)
+
+
+def _add_mapping(cur, kind: str, subject_id: str, concept_id: str, status: str) -> str:
+    _, table, subject_col, concept_col = _KINDS[kind]
+    cur.execute(
+        f"INSERT INTO jobber.{table} ({subject_col}, {concept_col}, mapping_basis, review_status) "
+        "VALUES (%s, %s, 'ai_suggested', %s) RETURNING id",
+        (subject_id, concept_id, status),
+    )
+    return str(cur.fetchone()["id"])
+
+
+def _unmapped_ids(client, kind: str) -> set[str]:
+    path = "claims" if kind == "claim" else "capabilities"
+    resp = client.get(f"/api/profile360/{path}", params={"unmapped": "true", "limit": 500})
+    assert resp.status_code == 200
+    return {r["id"] for r in resp.json()}
+
+
+@pytest.mark.parametrize("kind", ["claim", "capability"])
+def test_unmapped_list_excludes_accepted_and_unreviewed_but_not_rejected(client, kind):
+    with db.db_cursor() as cur:
+        concept = _active_concept(cur, f"concept-{kind}", "capability")
+        plain = _new_subject(cur, kind, "no mappings")
+        accepted = _new_subject(cur, kind, "accepted")
+        unreviewed = _new_subject(cur, kind, "unreviewed")
+        rejected = _new_subject(cur, kind, "rejected only")
+        _add_mapping(cur, kind, accepted, concept, "accepted")
+        _add_mapping(cur, kind, unreviewed, concept, "unreviewed")
+        _add_mapping(cur, kind, rejected, concept, "rejected")
+
+    ids = _unmapped_ids(client, kind)
+    assert plain in ids
+    assert rejected in ids  # rejected mappings never permanently consume the row
+    assert accepted not in ids
+    assert unreviewed not in ids  # belongs in the review queue instead
+
+    # Without the flag the endpoint is still the unfiltered read.
+    path = "claims" if kind == "claim" else "capabilities"
+    everything = {r["id"] for r in client.get(f"/api/profile360/{path}", params={"limit": 500}).json()}
+    assert {plain, accepted, unreviewed, rejected} <= everything
+
+
+@pytest.mark.parametrize("kind", ["claim", "capability"])
+def test_accepting_via_review_endpoint_removes_from_unmapped_and_rejecting_restores(client, kind):
+    with db.db_cursor() as cur:
+        concept = _active_concept(cur, f"review-{kind}", "capability")
+        subject = _new_subject(cur, kind, "to review")
+        mapping_id = _add_mapping(cur, kind, subject, concept, "unreviewed")
+
+    assert subject not in _unmapped_ids(client, kind)
+    assert client.post(f"/api/profile360/mappings/{mapping_id}/review", json={"kind": kind, "action": "accept"}).status_code == 200
+    assert subject not in _unmapped_ids(client, kind)
+    assert client.post(f"/api/profile360/mappings/{mapping_id}/review", json={"kind": kind, "action": "reject"}).status_code == 200
+    assert subject in _unmapped_ids(client, kind)
+
+
+@pytest.mark.parametrize("kind", ["claim", "capability"])
+def test_one_subject_can_hold_multiple_accepted_mappings(client, kind):
+    with db.db_cursor() as cur:
+        first = _active_concept(cur, f"first-{kind}", "capability")
+        second = _active_concept(cur, f"second-{kind}", "capability")
+        subject = _new_subject(cur, kind, "many to many")
+        _add_mapping(cur, kind, subject, first, "accepted")
+        _add_mapping(cur, kind, subject, second, "accepted")  # must not violate any uniqueness rule
+        _, table, subject_col, _ = _KINDS[kind]
+        cur.execute(
+            f"SELECT COUNT(*) AS n FROM jobber.{table} WHERE {subject_col} = %s AND review_status = 'accepted'", (subject,)
+        )
+        assert cur.fetchone()["n"] == 2
+
+    assert subject not in _unmapped_ids(client, kind)

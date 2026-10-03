@@ -3756,10 +3756,10 @@ export const api = {
     req<Role>(`/role-instances/${roleId}/metadata`, { method: 'PATCH', body: JSON.stringify(payload) }),
 
   // --- Phase 2: profile360 mapping review -----------------------------------
-  listProfile360Claims: (limit = 50, offset = 0) =>
-    req<Profile360Row[]>(`/profile360/claims?limit=${limit}&offset=${offset}`),
-  listProfile360Capabilities: (limit = 50, offset = 0) =>
-    req<Profile360Row[]>(`/profile360/capabilities?limit=${limit}&offset=${offset}`),
+  listProfile360Claims: (limit = 50, offset = 0, unmapped = false) =>
+    req<Profile360Row[]>(`/profile360/claims?limit=${limit}&offset=${offset}&unmapped=${unmapped}`),
+  listProfile360Capabilities: (limit = 50, offset = 0, unmapped = false) =>
+    req<Profile360Row[]>(`/profile360/capabilities?limit=${limit}&offset=${offset}&unmapped=${unmapped}`),
   mapProfile360Claim: (claimId: string) =>
     req<MappingAttemptResult>(`/profile360/claims/${encodeURIComponent(claimId)}/map`, { method: 'POST' }),
   mapProfile360Capability: (capabilityId: string) =>
