@@ -226,7 +226,13 @@ export type RoleListResponse = {
 // profile360 rows have no fixed shape known to this app (docs/14 §5/§9) — the
 // backend returns whatever columns exist plus a best-effort `_display`
 // string. Used for both the current-profile snapshot and episode browsing.
-export type Profile360Row = { [key: string]: unknown; id: string; _display: string }
+export type Profile360Row = {
+  [key: string]: unknown
+  id: string
+  _display: string
+  _mapping_state?: 'unmapped' | 'pending' | 'mapped'
+  _mapping_counts?: { accepted: number; unreviewed: number; rejected: number }
+}
 
 export type Profile = Profile360Row | null
 
@@ -873,8 +879,66 @@ export type MappingAttemptResult = {
   // the vocabulary, not about the person's evidence. 'declined_all_candidates'
   // means real candidates existed and none were confident enough.
   candidates_considered?: number
-  reason?: 'no_candidates_available' | 'declined_all_candidates'
+  reason?: 'no_candidates_available' | 'declined_all_candidates' | 'recommended_previously_rejected'
+  no_adequate_concept?: boolean
+  proposal?: { proposal_id: string; surface_form: string; created_proposal: boolean }
+  proposal_skipped?: string
 }
+
+// Profile360 curation workbench: one item's mappings, the candidates the
+// latest AI run considered, and vocabulary proposals raised from it. Claims
+// and capabilities share these shapes.
+export type Profile360MappingState = 'unmapped' | 'pending' | 'mapped' | 'all'
+export type Profile360Kind = 'claim' | 'capability'
+
+export type Profile360Candidate = {
+  concept_id: string
+  canonical_name: string
+  type_code: string
+  definition: string | null
+  rank: number
+  similarity: number | null // retrieval cosine similarity; null if unavailable — never fabricated
+  ai_selected: boolean
+  mapping_id: string | null
+  mapping_status: MappingReviewStatus | null
+}
+
+export type Profile360ItemMapping = {
+  id: string
+  concept_id: string
+  canonical_name: string
+  type_code: string
+  definition: string | null
+  mapping_basis: 'exact_match' | 'ai_suggested' | 'curator_asserted'
+  review_status: MappingReviewStatus
+}
+
+export type Profile360Proposal = {
+  id: string
+  surface_form: string
+  suggested_type: string | null
+  suggested_definition: string | null
+  status: 'pending' | 'accepted_new' | 'accepted_alias' | 'rejected' | 'deferred'
+  origin: 'ai' | 'curator'
+  nearest_canonical_name: string | null
+  nearest_similarity: number | null
+  resolved_concept_id: string | null
+  resolved_canonical_name: string | null
+}
+
+export type Profile360Workbench = {
+  kind: Profile360Kind
+  item: Profile360Row
+  mapping_state: Exclude<Profile360MappingState, 'all'>
+  mappings: Profile360ItemMapping[]
+  candidates: Profile360Candidate[]
+  ai_outcome: 'recommended' | 'declined_all_candidates' | 'no_candidates_available' | 'failed' | null
+  latest_run: { id: string; task: string; status: string; reasoning: string | null; error: string | null } | null
+  proposals: Profile360Proposal[]
+  allowed_type_codes: string[] | null
+}
+
+export type VocabularySearchHit = { id: string; type_code: string; canonical_name: string; definition: string | null }
 
 export type ComparisonStatus = 'evidenced' | 'partial' | 'user_asserted' | 'not_found'
 
@@ -3756,10 +3820,26 @@ export const api = {
     req<Role>(`/role-instances/${roleId}/metadata`, { method: 'PATCH', body: JSON.stringify(payload) }),
 
   // --- Phase 2: profile360 mapping review -----------------------------------
-  listProfile360Claims: (limit = 50, offset = 0, unmapped = false) =>
-    req<Profile360Row[]>(`/profile360/claims?limit=${limit}&offset=${offset}&unmapped=${unmapped}`),
-  listProfile360Capabilities: (limit = 50, offset = 0, unmapped = false) =>
-    req<Profile360Row[]>(`/profile360/capabilities?limit=${limit}&offset=${offset}&unmapped=${unmapped}`),
+  listProfile360Claims: (limit = 50, offset = 0, state: Profile360MappingState = 'all') =>
+    req<Profile360Row[]>(`/profile360/claims?limit=${limit}&offset=${offset}&mapping_state=${state}`),
+  listProfile360Capabilities: (limit = 50, offset = 0, state: Profile360MappingState = 'all') =>
+    req<Profile360Row[]>(`/profile360/capabilities?limit=${limit}&offset=${offset}&mapping_state=${state}`),
+  getProfile360Workbench: (kind: Profile360Kind, id: string) =>
+    req<Profile360Workbench>(`/profile360/${kind === 'claim' ? 'claims' : 'capabilities'}/${encodeURIComponent(id)}/mapping`),
+  addProfile360Mapping: (kind: Profile360Kind, id: string, conceptId: string) =>
+    req<{ mapping_id: string; concept_id: string }>(
+      `/profile360/${kind === 'claim' ? 'claims' : 'capabilities'}/${encodeURIComponent(id)}/mappings`,
+      { method: 'POST', body: JSON.stringify({ concept_id: conceptId }) },
+    ),
+  proposeProfile360Vocabulary: (
+    kind: Profile360Kind, id: string, body: { canonical_name: string; type_code?: string; definition?: string },
+  ) =>
+    req<{ proposal_id: string; surface_form: string; created_proposal: boolean }>(
+      `/profile360/${kind === 'claim' ? 'claims' : 'capabilities'}/${encodeURIComponent(id)}/propose-vocabulary`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+  searchProfile360Vocabulary: (q: string, kind: Profile360Kind) =>
+    req<VocabularySearchHit[]>(`/profile360/vocabulary/search?q=${encodeURIComponent(q)}&kind=${kind}`),
   mapProfile360Claim: (claimId: string) =>
     req<MappingAttemptResult>(`/profile360/claims/${encodeURIComponent(claimId)}/map`, { method: 'POST' }),
   mapProfile360Capability: (capabilityId: string) =>

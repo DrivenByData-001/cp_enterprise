@@ -41,6 +41,7 @@ from fastapi import HTTPException
 import psycopg
 
 from .concept_linking import normalize_name
+from .profile360_mapping import resolve_sources_for_concept as resolve_profile360_sources
 from .role_requirements import resolve_occurrences_for_concept
 from .vocabulary_priority import (
     BAND_HIGH,
@@ -189,6 +190,10 @@ def resolve_surface_form_group(
         # that produced more than one clustered surface form for the same
         # concept still gets exactly one claim.
         resolve_occurrences_for_concept(cur, all_proposal_ids, str(resolved_concept_id))
+        # Same idea for proposals that came from Profile360 rather than a
+        # posting: map each originating claim/capability back to the concept
+        # (unreviewed — vocabulary acceptance is not the mapping verdict).
+        resolve_profile360_sources(cur, all_proposal_ids, str(resolved_concept_id))
 
     return new_status, (str(resolved_concept_id) if resolved_concept_id is not None else None)
 

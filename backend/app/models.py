@@ -338,6 +338,14 @@ class ConceptAdjudicationResult(BaseModel):
 class ClaimMappingResult(BaseModel):
     chosen_canonical_name: Optional[str] = None
     reasoning: Optional[str] = None
+    # Only meaningful when chosen_canonical_name is null: the model judges that
+    # *no* candidate adequately represents the source (rather than merely being
+    # unsure) and may draft vocabulary for a human to review. Drafts are never
+    # canonical — they become an ordinary pending concept_proposal.
+    no_adequate_concept: bool = False
+    proposed_canonical_name: Optional[str] = None
+    proposed_type_code: Optional[str] = None
+    proposed_definition: Optional[str] = None
 
 
 # --- Phase 3: capability catalogue curation (backend/app/routes/capabilities.py) --
