@@ -890,7 +890,7 @@ export type MappingAttemptResult = {
 // Profile360 curation workbench: one item's mappings, the candidates the
 // latest AI run considered, and vocabulary proposals raised from it. Claims
 // and capabilities share these shapes.
-export type Profile360MappingState = 'unmapped' | 'pending' | 'mapped' | 'all'
+export type Profile360MappingState = 'unmapped' | 'pending' | 'mapped' | 'boundary' | 'all'
 export type Profile360Kind = 'claim' | 'capability'
 
 export type Profile360Candidate = {
