@@ -230,8 +230,10 @@ export type Profile360Row = {
   [key: string]: unknown
   id: string
   _display: string
-  _mapping_state?: 'unmapped' | 'pending' | 'mapped'
+  _mapping_state?: 'unmapped' | 'pending' | 'mapped' | 'boundary'
   _mapping_counts?: { accepted: number; unreviewed: number; rejected: number }
+  _disposition?: 'mappable' | 'boundary' | 'needs_review'
+  _disposition_reason?: string | null
 }
 
 export type Profile = Profile360Row | null
@@ -888,7 +890,7 @@ export type MappingAttemptResult = {
 // Profile360 curation workbench: one item's mappings, the candidates the
 // latest AI run considered, and vocabulary proposals raised from it. Claims
 // and capabilities share these shapes.
-export type Profile360MappingState = 'unmapped' | 'pending' | 'mapped' | 'all'
+export type Profile360MappingState = 'unmapped' | 'pending' | 'mapped' | 'boundary' | 'all'
 export type Profile360Kind = 'claim' | 'capability'
 
 export type Profile360Candidate = {

@@ -224,7 +224,7 @@ function Workbench({ kind, rowId, onChanged }: { kind: Kind; rowId: string; onCh
   )
 }
 
-const STATE_LABEL: Record<string, string> = { unmapped: 'Unmapped', pending: 'Pending review', mapped: 'Mapped' }
+const STATE_LABEL: Record<string, string> = { unmapped: 'Unmapped', pending: 'Pending review', mapped: 'Mapped', boundary: 'Boundary / limitation' }
 
 function RowCard({
   row, kind, open, onToggle, onChanged,
@@ -241,6 +241,7 @@ function RowCard({
           <div className="muted" style={{ fontSize: 11 }}>
             {state && <>{STATE_LABEL[state]}{counts && counts.accepted + counts.unreviewed > 0 ? ` (${counts.accepted} accepted, ${counts.unreviewed} pending)` : ''} · </>}
             id: {rowId}
+            {row._disposition_reason && <div style={{ marginTop: 3 }}>Reason: {String(row._disposition_reason)}</div>}
           </div>
         </div>
         <button onClick={onToggle} aria-expanded={open}>{open ? 'Close' : 'Curate mappings'}</button>
@@ -356,9 +357,9 @@ export default function Profile360() {
           <section style={{ marginBottom: 24 }}>
             <h2 style={{ fontSize: 16 }}>{tab === 'claim' ? 'Claims' : 'Capabilities'}</h2>
             <div style={{ display: 'flex', gap: 6, margin: '8px 0' }} role="group" aria-label="Mapping state">
-              {(['unmapped', 'pending', 'mapped', 'all'] as const).map((st) => (
+              {(['unmapped', 'pending', 'mapped', 'boundary', 'all'] as const).map((st) => (
                 <button key={st} className={state === st ? 'primary' : ''} aria-pressed={state === st} onClick={() => { setOpenRows({}); setState(st) }}>
-                  {st === 'pending' ? 'Pending review' : st[0].toUpperCase() + st.slice(1)}
+                  {st === 'pending' ? 'Pending review' : st === 'boundary' ? 'Boundaries' : st[0].toUpperCase() + st.slice(1)}
                 </button>
               ))}
             </div>

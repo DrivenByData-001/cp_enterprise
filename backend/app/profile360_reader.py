@@ -185,7 +185,11 @@ _STATE_SQL = {
         "AND EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status = 'unreviewed')"
     ),
     "unmapped": (
-        "NOT EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status IN ('accepted', 'unreviewed'))"
+        "NOT EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status IN ('accepted', 'unreviewed')) "
+        "AND NOT EXISTS (SELECT 1 FROM jobber.profile360_disposition d WHERE d.kind = '{kind}' AND d.profile360_id = t.{pk} AND d.disposition = 'boundary')"
+    ),
+    "boundary": (
+        "EXISTS (SELECT 1 FROM jobber.profile360_disposition d WHERE d.kind = '{kind}' AND d.profile360_id = t.{pk} AND d.disposition = 'boundary')"
     ),
 }
 
@@ -200,7 +204,8 @@ def fetch_rows_by_state(cur, table: str, state: str, limit: int = 50, offset: in
     columns = list_columns(cur, table)
     pk = _primary_key_column(cur, table)
     order_by = _order_by_clause(columns)
-    where = _STATE_SQL[state].format(mt=mapping_table, mc=mapping_col, pk=pk)
+    kind = "claim" if table == "claims" else "capability"
+    where = _STATE_SQL[state].format(mt=mapping_table, mc=mapping_col, pk=pk, kind=kind)
     try:
         cur.execute(
             f"SELECT t.* FROM profile360.{table} t WHERE {where} ORDER BY t.{order_by} LIMIT %s OFFSET %s",
