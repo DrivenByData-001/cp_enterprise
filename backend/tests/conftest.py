@@ -97,6 +97,8 @@ _RESETTABLE_JOBBER_TABLES = [
     "d_capability_coverage",
     "person_capability_assertion",
     "preference_observation",
+    "profile360_mapping_candidate",
+    "concept_proposal_profile360_source",
     "profile360_capability_mapping",
     "profile360_claim_mapping",
     "requirement_evidence",

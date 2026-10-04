@@ -28,6 +28,7 @@ from .models import (
     ConceptAdjudicationResult,
     RequirementExtractionResult,
 )
+from . import profile360_mapping as p360map
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
 from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
@@ -571,7 +572,7 @@ def _map_profile360_row(
     type_codes: list[str] | None,
 ) -> dict:
     text = display_text(row)
-    candidates = _concepts_by_ids(cur, [c[0] for c in nearest_concepts(cur, text, limit=10, type_codes=type_codes)])
+    candidates = p360map.retrieve_candidates(cur, text, type_codes)
     vocabulary_version_id = get_or_create_current_vocabulary_version(cur)
     started_at = datetime.now(timezone.utc)
     model, pversion = _safe_task_metadata(prompt_name)
@@ -598,11 +599,16 @@ def _map_profile360_row(
         # worse, conflated) from a free-text note.
         return {
             "status": "ok", "extraction_run_id": run_id, "mapped": False,
-            "candidates_considered": 0, "reason": "no_candidates_available",
+            "candidates_considered": 0, "reason": "no_candidates_available", "candidates": [],
         }
 
     record_json = json.dumps(dict(row), indent=2, default=str)
-    candidates_json = json.dumps(candidates, indent=2, default=str)
+    # The model sees the same {id, type_code, canonical_name, definition} shape
+    # as before; similarity/rank are for the human, not the adjudicator.
+    candidates_json = json.dumps(
+        [{k: c[k] for k in ("id", "type_code", "canonical_name", "definition")} for c in candidates],
+        indent=2, default=str,
+    )
     user_input = f"Record:\n\n{record_json}\n\nCandidates:\n\n{candidates_json}"
 
     try:
@@ -617,7 +623,9 @@ def _map_profile360_row(
             error_type=type(e).__name__, error_message=str(e), input_chars=len(user_input),
             **subject_kwargs,
         )
-        return {"status": "failed", "extraction_run_id": run_id, "error": str(e)}
+        # Retrieval itself succeeded — the human still gets the candidates.
+        p360map.persist_candidates(cur, run_id, candidates, None)
+        return {"status": "failed", "extraction_run_id": run_id, "error": str(e), "candidates": candidates}
 
     match = None
     if result.output.chosen_canonical_name:
@@ -631,27 +639,45 @@ def _map_profile360_row(
         notes=result.output.reasoning,
         **subject_kwargs,
     )
+    p360map.persist_candidates(cur, run_id, candidates, match["id"] if match else None)
+    for c in candidates:
+        c["ai_selected"] = bool(match and c["id"] == match["id"])
 
     if not match:
-        return {
+        out = {
             "status": "ok", "extraction_run_id": run_id, "mapped": False,
             "candidates_considered": len(candidates), "reason": "declined_all_candidates",
+            "candidates": candidates, "no_adequate_concept": bool(result.output.no_adequate_concept),
         }
+        # The AI may draft vocabulary for a human to review — never a concept,
+        # only a pending concept_proposal (same queue as job-posting vocabulary).
+        draft_name = (result.output.proposed_canonical_name or "").strip()
+        if draft_name and not result.output.chosen_canonical_name:
+            try:
+                proposal = p360map.record_proposal(
+                    cur, row_kind, row_id, text, canonical_name=draft_name,
+                    type_code=result.output.proposed_type_code, definition=result.output.proposed_definition,
+                    origin="ai", run_id=run_id,
+                )
+                out["proposal"] = proposal
+            except p360map.MappingError as e:
+                out["proposal_skipped"] = str(e)  # e.g. an equivalent concept already exists
+        return out
 
-    cur.execute(
-        f"""
-        INSERT INTO jobber.{mapping_table} ({mapping_id_column}, {concept_id_column}, mapping_basis, review_status, extraction_run_id)
-        VALUES (%s, %s, 'ai_suggested', 'unreviewed', %s)
-        ON CONFLICT ({mapping_id_column}, {concept_id_column}) DO UPDATE SET
-            extraction_run_id = EXCLUDED.extraction_run_id
-        RETURNING id
-        """,
-        (row_id, match["id"], run_id),
+    # The AI only ever *recommends*: unreviewed, never auto-accepted. A pair a
+    # human already rejected is not silently re-opened by a repeat suggestion.
+    mapping = p360map.upsert_mapping(
+        cur, row_kind, row_id, match["id"], basis="ai_suggested", review_status="unreviewed", run_id=run_id,
     )
-    mapping_id = cur.fetchone()["id"]
+    if mapping["review_status"] == "rejected":
+        return {
+            "status": "ok", "extraction_run_id": run_id, "mapped": False, "concept_id": match["id"],
+            "candidates_considered": len(candidates), "reason": "recommended_previously_rejected",
+            "candidates": candidates,
+        }
     return {
-        "status": "ok", "extraction_run_id": run_id, "mapped": True, "mapping_id": mapping_id, "concept_id": match["id"],
-        "candidates_considered": len(candidates),
+        "status": "ok", "extraction_run_id": run_id, "mapped": True, "mapping_id": mapping["id"], "concept_id": match["id"],
+        "candidates_considered": len(candidates), "candidates": candidates,
     }
 
 

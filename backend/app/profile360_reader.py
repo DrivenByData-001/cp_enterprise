@@ -174,27 +174,45 @@ _MAPPING_TABLES = {
 }
 
 
-def fetch_unmapped_rows(cur, table: str, limit: int = 50, offset: int = 0) -> list[dict]:
+# State predicates (see _MAPPING_TABLES note above). Mapped: at least one
+# accepted mapping. Pending: no accepted, at least one unreviewed. Unmapped:
+# neither (rejected-only rows stay eligible). "Mapped" is not "finished" — the
+# state filter exists so mapped rows can still be browsed and extended.
+_STATE_SQL = {
+    "mapped": "EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status = 'accepted')",
+    "pending": (
+        "NOT EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status = 'accepted') "
+        "AND EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status = 'unreviewed')"
+    ),
+    "unmapped": (
+        "NOT EXISTS (SELECT 1 FROM jobber.{mt} m WHERE m.{mc} = t.{pk} AND m.review_status IN ('accepted', 'unreviewed'))"
+    ),
+}
+
+
+def fetch_rows_by_state(cur, table: str, state: str, limit: int = 50, offset: int = 0) -> list[dict]:
     _require_allowed(table)
+    if state == "all":
+        return fetch_rows(cur, table, limit=limit, offset=offset)
+    if state not in _STATE_SQL:
+        raise ValueError(f"unknown mapping state {state!r}")
     mapping_table, mapping_col = _MAPPING_TABLES[table]
     columns = list_columns(cur, table)
     pk = _primary_key_column(cur, table)
     order_by = _order_by_clause(columns)
+    where = _STATE_SQL[state].format(mt=mapping_table, mc=mapping_col, pk=pk)
     try:
         cur.execute(
-            f"""
-            SELECT t.* FROM profile360.{table} t
-            WHERE NOT EXISTS (
-                SELECT 1 FROM jobber.{mapping_table} m
-                WHERE m.{mapping_col} = t.{pk} AND m.review_status IN ('accepted', 'unreviewed')
-            )
-            ORDER BY t.{order_by} LIMIT %s OFFSET %s
-            """,
+            f"SELECT t.* FROM profile360.{table} t WHERE {where} ORDER BY t.{order_by} LIMIT %s OFFSET %s",
             (limit, offset),
         )
     except psycopg.errors.UndefinedTable as e:
         raise Profile360UnavailableError(f"profile360.{table} does not exist on this connection.") from e
     return cur.fetchall()
+
+
+def fetch_unmapped_rows(cur, table: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    return fetch_rows_by_state(cur, table, "unmapped", limit=limit, offset=offset)
 
 
 def get_row(cur, table: str, row_id) -> dict | None:
@@ -213,9 +231,8 @@ def row_exists(cur, table: str, row_id) -> bool:
 
 # --- Convenience wrappers -----------------------------------------------
 
-def list_claims(cur, limit: int = 50, offset: int = 0, unmapped: bool = False) -> list[dict]:
-    fetch = fetch_unmapped_rows if unmapped else fetch_rows
-    return fetch(cur, "claims", limit=limit, offset=offset)
+def list_claims(cur, limit: int = 50, offset: int = 0, unmapped: bool = False, state: str | None = None) -> list[dict]:
+    return fetch_rows_by_state(cur, "claims", state or ("unmapped" if unmapped else "all"), limit=limit, offset=offset)
 
 
 def get_claim(cur, claim_id) -> dict | None:
@@ -248,9 +265,10 @@ def list_snapshots(cur, limit: int = 50, offset: int = 0) -> list[dict]:
     return fetch_rows(cur, "snapshots", limit=limit, offset=offset)
 
 
-def list_capabilities(cur, limit: int = 50, offset: int = 0, unmapped: bool = False) -> list[dict]:
-    fetch = fetch_unmapped_rows if unmapped else fetch_rows
-    return fetch(cur, "capabilities", limit=limit, offset=offset)
+def list_capabilities(cur, limit: int = 50, offset: int = 0, unmapped: bool = False, state: str | None = None) -> list[dict]:
+    return fetch_rows_by_state(
+        cur, "capabilities", state or ("unmapped" if unmapped else "all"), limit=limit, offset=offset,
+    )
 
 
 def get_capability(cur, capability_id) -> dict | None:

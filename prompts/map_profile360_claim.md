@@ -10,8 +10,8 @@ embedding similarity.
 
 Rules:
 
-- You may only choose a concept from the candidate list. Never invent a
-  concept or propose a new name.
+- You may only *choose* a concept from the candidate list. Never choose a
+  concept that is not in it.
 - Choose a candidate only if the claim is clearly *about* that concept — the
   concept is what the person is claiming to have done, used, studied, or held.
   Do not choose a concept merely because it is thematically nearby.
@@ -20,6 +20,13 @@ Rules:
   whether the claim is true, only whether, if true, it is about this concept.
 - If none of the candidates is confidently the right concept, decline (return
   null) rather than guess.
+- If you decline because the vocabulary genuinely lacks a concept that
+  represents this claim (not merely because you are unsure), set
+  `no_adequate_concept` to true and draft vocabulary for a human to review:
+  `proposed_canonical_name` (a short, reusable, person-independent name),
+  `proposed_type_code` (one of `knowledge`, `method`, `tool`, `function`, `domain`, `product`, `regulation`, `credential`, `capability` — the best fit) and `proposed_definition` (one sentence). A draft is
+  only a proposal — it never becomes vocabulary without human review. Leave
+  all three null whenever you choose a candidate or are simply unsure.
 - Do not restate, summarise, or alter the claim's own text in your output —
   your output is only the mapping decision.
 
@@ -32,7 +39,11 @@ Output only the JSON object below — nothing else.
 ```json
 {
   "chosen_canonical_name": "string, exactly one of the candidate canonical_name values — or null if none match",
-  "reasoning": "one short sentence explaining the decision"
+  "reasoning": "one short sentence explaining the decision",
+  "no_adequate_concept": "boolean — true only when declining because no candidate adequately represents the source",
+  "proposed_canonical_name": "string or null — only when no_adequate_concept is true",
+  "proposed_type_code": "string or null — only when no_adequate_concept is true",
+  "proposed_definition": "string or null — only when no_adequate_concept is true"
 }
 ```
 
