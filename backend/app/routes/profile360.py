@@ -30,12 +30,27 @@ def _resolve_state(unmapped: bool, mapping_state: str | None) -> str:
 
 
 def _rows_with_mapping_state(cur, kind: str, rows: list[dict]) -> list[dict]:
-    states = p360map.mapping_states_for(cur, kind, [str(r["id"]) for r in rows])
-    return [
-        {**_row_with_display(r), "_mapping_state": states[str(r["id"])]["state"],
-         "_mapping_counts": states[str(r["id"])]["counts"]}
-        for r in rows
-    ]
+    ids = [str(r["id"]) for r in rows]
+    states = p360map.mapping_states_for(cur, kind, ids)
+    dispositions = {}
+    if ids:
+        cur.execute(
+            "SELECT profile360_id, disposition, reason FROM jobber.profile360_disposition WHERE kind = %s AND profile360_id = ANY(%s::uuid[])",
+            (kind, ids),
+        )
+        dispositions = {str(d["profile360_id"]): d for d in cur.fetchall()}
+    result = []
+    for r in rows:
+        rid = str(r["id"])
+        disposition = dispositions.get(rid)
+        mapping_state = "boundary" if disposition and disposition["disposition"] == "boundary" else states[rid]["state"]
+        result.append({
+            **_row_with_display(r), "_mapping_state": mapping_state,
+            "_mapping_counts": states[rid]["counts"],
+            "_disposition": disposition["disposition"] if disposition else "mappable",
+            "_disposition_reason": disposition["reason"] if disposition else None,
+        })
+    return result
 
 
 @router.get("/claims")
