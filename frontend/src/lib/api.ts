@@ -230,8 +230,10 @@ export type Profile360Row = {
   [key: string]: unknown
   id: string
   _display: string
-  _mapping_state?: 'unmapped' | 'pending' | 'mapped'
+  _mapping_state?: 'unmapped' | 'pending' | 'mapped' | 'boundary'
   _mapping_counts?: { accepted: number; unreviewed: number; rejected: number }
+  _disposition?: 'mappable' | 'boundary' | 'needs_review'
+  _disposition_reason?: string | null
 }
 
 export type Profile = Profile360Row | null
