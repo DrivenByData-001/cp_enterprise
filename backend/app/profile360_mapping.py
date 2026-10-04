@@ -51,7 +51,7 @@ KINDS: dict[str, dict] = {
     },
 }
 
-MAPPING_STATES = ("unmapped", "pending", "mapped", "all")
+MAPPING_STATES = ("unmapped", "pending", "mapped", "boundary", "all")
 
 
 class MappingError(ValueError):
