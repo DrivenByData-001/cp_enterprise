@@ -548,8 +548,11 @@ def role_skills_display(cur, role_instance_id: str) -> dict:
     vetoed = vetoed_concept_ids(cur, role_instance_id)
 
     cur.execute(
-        "SELECT surface_form AS name, category, importance, requirement_type, canonical_concept_id AS resolved_concept_id "
-        "FROM jobber.role_skill_observation WHERE role_instance_id = %s ORDER BY surface_form",
+        "SELECT rso.surface_form AS name, rso.category, rso.importance, rso.requirement_type, "
+        "map.concept_id AS resolved_concept_id "
+        "FROM jobber.role_skill_observation rso "
+        "LEFT JOIN jobber.role_skill_observation_concept map ON map.role_skill_observation_id = rso.id "
+        "WHERE rso.role_instance_id = %s ORDER BY rso.surface_form, map.concept_id",
         (role_instance_id,),
     )
     legacy_skills = [
