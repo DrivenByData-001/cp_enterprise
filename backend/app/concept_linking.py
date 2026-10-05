@@ -204,7 +204,14 @@ def run_pass_b(cur) -> dict:
         concept_id = exact_match_concept_id(cur, normalized)
         if concept_id is not None:
             cur.execute(
-                "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = %s",
+                "INSERT INTO jobber.role_skill_observation_concept "
+                "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single') "
+                "ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING",
+                (row["id"], concept_id),
+            )
+            # Compatibility projection only; the M:N junction is authoritative.
+            cur.execute(
+                "UPDATE jobber.role_skill_observation SET canonical_concept_id = COALESCE(canonical_concept_id, %s) WHERE id = %s",
                 (concept_id, row["id"]),
             )
             auto_resolved += 1
