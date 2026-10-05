@@ -94,16 +94,17 @@ WITH usable_claims AS (
 ), evidence AS (
     SELECT * FROM usable_claims
     UNION ALL
-    SELECT rso.role_instance_id, rso.canonical_concept_id, NULL::uuid, rso.id,
+    SELECT rso.role_instance_id, map.concept_id, NULL::uuid, rso.id,
            rso.requirement_type, rso.importance, NULL::text, NULL::text, NULL::text,
            'role_skill_observation'::text
     FROM jobber.role_skill_observation rso
-    JOIN jobber.concept c ON c.id = rso.canonical_concept_id AND c.status = 'active'
+    JOIN jobber.role_skill_observation_concept map ON map.role_skill_observation_id = rso.id
+    JOIN jobber.concept c ON c.id = map.concept_id AND c.status = 'active'
     WHERE NOT EXISTS (SELECT 1 FROM usable_claims u WHERE u.role_instance_id = rso.role_instance_id)
       AND NOT EXISTS (
           SELECT 1 FROM jobber.requirement_claim veto
           WHERE veto.role_instance_id = rso.role_instance_id
-            AND veto.concept_id = rso.canonical_concept_id
+            AND veto.concept_id = map.concept_id
             AND veto.review_status IN ('rejected', 'corrected')
       )
 )
