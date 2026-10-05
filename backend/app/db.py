@@ -469,7 +469,7 @@ def upsert_role_instance(cur, role_id: str | None, columns: dict, skills: list[d
         cur.execute(
             "INSERT INTO jobber.role_skill_observation "
             "(role_instance_id, surface_form, category, importance, requirement_type, observation_basis, canonical_concept_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 role_id,
                 skill["name"],
@@ -477,9 +477,17 @@ def upsert_role_instance(cur, role_id: str | None, columns: dict, skills: list[d
                 skill.get("importance"),
                 skill.get("requirement_type"),
                 "app_capture",  # distinct from 'legacy_extraction', reserved for the original migrated 327 rows
-                canonical_concept_id,
+                canonical_concept_id,  # compatibility projection; M:N row below is authoritative
             ),
         )
+        observation_id = cur.fetchone()["id"]
+        if canonical_concept_id:
+            cur.execute(
+                "INSERT INTO jobber.role_skill_observation_concept "
+                "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'exact_match') "
+                "ON CONFLICT DO NOTHING",
+                (observation_id, canonical_concept_id),
+            )
     return role_id
 
 
