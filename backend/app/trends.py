@@ -171,7 +171,7 @@ def top_requirements(cur, filters: TrendFilters, *, min_sample_size: int = 5, li
         LEFT JOIN jobber.role_skill_observation_concept map ON map.role_skill_observation_id = rso.id
         LEFT JOIN jobber.concept c ON c.id = map.concept_id
         WHERE {where_sql}
-        GROUP BY map.concept_id AS canonical_concept_id, c.canonical_name, c.type_code, surface_key
+        GROUP BY map.concept_id, c.canonical_name, c.type_code, surface_key
         ORDER BY role_count DESC
         LIMIT %s
         """,
