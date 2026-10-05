@@ -195,10 +195,17 @@ def _fetch_legacy_fallback_counts(cur, role_ids: list[str]) -> dict[str, dict]:
     cur.execute(
         """
         SELECT rso.role_instance_id,
-               COUNT(*) FILTER (WHERE rso.canonical_concept_id IS NOT NULL AND c.status = 'active') AS resolved,
-               COUNT(*) FILTER (WHERE rso.canonical_concept_id IS NULL) AS unresolved
+               COUNT(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM jobber.role_skill_observation_concept map
+                   JOIN jobber.concept c ON c.id = map.concept_id AND c.status = 'active'
+                   WHERE map.role_skill_observation_id = rso.id
+               )) AS resolved,
+               COUNT(*) FILTER (WHERE NOT EXISTS (
+                   SELECT 1 FROM jobber.role_skill_observation_concept map
+                   JOIN jobber.concept c ON c.id = map.concept_id AND c.status = 'active'
+                   WHERE map.role_skill_observation_id = rso.id
+               )) AS unresolved
         FROM jobber.role_skill_observation rso
-        LEFT JOIN jobber.concept c ON c.id = rso.canonical_concept_id
         WHERE rso.role_instance_id = ANY(%s::uuid[])
         GROUP BY rso.role_instance_id
         """,
