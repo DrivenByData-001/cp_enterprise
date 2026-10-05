@@ -41,7 +41,7 @@ def _group_proposals(cur, status: str) -> list[dict]:
 
     live_counts: dict[str, int] = {}
     if status == "pending":
-        cur.execute("SELECT surface_form AS name FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+        cur.execute("SELECT surface_form AS name FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)")
         for r in cur.fetchall():
             key = normalize_name(r["name"])
             live_counts[key] = live_counts.get(key, 0) + 1
