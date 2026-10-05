@@ -160,17 +160,18 @@ def top_requirements(cur, filters: TrendFilters, *, min_sample_size: int = 5, li
     cur.execute(
         f"""
         SELECT
-            rso.canonical_concept_id, c.canonical_name, c.type_code,
-            CASE WHEN rso.canonical_concept_id IS NULL THEN lower(trim(rso.surface_form)) END AS surface_key,
+            map.concept_id AS canonical_concept_id, c.canonical_name, c.type_code,
+            CASE WHEN map.concept_id IS NULL THEN lower(trim(rso.surface_form)) END AS surface_key,
             COUNT(DISTINCT rso.role_instance_id) AS role_count,
             COUNT(DISTINCT rso.role_instance_id) FILTER (WHERE rso.requirement_type = 'required') AS n_required,
             COUNT(DISTINCT rso.role_instance_id) FILTER (WHERE rso.requirement_type = 'preferred') AS n_preferred,
             COUNT(DISTINCT rso.role_instance_id) FILTER (WHERE rso.requirement_type = 'inferred') AS n_inferred
         FROM jobber.role_skill_observation rso
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
-        LEFT JOIN jobber.concept c ON c.id = rso.canonical_concept_id
+        LEFT JOIN jobber.role_skill_observation_concept map ON map.role_skill_observation_id = rso.id
+        LEFT JOIN jobber.concept c ON c.id = map.concept_id
         WHERE {where_sql}
-        GROUP BY rso.canonical_concept_id, c.canonical_name, c.type_code, surface_key
+        GROUP BY map.concept_id AS canonical_concept_id, c.canonical_name, c.type_code, surface_key
         ORDER BY role_count DESC
         LIMIT %s
         """,
@@ -203,8 +204,8 @@ def _requirement_key_clause(requirement_key: dict) -> tuple[str, list]:
     exactly one, matching how `top_requirements` distinguishes resolved vs
     unresolved rows."""
     if requirement_key.get("concept_id"):
-        return "rso.canonical_concept_id = %s", [requirement_key["concept_id"]]
-    return "rso.canonical_concept_id IS NULL AND lower(trim(rso.surface_form)) = %s", [requirement_key["surface_form"].strip().lower()]
+        return "EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map_filter WHERE map_filter.role_skill_observation_id = rso.id AND map_filter.concept_id = %s)", [requirement_key["concept_id"]]
+    return "NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map_filter WHERE map_filter.role_skill_observation_id = rso.id) AND lower(trim(rso.surface_form)) = %s", [requirement_key["surface_form"].strip().lower()]
 
 
 def _period_bucket_sql(granularity: str, alias: str = "ri") -> str:
@@ -283,7 +284,8 @@ def cooccurring_requirements(cur, requirement_key: dict, filters: TrendFilters, 
         """
         SELECT c.id AS concept_id, c.canonical_name, c.type_code, COUNT(DISTINCT rso.role_instance_id) AS co_count
         FROM jobber.role_skill_observation rso
-        JOIN jobber.concept c ON c.id = rso.canonical_concept_id
+        JOIN jobber.role_skill_observation_concept map ON map.role_skill_observation_id = rso.id
+        JOIN jobber.concept c ON c.id = map.concept_id
         WHERE rso.role_instance_id = ANY(%s::uuid[])
         GROUP BY c.id, c.canonical_name, c.type_code
         HAVING COUNT(DISTINCT rso.role_instance_id) >= %s
