@@ -192,7 +192,7 @@ def run_pass_b(cur) -> dict:
     the transaction, consistent with the rest of this Postgres port."""
     ensure_concept_embeddings(cur)
 
-    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    cur.execute("""SELECT rso.id, rso.surface_form FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept rsoc WHERE rsoc.role_skill_observation_id = rso.id)""")
     unresolved = cur.fetchall()
 
     auto_resolved = 0
