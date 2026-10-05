@@ -192,7 +192,7 @@ def run_pass_b(cur) -> dict:
     the transaction, consistent with the rest of this Postgres port."""
     ensure_concept_embeddings(cur)
 
-    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)")
     unresolved = cur.fetchall()
 
     auto_resolved = 0
@@ -204,7 +204,14 @@ def run_pass_b(cur) -> dict:
         concept_id = exact_match_concept_id(cur, normalized)
         if concept_id is not None:
             cur.execute(
-                "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = %s",
+                "INSERT INTO jobber.role_skill_observation_concept "
+                "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'exact_match') "
+                "ON CONFLICT DO NOTHING",
+                (row["id"], concept_id),
+            )
+            # Compatibility projection only; M:N table above is authoritative.
+            cur.execute(
+                "UPDATE jobber.role_skill_observation SET canonical_concept_id = COALESCE(canonical_concept_id, %s) WHERE id = %s",
                 (concept_id, row["id"]),
             )
             auto_resolved += 1
