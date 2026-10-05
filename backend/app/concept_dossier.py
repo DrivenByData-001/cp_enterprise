@@ -191,10 +191,11 @@ def _representative_role_evidence(cur, concept_id: str, limit: int = ROLE_EVIDEN
         SELECT DISTINCT ON (ri.id) ri.id AS role_id, ri.title, ri.organisation, ri.posting_date,
                rc.evidence_span, rso.surface_form
         FROM jobber.role_skill_observation rso
+        JOIN jobber.role_skill_observation_concept rsoc ON rsoc.role_skill_observation_id = rso.id
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
         LEFT JOIN jobber.requirement_claim rc
-            ON rc.role_instance_id = ri.id AND rc.concept_id = rso.canonical_concept_id
-        WHERE rso.canonical_concept_id = %s
+            ON rc.role_instance_id = ri.id AND rc.concept_id = rsoc.concept_id
+        WHERE rsoc.concept_id = %s
         ORDER BY ri.id, ri.posting_date DESC NULLS LAST
         LIMIT %s
         """,
@@ -214,10 +215,11 @@ def _candidate_related_concepts(cur, concept_id: str, limit: int = CANDIDATE_CON
         """
         SELECT c.id, c.canonical_name, c.type_code, c.definition, COUNT(*) AS co_count
         FROM jobber.role_skill_observation rso1
-        JOIN jobber.role_skill_observation rso2
-            ON rso2.role_instance_id = rso1.role_instance_id AND rso2.canonical_concept_id != rso1.canonical_concept_id
-        JOIN jobber.concept c ON c.id = rso2.canonical_concept_id
-        WHERE rso1.canonical_concept_id = %s AND c.status = 'active'
+        JOIN jobber.role_skill_observation_concept m1 ON m1.role_skill_observation_id = rso1.id
+        JOIN jobber.role_skill_observation rso2 ON rso2.role_instance_id = rso1.role_instance_id
+        JOIN jobber.role_skill_observation_concept m2 ON m2.role_skill_observation_id = rso2.id
+        JOIN jobber.concept c ON c.id = m2.concept_id
+        WHERE m1.concept_id = %s AND m2.concept_id != m1.concept_id AND c.status = 'active'
         GROUP BY c.id
         ORDER BY co_count DESC
         LIMIT %s
