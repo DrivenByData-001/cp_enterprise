@@ -102,7 +102,14 @@ def _observation(cur, role_id, *, surface_form, canonical_concept_id=None, requi
         "VALUES (%s, %s, %s, %s, 'legacy_extraction', %s) RETURNING id",
         (role_id, surface_form, requirement_type, importance, canonical_concept_id),
     )
-    return str(cur.fetchone()["id"])
+    observation_id = str(cur.fetchone()["id"])
+    if canonical_concept_id is not None:
+        cur.execute(
+            "INSERT INTO jobber.role_skill_observation_concept "
+            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single')",
+            (observation_id, canonical_concept_id),
+        )
+    return observation_id
 
 
 def test_requirement_claim_authoritative_when_present(client):
@@ -137,6 +144,26 @@ def test_role_skill_observation_fallback_when_no_claims(client):
     assert items[0]["basis"] is None
     assert items[0]["review_status"] is None
     assert items[0]["evidence_span"] is None
+
+
+def test_one_observation_can_authoritatively_map_to_multiple_concepts(client):
+    with db.db_cursor() as cur:
+        role_id = _role(cur)
+        capital_id = _concept(cur, "Capital management")
+        risk_id = _concept(cur, "Risk management")
+        observation_id = _observation(
+            cur, role_id, surface_form="capital and risk management",
+            canonical_concept_id=capital_id, requirement_type="required",
+        )
+        cur.execute(
+            "INSERT INTO jobber.role_skill_observation_concept "
+            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'curator_asserted')",
+            (observation_id, risk_id),
+        )
+        items = load_role_requirements(cur, role_id)
+    assert {item["concept_id"] for item in items} == {capital_id, risk_id}
+    assert {item["role_skill_observation_id"] for item in items} == {observation_id}
+
 
 
 def test_mapped_observation_produces_real_structural_fit(client):
