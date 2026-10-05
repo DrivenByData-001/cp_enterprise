@@ -711,7 +711,7 @@ def get_surface_form_detail(cur, value: str) -> dict | None:
         SELECT rso.role_instance_id, rso.surface_form, ri.posting_date, ri.country, ri.seniority_level, ri.career_track, ri.title
         FROM jobber.role_skill_observation rso
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
-        WHERE rso.canonical_concept_id IS NULL
+        WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept rsoc WHERE rsoc.role_skill_observation_id = rso.id)
         ORDER BY ri.posting_date DESC NULLS LAST, rso.role_instance_id
         """
     )
