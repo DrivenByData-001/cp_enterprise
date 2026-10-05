@@ -860,7 +860,7 @@ def _group_evidence_map(cur, groups: list[list[str]]) -> list[dict]:
     proposed group membership instead of by persisted cluster_key, since
     these groups don't exist as a persisted cluster_key yet at preview
     time."""
-    cur.execute("SELECT surface_form, role_instance_id FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    cur.execute("SELECT surface_form, role_instance_id FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)")
     normalized_rows = [(normalize_name(r["surface_form"]), str(r["role_instance_id"])) for r in cur.fetchall()]
 
     cur.execute(
