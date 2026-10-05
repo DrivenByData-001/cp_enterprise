@@ -168,12 +168,20 @@ def resolve_surface_form_group(
         )
         if resolved_concept_id is not None:
             cur.execute(
-                "SELECT id, surface_form AS name FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL"
+                "SELECT id, surface_form AS name FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)"
             )
             matching_ids = [r["id"] for r in cur.fetchall() if normalize_name(r["name"]) == surface_form]
             if matching_ids:
                 cur.execute(
-                    "UPDATE jobber.role_skill_observation SET canonical_concept_id = %s WHERE id = ANY(%s::uuid[])",
+                    "INSERT INTO jobber.role_skill_observation_concept "
+                    "(role_skill_observation_id, concept_id, mapping_basis) "
+                    "SELECT id, %s, 'curator_asserted' FROM jobber.role_skill_observation "
+                    "WHERE id = ANY(%s::uuid[]) ON CONFLICT DO NOTHING",
+                    (resolved_concept_id, matching_ids),
+                )
+                cur.execute(
+                    "UPDATE jobber.role_skill_observation SET canonical_concept_id = COALESCE(canonical_concept_id, %s) "
+                    "WHERE id = ANY(%s::uuid[])",
                     (resolved_concept_id, matching_ids),
                 )
 
@@ -310,7 +318,7 @@ def build_pending_cluster_index(cur, *, example_limit: int = LIST_EXAMPLE_ROLE_L
                ri.posting_date, ri.country, ri.seniority_level, ri.career_track, ri.title
         FROM jobber.role_skill_observation rso
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
-        WHERE rso.canonical_concept_id IS NULL
+        WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)
         ORDER BY ri.posting_date DESC NULLS LAST, rso.role_instance_id
         """
     )
@@ -567,9 +575,9 @@ def get_progress(cur) -> dict:
         1 for ev in evidence.values() if assign_priority_band(_signals_for(ev, current_year)) == BAND_HIGH
     )
 
-    cur.execute("SELECT COUNT(*) AS n FROM jobber.role_skill_observation WHERE canonical_concept_id IS NOT NULL")
+    cur.execute("SELECT COUNT(*) AS n FROM jobber.role_skill_observation rso WHERE EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)")
     observations_mapped = cur.fetchone()["n"]
-    cur.execute("SELECT COUNT(*) AS n FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    cur.execute("SELECT COUNT(*) AS n FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept map WHERE map.role_skill_observation_id = rso.id)")
     observations_unresolved = cur.fetchone()["n"]
     cur.execute("SELECT COUNT(*) AS n FROM jobber.concept WHERE status = 'active'")
     accepted_concepts = cur.fetchone()["n"]
