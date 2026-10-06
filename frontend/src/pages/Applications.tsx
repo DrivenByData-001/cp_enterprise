@@ -123,7 +123,7 @@ export default function Applications() {
         A space to prepare, follow up, and keep each next step in view.
       </p>
 
-      <div className="list-toolbar"><label>Application status<select value={status ?? ''} onChange={e => setParams(prev => { const p = new URLSearchParams(prev); p.delete('offset'); if (e.target.value) p.set('status', e.target.value); else p.delete('status'); return p })}><option value="">All statuses</option>{Object.entries(STATUS_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><Link className="button" to="/opportunities">Find an opportunity ↗</Link></div>
+      <div className="list-toolbar"><label>Application status<select value={status ?? ''} onChange={e => setParams(prev => { const p = new URLSearchParams(prev); p.delete('offset'); if (e.target.value) p.set('status', e.target.value); else p.delete('status'); return p })}><option value="">All statuses</option>{Object.entries(STATUS_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><Link className="button" to="/opportunities?intent=apply">Find an opportunity ↗</Link></div>
       {error && <div role="alert" className="error-notice"><p>Applications couldn't be loaded: {error}</p><button onClick={() => setRetry(n => n + 1)}>Retry applications</button></div>}
       {!error && items === null && <p className="muted">Loading…</p>}
 
@@ -132,7 +132,7 @@ export default function Applications() {
           <p style={{ marginTop: 0 }}>{status ? 'No applications match this status.' : 'No applications yet. Choose an opportunity when you decide you want to pursue it.'}</p>
           {status && <button onClick={() => setParams({})}>Clear filters</button>}
           <div className="actions">
-            <Link to="/opportunities" className="button primary">Browse opportunities</Link>
+            <Link to="/opportunities?intent=apply" className="button primary">Browse opportunities</Link>
           </div>
         </div>
       )}
@@ -158,7 +158,7 @@ export default function Applications() {
           )}
 
           <div className="actions" style={{ marginTop: 16 }}>
-            <Link to="/opportunities">Browse opportunities</Link>
+            <Link to="/opportunities?intent=apply">Browse opportunities</Link>
           </div>
         </>
       )}
