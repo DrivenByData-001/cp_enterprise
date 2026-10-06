@@ -166,6 +166,42 @@ def _configure_app_database(postgres_test_db, monkeypatch_session):
     monkeypatch_session.setenv("APP_AUTH_PASSWORD_HASH", TEST_AUTH_PASSWORD_HASH)
     db_module.reset_pool()
     db_module.run_migrations()
+
+    # Test fixtures historically seed role_skill_observation directly via SQL
+    # using canonical_concept_id. Production application writes now populate
+    # the authoritative M:N junction explicitly, but retaining hundreds of
+    # direct-SQL fixture call sites would otherwise make them model an
+    # impossible half-migrated state. Keep that legacy fixture shorthand
+    # working in the disposable test database only.
+    with db_module.db_cursor() as cur:
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION jobber.test_sync_role_skill_observation_concept()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $
+            BEGIN
+                IF NEW.canonical_concept_id IS NOT NULL THEN
+                    INSERT INTO jobber.role_skill_observation_concept (
+                        role_skill_observation_id, concept_id, mapping_basis
+                    )
+                    VALUES (NEW.id, NEW.canonical_concept_id, 'legacy_single')
+                    ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING;
+                END IF;
+                RETURN NEW;
+            END;
+            $;
+
+            DROP TRIGGER IF EXISTS test_sync_role_skill_observation_concept
+                ON jobber.role_skill_observation;
+
+            CREATE TRIGGER test_sync_role_skill_observation_concept
+            AFTER INSERT OR UPDATE OF canonical_concept_id
+                ON jobber.role_skill_observation
+            FOR EACH ROW
+            EXECUTE FUNCTION jobber.test_sync_role_skill_observation_concept();
+            """
+        )
     yield
 
 
