@@ -1,4 +1,5 @@
-import { Link, useSearchParams } from 'react-router-dom'\nimport { withApplicationContext } from '../../lib/applicationContext'
+import { Link, useSearchParams } from 'react-router-dom'
+import { withApplicationContext } from '../../lib/applicationContext'
 import {
   type ComparisonResult,
   type ComparisonStatus,
