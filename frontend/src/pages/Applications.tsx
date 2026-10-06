@@ -76,6 +76,7 @@ function ApplicationRow({ item }: { item: ApplicationListItem }) {
       </div>
       <LifecycleSummaryLine item={item} />
       <div className="actions" style={{ marginTop: 10 }}>
+        <Link to={`/applications/${item.id}/prepare?resume=1`} className="button primary">Continue application</Link>
         <Link to={`/applications/${item.id}`} state={{ returnTo: location.pathname + location.search }} className="button">
           Open application
         </Link>

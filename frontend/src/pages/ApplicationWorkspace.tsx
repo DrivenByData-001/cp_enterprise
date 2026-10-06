@@ -2161,6 +2161,7 @@ export default function ApplicationWorkspace() {
       <Link to={returnTo.current} className="muted" style={{ fontSize: 14 }}>
         ← Back to applications
       </Link>
+      <Link to={`/applications/${id}/prepare?resume=1`} className="button primary" style={{ marginLeft: 16 }}>Continue evidence in Application Mode</Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 12, flexWrap: 'wrap', gap: 12 }}>
         <div>
