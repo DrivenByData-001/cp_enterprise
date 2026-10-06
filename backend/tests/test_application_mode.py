@@ -1,5 +1,8 @@
 """Database integration for the application-owned evidence slice."""
 from app import db
+from app import application_generation as gen
+from fastapi import HTTPException
+import pytest
 from tests.test_application_artifacts import _concept, _posting, _accepted_claim, _claim, _claim_mapping
 
 
@@ -57,3 +60,30 @@ def test_gap_does_not_mutate_shared_evidence(client):
     with db.db_cursor() as cur:
         cur.execute('SELECT claim_text FROM profile360.claims WHERE id = %s', (claim,))
         assert cur.fetchone()['claim_text'] == 'Challenged internal model assumptions'
+
+
+def test_generator_uses_selection_and_rejects_changed_review(client):
+    app, concept, claim = seed(client)
+    with db.db_cursor() as cur:
+        other = _claim(cur, 'Unselected alternative example')
+        _claim_mapping(cur, other, concept)
+    url = f'/api/applications/{app}/mode'
+    item = client.get(url).json()['items'][0]
+    ref = 'profile_claim:' + claim
+    source = next(s for s in item['sources'] if s['ref'] == ref)
+    response = client.put(f'{url}/evidence/{concept}', json={
+        'disposition': 'covered', 'selected_refs': [ref],
+        'source_revisions': {ref: source['source_revision']},
+        'requirement_fingerprint': item['requirement_fingerprint'], 'rationale': 'Choose this example'})
+    assert response.status_code == 200, response.text
+    with db.db_cursor() as cur:
+        ctx = gen.build_application_generation_context(cur, app, artifact_type='positioning')
+        assert ref in ctx.known_source_refs()
+        assert 'profile_claim:' + other not in ctx.known_source_refs()
+        assert 'Choose this example' in ctx.prompt_text
+        cur.execute('UPDATE profile360.claims SET claim_text = %s WHERE id = %s', ('Changed fact', claim))
+    # Artifact reads still work, but generating against the stale review does not.
+    assert client.get(f'/api/applications/{app}/artifacts').status_code == 200
+    with db.db_cursor() as cur, pytest.raises(HTTPException) as error:
+        gen.build_application_generation_context(cur, app, artifact_type='positioning')
+    assert error.value.status_code == 409
