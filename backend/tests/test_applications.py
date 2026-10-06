@@ -474,7 +474,8 @@ def test_evidence_flags_reviewed_claim_vs_legacy_observation(client):
         observation_id = cur.fetchone()["id"]
         cur.execute(
             "INSERT INTO jobber.role_skill_observation_concept "
-            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single')",
+            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single') "
+            "ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING",
             (observation_id, legacy_concept),
         )
     reviewed_app_id = client.post("/api/applications", json={"role_instance_id": role_id}).json()["id"]
