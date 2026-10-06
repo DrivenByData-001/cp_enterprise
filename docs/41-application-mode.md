@@ -42,23 +42,34 @@ Application Mode stages. Global navigation is absent inside the new namespace.
 
 ## Profile360 acceptance contract
 
-The current integration reads canonical Profile360 data and writes only to its
-manual import queue. Queue processing alone does not prove acceptance. Proposed
-additions/corrections must remain labelled pending until the owning service returns
-accepted evidence identifiers. Never write directly to canonical tables merely
-because the frontend is scoped to an application.
+Profile360 is the `profile360` schema in the Supabase project `open-brain`,
+confirmed by the user and read-only catalog inspection on 6 October 2026. There
+are no database acceptance functions or triggers referencing that schema.
+The existing authenticated Python backend now provides the explicit acceptance
+boundary in `profile360_acceptance.py`; the generic reader stays read-only.
 
-Required owner-service contract: idempotent proposal ID, operation (add/correct),
-source revision for corrections, reviewed payload, actor/acceptance timestamp,
-result state (pending/accepted/rejected/failed), canonical evidence IDs and source
-revision. Link accepted IDs back to the originating application/requirement only
-after validating them. Retries must not duplicate career facts; partial failures
-must preserve the proposal and offer retry. A correction invalidates affected
-application reviews but never rewrites submitted history.
+The reviewer edits a claim and its episode link, records a source/correction
+reason, then reviews and explicitly accepts it. Acceptance writes the canonical
+claim, a `profile360.evidence` provenance row, and a `jobber.profile360_acceptance`
+receipt in one transaction. New claims are `user_asserted`; corrections retain
+existing fields and provenance and mark previously non-user evidence as `mixed`.
+Capabilities and episode records are not edited by this first acceptance path.
 
-Until that owner contract is available, the slice can queue a reviewed application
-note, inspect existing canonical evidence, and select it. It must say that queued
-material awaits Profile360 review and cannot claim immediate canonical acceptance.
+The receipt retains operation UUID, originating application/concept, reviewed
+payload, before/after states, authenticated single-operator actor and timestamp.
+Retries with the same UUID and payload do not create duplicates; changed payloads
+for an accepted UUID are rejected. Corrections lock the claim and compare its
+reviewed revision before writing. Accepted claims are returned with their current
+canonical reference/revision and appear in the originating requirement immediately,
+even before the application selection is saved. Selecting them still requires an
+explicit application assessment; acceptance does not imply coverage.
+
+The separate manual-import queue remains pending until separately processed;
+queue processing alone is not proof of acceptance. This path does not consume old
+queue entries, relabel them accepted, or duplicate their content automatically.
+Source changes invalidate application reviews. Immutable submitted history remains
+a separate implementation requirement below; current live-rendered legacy exports
+do not acquire that guarantee from the acceptance audit.
 
 ## Submission contract (design now, migration separately)
 

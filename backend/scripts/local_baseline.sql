@@ -52,6 +52,19 @@ CREATE TABLE IF NOT EXISTS profile360.claims (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Confirmed open-brain provenance table (6 October 2026).
+CREATE TABLE IF NOT EXISTS profile360.evidence (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    claim_id UUID NOT NULL REFERENCES profile360.claims(id),
+    document_id UUID,
+    evidence_type TEXT NOT NULL,
+    passage TEXT,
+    locator TEXT,
+    approximate_date TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS profile360.capabilities (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     capability_key     TEXT,

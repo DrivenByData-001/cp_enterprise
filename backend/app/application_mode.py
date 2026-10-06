@@ -74,10 +74,20 @@ def reviewed_items(cur, application_id, comparison=None):
     app = application(cur, application_id)
     comparison = comparison or build_role_comparison(cur, str(app['role_instance_id']))
     saved = decisions(cur, application_id)
+    cur.execute('SELECT concept_id, claim_id FROM jobber.profile360_acceptance WHERE application_id = %s ORDER BY accepted_at, id', (application_id,))
+    accepted = list(cur.fetchall())
     items = []
     for item in comparison['items']:
         decision = saved.get(str(item['concept']['id']))
         sources = candidates(cur, item)
+        for receipt in accepted:
+            ref = 'profile_claim:' + str(receipt['claim_id'])
+            if str(receipt['concept_id']) == str(item['concept']['id']) and not any(s['ref'] == ref for s in sources):
+                try:
+                    sources.append(canonical_source(cur, ref))
+                except HTTPException as error:
+                    if error.status_code != 409:
+                        raise
         selected = []
         missing = False
         for ref in (decision or {}).get('selected_refs', []):

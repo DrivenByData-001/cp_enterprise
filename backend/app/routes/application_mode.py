@@ -2,14 +2,67 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import application_mode as mode
 from .. import profile360_reader as p360
 from ..comparison_service import build_role_comparison
 from ..db import db_cursor, to_json_param
+from ..profile360_acceptance import accept_claim
 
 router = APIRouter(prefix='/api/applications', tags=['application mode'])
+
+
+def scoped_requirement(cur, application_id, concept_id, *, lock=False):
+    app = mode.application(cur, str(application_id), lock=lock)
+    comparison = build_role_comparison(cur, str(app['role_instance_id']))
+    item = next((i for i in comparison['items'] if str(i['concept']['id']) == str(concept_id)), None)
+    if not item:
+        raise HTTPException(404, 'Requirement is no longer on this application')
+    return item
+
+
+class ClaimAcceptanceInput(BaseModel):
+    operation_id: UUID
+    claim_id: UUID | None = None
+    source_revision: str | None = None
+    claim_text: str = Field(min_length=1, max_length=10000)
+    episode_id: UUID | None = None
+    reason: str = Field(min_length=1, max_length=10000)
+    confirmed: Literal[True]
+
+    @field_validator('claim_text', 'reason')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip():
+            raise ValueError('Enter the reviewed career fact and its source or correction reason')
+        return value.strip()
+
+    @model_validator(mode='after')
+    def correction_revision(self):
+        if self.claim_id and not self.source_revision:
+            raise ValueError('A correction requires the original source revision')
+        return self
+
+
+@router.get('/{application_id}/mode/evidence/{concept_id}/claim-context')
+def claim_context(application_id: UUID, concept_id: UUID, claim_id: UUID | None = None):
+    with db_cursor() as cur:
+        scoped_requirement(cur, application_id, concept_id)
+        claim = p360.get_claim(cur, str(claim_id)) if claim_id else None
+        if claim_id and not claim:
+            raise HTTPException(404, 'Career claim not found')
+        cur.execute('SELECT id, title, organisation, start_date, end_date FROM profile360.episodes ORDER BY start_date DESC NULLS LAST, id')
+        return {'claim': {'claim_text': claim['claim_text'], 'episode_id': claim.get('episode_id'),
+                          'source_revision': mode.fingerprint(dict(claim))} if claim else None,
+                'episodes': list(cur.fetchall())}
+
+
+@router.post('/{application_id}/mode/evidence/{concept_id}/accept-claim')
+def accept_career_claim(application_id: UUID, concept_id: UUID, payload: ClaimAcceptanceInput):
+    with db_cursor() as cur:
+        scoped_requirement(cur, application_id, concept_id, lock=True)
+        return accept_claim(cur, str(application_id), str(concept_id), payload)
 
 
 @router.get('/{application_id}/mode')

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { applicationMode, type ApplicationModeData, type Disposition, type EvidenceDecision, type ModeItem } from '../lib/applicationMode'
 import './ApplicationMode.css'
+import ApplicationClaimReview from '../components/ApplicationClaimReview'
 
 const LABELS: Record<Disposition, string> = { covered: 'Covered', partial: 'Partial evidence', investigate: 'Needs investigation', gap: 'Genuine gap acknowledged' }
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
@@ -29,6 +30,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
   const [saved, setSaved] = useState(false)
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
+  const [claimReview, setClaimReview] = useState<{ claimId?: string } | null>(null)
   const noteKey = `${draftKey}:note`
   const recoveredNote = (() => { try { return JSON.parse(sessionStorage.getItem(noteKey) ?? '{}') } catch { return {} } })()
   const [note, setNote] = useState<string>(recoveredNote.text ?? '')
@@ -42,6 +44,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
   }
   const save: Save = async () => {
     if (pending.current) return pending.current
+    if (claimReview) { setError('Close the career fact review before leaving this requirement. Its draft is kept in this browser.'); return false }
     if (busy) return false
     if (!dirty && !item.stale && item.decision && (!note.trim() || noteId)) return true
     setBusy(true); setError(null)
@@ -100,6 +103,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
       {sources.map(source => <article className="mode-source" key={source.ref}>
         <label><input type="checkbox" checked={decision.selected_refs.includes(source.ref)} onChange={e => update({ ...decision, selected_refs: e.target.checked ? [...decision.selected_refs, source.ref] : decision.selected_refs.filter(r => r !== source.ref) })} /> Use this evidence</label>
         <details><summary>{source.label}</summary><p className="mode-source-text">{source.content}</p><small>Source: Profile360 · {source.kind === 'profile_claim' ? 'Career claim' : 'Capability'}</small></details>
+        {source.kind === 'profile_claim' && <button disabled={!!claimReview} onClick={() => setClaimReview({ claimId: source.ref.split(':')[1] })}>Correct career claim</button>}
       </article>)}
       {decision.selected_refs.filter(ref => !sources.some(s => s.ref === ref)).map(ref => <label key={ref}><input type="checkbox" checked onChange={() => update({ ...decision, selected_refs: decision.selected_refs.filter(r => r !== ref) })} /> Unavailable evidence — uncheck to remove it from this application</label>)}
       <div className="mode-search"><label>Find another career example<input value={query} onChange={e => setQuery(e.target.value)} placeholder="Try a project, responsibility or skill" /></label><button onClick={search} disabled={searching || query.trim().length < 2}>{searching ? 'Searching…' : 'Search career claims'}</button></div>
@@ -109,6 +113,13 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
       <button className="primary" onClick={save}>{busy ? 'Saving…' : 'Save evidence review'}</button>
       <span role="status">{dirty ? 'Unsaved review — recovered in this browser until saved.' : saved || item.decision ? 'Review saved' : 'Not reviewed yet'}</span>
     </fieldset>
+    <button disabled={busy || !!claimReview} onClick={() => setClaimReview({})}>Add reviewed career claim</button>
+    {claimReview && <ApplicationClaimReview key={claimReview.claimId ?? 'new'} applicationId={applicationId} conceptId={item.concept.id} claimId={claimReview.claimId} onClose={() => setClaimReview(null)} onAccepted={source => {
+      const nextSources = [...new Map([...sources, source].map(s => [s.ref, s])).values()]
+      const next = { ...decision, selected_refs: [...new Set([...decision.selected_refs, source.ref])], disposition: decision.disposition === 'gap' ? 'investigate' as const : decision.disposition }
+      setSources(nextSources); setDecision(next); setDirty(true); setSaved(false); setClaimReview(null)
+      sessionStorage.setItem(draftKey, JSON.stringify({ decision: next, sources: nextSources, requirement_fingerprint: recovered?.requirement_fingerprint ?? item.requirement_fingerprint }))
+    }} />}
     <details className="mode-new-evidence"><summary>Remembered another example?</summary>
       <p>Review your career fact before sending it to Profile360. It remains an application note while Profile360 reviews the addition; queued material is not accepted evidence.</p>
       <label>Career example<textarea rows={4} disabled={busy || !!noteId} value={note} onChange={e => setNote(e.target.value)} /></label>

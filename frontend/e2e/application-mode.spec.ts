@@ -106,3 +106,58 @@ test('removed requirement recovers to the application overview', async ({ page }
   await page.getByRole('button', { name: 'Model governance Start review' }).click()
   await expect(page.getByRole('heading', { name: 'Model governance' })).toBeVisible()
 })
+
+test('reviewed claim is accepted explicitly and selected without leaving the application', async ({ page }) => {
+  await setup(page)
+  let accepted = 0
+  const added = { ...source, ref: 'profile_claim:20000000-0000-0000-0000-000000000002', label: 'Led model review in 2021', content: 'Led model review in 2021', source_revision: 'new-v1' }
+  await page.route('**/claim-context', route => route.fulfill({ json: { claim: null, episodes: [] } }))
+  await page.route('**/accept-claim', async route => {
+    const body = route.request().postDataJSON()
+    expect(body.confirmed).toBe(true)
+    expect(body.claim_text).toBe(added.content)
+    expect(body.reason).toBe('Checked project notes')
+    expect(body.claim_id).toBeNull()
+    accepted++
+    await route.fulfill({ json: { status: 'accepted', acceptance_id: body.operation_id, source: added } })
+  })
+  await page.goto(`${base}/${conceptId}`)
+  await page.getByRole('button', { name: 'Add reviewed career claim', exact: true }).click()
+  await page.getByLabel('Career fact', { exact: true }).fill(added.content)
+  await page.getByLabel('Source or correction reason', { exact: true }).fill('Checked project notes')
+  await page.getByRole('button', { name: 'Review before accepting' }).click()
+  expect(accepted).toBe(0)
+  await expect(page.getByRole('heading', { name: 'Career fact to accept' })).toBeVisible()
+  await page.getByRole('button', { name: 'Accept into Profile360 & use here' }).click()
+  await expect(page.getByLabel('Use this evidence').nth(1)).toBeChecked()
+  await expect(page).toHaveURL(new RegExp(`${conceptId}$`))
+  page.on('dialog', dialog => dialog.accept())
+  await page.reload()
+  await expect(page.getByLabel('Use this evidence').nth(1)).toBeChecked()
+  expect(accepted).toBe(1)
+})
+
+test('correction conflict retains draft and acceptance retry uses the same operation', async ({ page }) => {
+  await setup(page)
+  const requests: object[] = []
+  await page.route('**/claim-context?*', route => route.fulfill({ json: { claim: { claim_text: source.content, episode_id: null, source_revision: source.source_revision }, episodes: [] } }))
+  await page.route('**/accept-claim', async route => {
+    requests.push(route.request().postDataJSON())
+    await route.fulfill({ status: 409, json: { detail: 'The career claim changed. Reload it and review the correction again' } })
+  })
+  await page.goto(`${base}/${conceptId}`)
+  await page.getByRole('button', { name: 'Correct career claim', exact: true }).click()
+  await page.getByLabel('Career fact', { exact: true }).fill('Corrected to 2020')
+  await page.getByLabel('Source or correction reason', { exact: true }).fill('Checked dates')
+  await page.getByRole('button', { name: 'Review before accepting' }).click()
+  await page.getByRole('button', { name: 'Accept into Profile360 & use here' }).click()
+  await expect(page.getByRole('alert')).toContainText('career claim changed')
+  await page.getByRole('button', { name: 'Accept into Profile360 & use here' }).click()
+  expect(requests).toHaveLength(2)
+  expect(requests[1]).toEqual(requests[0])
+  await page.getByRole('button', { name: 'Back to edit' }).click()
+  await expect(page.getByLabel('Career fact', { exact: true })).toHaveValue('Corrected to 2020')
+  await page.getByRole('button', { name: 'Close and keep draft' }).click()
+  await page.getByRole('button', { name: 'Correct career claim', exact: true }).click()
+  await expect(page.getByLabel('Career fact', { exact: true })).toHaveValue('Corrected to 2020')
+})
