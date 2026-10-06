@@ -46,7 +46,7 @@ function Root() {
 // comparison/pathway/target detail pages) still lights up the primary tab it
 // conceptually belongs under, so the shell never looks like it's lost track
 // of where you are.
-const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string) => boolean }[] = [
+const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string, search: string) => boolean }[] = [
   { path: '/', label: 'Home', match: (p) => p === '/' },
   {
     path: '/future',
@@ -56,14 +56,14 @@ const PRIMARY_LINKS: { path: string; label: string; match: (pathname: string) =>
   {
     path: '/opportunities',
     label: 'Opportunities',
-    match: (p) => p === '/opportunities' || p.startsWith('/roles/') || p.startsWith('/comparison/') || p.startsWith('/role-instances/'),
+    match: (p, search) => !new URLSearchParams(search).has('application') && new URLSearchParams(search).get('intent') !== 'apply' && (p === '/opportunities' || p.startsWith('/roles/') || p.startsWith('/comparison/') || p.startsWith('/role-instances/')),
   },
-  { path: '/applications', label: 'Applications', match: (p) => p === '/applications' || p.startsWith('/applications/') },
+  { path: '/applications', label: 'Applications', match: (p, search) => p === '/applications' || p.startsWith('/applications/') || new URLSearchParams(search).has('application') || new URLSearchParams(search).get('intent') === 'apply' },
 ]
 
 function App() {
   const { logout } = useAuth()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const [toolsOpen, setToolsOpen] = useState(false)
   const menuButton = useRef<HTMLButtonElement>(null)
   const secondaryGroups = [
@@ -100,7 +100,7 @@ function App() {
       <nav className="nav" aria-label="Main navigation" onClick={e => { if ((e.target as HTMLElement).closest('a')) setToolsOpen(false) }} onKeyDown={e => { if (e.key === 'Escape') { setToolsOpen(false); menuButton.current?.focus() } }}>
         <div className="nav-primary">
           {PRIMARY_LINKS.map(({ path, label, match }) => (
-            <NavLink key={path} to={path} end={path === '/'} aria-current={match(pathname) ? 'page' : undefined} className={() => (match(pathname) ? 'active' : '')}>
+            <NavLink key={path} to={path} end={path === '/'} aria-current={match(pathname, search) ? 'page' : undefined} className={() => (match(pathname, search) ? 'active' : '')}>
               {label}
             </NavLink>
           ))}
