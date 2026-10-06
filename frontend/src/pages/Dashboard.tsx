@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { ApplyIntentNotice } from '../components/WorkflowContextBanner'
+import { keepWorkflow, useWorkflowContext } from '../lib/workflowContext'
 import { api, type Facet, type Role, type YearRange } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { rememberRoleList } from '../lib/roleNavigation'
@@ -52,6 +54,7 @@ export default function Dashboard() {
   const [total, setTotal] = useState(0)
   const [yearRange, setYearRange] = useState<YearRange>(null)
   const [params, setParams] = useSearchParams()
+  const workflow = useWorkflowContext()
   useEffect(() => { rememberRoleList(params.toString()) }, [params])
   const track = params.get('track') ?? ''
   const facetType = params.get('facet') ?? ''
@@ -118,6 +121,7 @@ export default function Dashboard() {
 
   return (
     <div>
+      <ApplyIntentNotice />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h1 style={{ fontSize: 22, margin: 0 }}>Opportunities</h1>
@@ -223,7 +227,7 @@ export default function Dashboard() {
         <div className="card">
           <p>{period === 'year' && year === '' ? 'Choose a posting year to see matching roles.' :
             track || conceptId || period !== 'all' || offset > 0 ? 'No roles match these filters.' : 'No roles captured yet.'}</p>
-          <button onClick={() => setParams({ period: 'all' })}>Clear filters and show all years</button>{' '}
+          <button onClick={() => setParams(keepWorkflow({ period: 'all' }, params))}>Clear filters and show all years</button>{' '}
           <Link to="/import">Add a posting</Link>
         </div>
       )}
@@ -232,7 +236,7 @@ export default function Dashboard() {
         {roles.map((r) => (
           <Link
             key={r.id}
-            to={`/roles/${r.id}`}
+            to={workflow.link(`/roles/${r.id}`)}
             state={{ returnTo: `/opportunities?${params.toString()}` }}
             className="card opportunity-card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}

@@ -576,6 +576,7 @@ function CheckRow({ heading, children, tone }: { heading: string; children: Reac
 }
 
 function PreparationChecks({ detail, evidence }: { detail: ApplicationDetail; evidence: ApplicationEvidence | null }) {
+  const applicationId = detail.application.id
   const review = evidence?.review_summary
   const reviewedCount = evidence ? evidence.items.filter((i) => i.role_requirement_reviewed).length : 0
   const legacyCount = evidence ? evidence.items.filter((i) => !i.role_requirement_reviewed).length : 0
@@ -603,7 +604,7 @@ function PreparationChecks({ detail, evidence }: { detail: ApplicationDetail; ev
         <CheckRow heading="Requirement review incomplete" tone="warning">
           {pluralize(review.unreviewed + review.unresolved_proposals + review.needs_reextraction, 'item')} still excluded from
           reviewed analysis.{' '}
-          {evidence && <Link to={`/role-instances/${evidence.role_instance_id}/requirements`}>Review now</Link>}
+          {evidence && <Link to={`/role-instances/${evidence.role_instance_id}/requirements?application=${applicationId}`}>Review now</Link>}
         </CheckRow>
       )}
 
@@ -715,6 +716,7 @@ function GapRow({
   busy: boolean
 }) {
   const [composing, setComposing] = useState(false)
+  const { id: applicationId } = useParams()
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
@@ -735,7 +737,7 @@ function GapRow({
         <button type="button" onClick={() => setComposing((c) => !c)} style={{ fontSize: 14, padding: '4px 10px' }}>
           {composing ? 'Cancel' : 'Add an example for this application'}
         </button>
-        <Link to={`/comparison/${roleId}`} style={{ fontSize: 14 }}>
+        <Link to={`/comparison/${roleId}?application=${applicationId}`} style={{ fontSize: 14 }}>
           Review my evidence
         </Link>
       </div>
@@ -2166,6 +2168,9 @@ export default function ApplicationWorkspace() {
           <div className="secondary">
             {role.organisation ?? 'Unknown org'}
             {role.location ? ` · ${role.location}` : ''}
+          </div>
+          <div style={{ fontSize: 14, marginTop: 4 }}>
+            <Link to={`/roles/${role.id}?application=${application.id}`}>View opportunity</Link>
           </div>
           <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>
             Created {formatDateTime(application.created_at)} · updated {formatDateTime(application.updated_at)}

@@ -13,6 +13,8 @@ import {
 } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
+import { ApplicationContextBanner, WorkflowLink } from '../components/WorkflowContextBanner'
+import { useWorkflowContext } from '../lib/workflowContext'
 import { RoleEconomicsSection } from '../components/economics/RoleEconomicsSection'
 import { DecisionSummary, RequirementsAskFor, RequirementReviewPendingNotice } from '../components/opportunity/DecisionSummary'
 import { AlignmentFullSection } from '../components/opportunity/AlignmentSection'
@@ -320,6 +322,7 @@ export default function RoleDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
+  const workflow = useWorkflowContext()
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
@@ -428,7 +431,7 @@ export default function RoleDetail() {
     setDeleteError(null)
     try {
       await api.deleteRole(role.id)
-      navigate(isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl())
+      navigate(isTarget ? '/targets' : workflow.applicationId ? '/applications' : location.state?.returnTo ?? roleListUrl())
     } catch (e) { setDeleteError(e instanceof Error ? e.message : String(e)) }
     finally { setDeleting(false) }
   }
@@ -454,6 +457,7 @@ export default function RoleDetail() {
   return (
     <div>
       {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
+      {!isTarget && <ApplicationContextBanner roleId={role.id} />}
       <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 14 }}>
         ← Back to {isTarget ? 'targets' : 'opportunities'}
       </Link>
@@ -776,18 +780,18 @@ export default function RoleDetail() {
           </p>
         )}
         <div className="actions">
-          {!isTarget && (
+          {!isTarget && !workflow.applicationId && (
             <button type="button" className="button primary" disabled={applying} onClick={handleApply}>
               {applying ? 'Opening application…' : 'I want to apply'}
             </button>
           )}
-          <Link to={`/role-instances/${role.id}/requirements`} className="button">
+          <WorkflowLink to={`/role-instances/${role.id}/requirements`} className="button">
             {isTarget ? 'Requirements' : 'Review requirements'}
-          </Link>
-          <Link to={`/comparison/${role.id}`} className="button">
+          </WorkflowLink>
+          <WorkflowLink to={`/comparison/${role.id}`} className="button">
             {isTarget ? 'Compare' : 'Review evidence in detail'}
-          </Link>
-          <Link to={isTarget ? `/targets/${role.id}/edit` : `/roles/${role.id}/edit`} className="button">
+          </WorkflowLink>
+          <Link to={isTarget ? `/targets/${role.id}/edit` : workflow.link(`/roles/${role.id}/edit`)} className="button">
             {isTarget ? 'Edit' : 'Correct role details'}
           </Link>
           {!isTarget && (

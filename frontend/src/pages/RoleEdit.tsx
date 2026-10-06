@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, type ManualCompensationInput, type Role, type RoleCompensationObservation, type RoleMetadataInput, type TargetDraft } from '../lib/api'
+import { ApplicationContextBanner } from '../components/WorkflowContextBanner'
+import { useWorkflowContext } from '../lib/workflowContext'
 import RoleMetadataForm from '../components/RoleMetadataForm'
 import TargetDraftEditor from '../components/TargetDraftEditor'
 
@@ -324,6 +326,7 @@ function metadataFromRole(role: Role): RoleMetadataInput {
 // (Requirements page).
 function SourceAwareMetadataEditor({ role }: { role: Role }) {
   const navigate = useNavigate()
+  const workflow = useWorkflowContext()
   const [metadata, setMetadata] = useState<RoleMetadataInput>(metadataFromRole(role))
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<Result | null>(null)
@@ -334,7 +337,7 @@ function SourceAwareMetadataEditor({ role }: { role: Role }) {
     try {
       await api.updateRoleMetadata(role.id, metadata)
       setResult({ ok: true, message: 'Metadata saved.' })
-      setTimeout(() => navigate(`/roles/${role.id}`), 700)
+      setTimeout(() => navigate(workflow.link(`/roles/${role.id}`)), 700)
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -349,7 +352,7 @@ function SourceAwareMetadataEditor({ role }: { role: Role }) {
         This role was captured as an immutable source document rather than a full AI extraction, so there is no JSON
         to overwrite here — correct the fields below directly. This never modifies the captured source text; re-running
         requirement extraction against it stays a separate action on the{' '}
-        <Link to={`/role-instances/${role.id}/requirements`}>Requirements</Link> page.
+        <Link to={workflow.link(`/role-instances/${role.id}/requirements`)}>Requirements</Link> page.
       </p>
       {role.url && (
         <p className="muted" style={{ fontSize: 12 }}>
@@ -365,7 +368,7 @@ function SourceAwareMetadataEditor({ role }: { role: Role }) {
         <button className="primary" onClick={submit} disabled={busy}>
           {busy ? 'Saving…' : 'Save changes'}
         </button>
-        <button onClick={() => navigate(`/roles/${role.id}`)} disabled={busy}>
+        <button onClick={() => navigate(workflow.link(`/roles/${role.id}`))} disabled={busy}>
           Cancel
         </button>
       </div>
@@ -376,6 +379,7 @@ function SourceAwareMetadataEditor({ role }: { role: Role }) {
 
 function LegacyJsonEditor({ role }: { role: Role }) {
   const navigate = useNavigate()
+  const workflow = useWorkflowContext()
   const isTarget = role.node_type !== 'posting'
   const promptName = isTarget ? 'prompts/decompose_target_role.md' : 'prompts/extract_job_posting.md'
   const [text, setText] = useState(() => JSON.stringify(role.raw_json, null, 2))
@@ -393,7 +397,7 @@ function LegacyJsonEditor({ role }: { role: Role }) {
         await api.updateRole(role.id, parsed)
       }
       setResult({ ok: true, message: 'Saved. Re-embedded from the updated content.' })
-      setTimeout(() => navigate(isTarget ? `/targets/${role.id}` : `/roles/${role.id}`), 700)
+      setTimeout(() => navigate(isTarget ? `/targets/${role.id}` : workflow.link(`/roles/${role.id}`)), 700)
     } catch (e) {
       setResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -423,7 +427,7 @@ function LegacyJsonEditor({ role }: { role: Role }) {
           <button className="primary" onClick={submit} disabled={busy || !text.trim()}>
             {busy ? 'Saving…' : 'Save changes'}
           </button>
-          <button onClick={() => navigate(isTarget ? `/targets/${role.id}` : `/roles/${role.id}`)} disabled={busy}>
+          <button onClick={() => navigate(isTarget ? `/targets/${role.id}` : workflow.link(`/roles/${role.id}`))} disabled={busy}>
             Cancel
           </button>
         </div>
@@ -475,6 +479,7 @@ function SavedTargetEditor({ role }: { role: Role }) {
 
 export default function RoleEdit() {
   const { id } = useParams()
+  const workflow = useWorkflowContext()
   const [role, setRole] = useState<Role | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -491,7 +496,8 @@ export default function RoleEdit() {
 
   return (
     <div>
-      <Link to={isTarget ? `/targets/${role.id}` : `/roles/${role.id}`} className="muted" style={{ fontSize: 13 }}>
+      {!isTarget && <ApplicationContextBanner roleId={role.id} />}
+      <Link to={isTarget ? `/targets/${role.id}` : workflow.link(`/roles/${role.id}`)} className="muted" style={{ fontSize: 13 }}>
         ← Back to {role.title}
       </Link>
 

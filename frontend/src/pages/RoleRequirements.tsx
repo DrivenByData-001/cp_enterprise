@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { ApplicationContextBanner, WorkflowLink } from '../components/WorkflowContextBanner'
+import { keepWorkflow, useWorkflowContext } from '../lib/workflowContext'
 import {
   api,
   type Concept,
@@ -545,6 +547,7 @@ export default function RoleRequirements() {
   const { id } = useParams()
   const roleId = id ?? ''
   const [params, setParams] = useSearchParams()
+  const workflow = useWorkflowContext()
   const detailsStep = params.get('step') === 'details'
   const [busy, setBusy] = useState(false)
   const [retry, setRetry] = useState(0)
@@ -630,7 +633,8 @@ export default function RoleRequirements() {
 
   return (
     <div>
-      <Link to={`/roles/${roleId}`} className="muted" style={{ fontSize: 13 }}>
+      <ApplicationContextBanner roleId={roleId} />
+      <Link to={workflow.link(`/roles/${roleId}`)} className="muted" style={{ fontSize: 13 }}>
         ← Back to role
       </Link>
       <ImportSteps step={detailsStep ? 1 : 2} />
@@ -639,8 +643,8 @@ export default function RoleRequirements() {
       <div hidden={!detailsStep}>
         <MetadataEnrichmentPanel key={roleId} roleId={roleId} onSaved={() => setSavedRoleVersion((v) => v + 1)} />
       </div>
-      {detailsStep ? <button className="primary" onClick={() => setParams({})}>Continue to requirements</button> :
-        <button onClick={() => setParams({ step: 'details' })}>Back to role details</button>}
+      {detailsStep ? <button className="primary" onClick={() => setParams(keepWorkflow({}, params))}>Continue to requirements</button> :
+        <button onClick={() => setParams(keepWorkflow({ step: 'details' }, params))}>Back to role details</button>}
       <div hidden={detailsStep}>
 
       <p className="secondary">
@@ -722,9 +726,9 @@ export default function RoleRequirements() {
           from comparison and analysis until reviewed.
         </p>
       )}
-      <Link to={`/comparison/${roleId}`}>
+      <WorkflowLink to={`/comparison/${roleId}`}>
         Continue to comparison{!summary.complete ? ' (requirement review incomplete)' : ''}
-      </Link>
+      </WorkflowLink>
       </div>
     </div>
   )
