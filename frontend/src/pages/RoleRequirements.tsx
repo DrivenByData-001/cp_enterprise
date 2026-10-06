@@ -11,7 +11,7 @@ import {
 } from '../lib/api'
 import ImportSteps from '../components/ImportSteps'
 import RoleMetadataForm from '../components/RoleMetadataForm'
-import SavedRoleBanner from '../components/SavedRoleBanner'
+import SavedRoleBanner from '../components/SavedRoleBanner'\nimport ApplicationContextBanner from '../components/ApplicationContextBanner'\nimport { withApplicationContext } from '../lib/applicationContext'
 
 const BASIS_LABEL: Record<string, string> = {
   stated: 'stated',
@@ -545,7 +545,7 @@ export default function RoleRequirements() {
   const { id } = useParams()
   const roleId = id ?? ''
   const [params, setParams] = useSearchParams()
-  const detailsStep = params.get('step') === 'details'
+  const detailsStep = params.get('step') === 'details'\n  const applicationId = params.get('application')
   const [busy, setBusy] = useState(false)
   const [retry, setRetry] = useState(0)
   const [claims, setClaims] = useState<RequirementClaim[]>([])
@@ -630,7 +630,7 @@ export default function RoleRequirements() {
 
   return (
     <div>
-      <Link to={`/roles/${roleId}`} className="muted" style={{ fontSize: 13 }}>
+      <ApplicationContextBanner />\n      <Link to={withApplicationContext(`/roles/${roleId}`, applicationId)} className="muted" style={{ fontSize: 13 }}>
         ← Back to role
       </Link>
       <ImportSteps step={detailsStep ? 1 : 2} />
@@ -722,7 +722,7 @@ export default function RoleRequirements() {
           from comparison and analysis until reviewed.
         </p>
       )}
-      <Link to={`/comparison/${roleId}`}>
+      <Link to={withApplicationContext(`/comparison/${roleId}`, applicationId)}>
         Continue to comparison{!summary.complete ? ' (requirement review incomplete)' : ''}
       </Link>
       </div>
