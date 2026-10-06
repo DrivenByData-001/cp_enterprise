@@ -179,7 +179,7 @@ def _configure_app_database(postgres_test_db, monkeypatch_session):
             CREATE OR REPLACE FUNCTION jobber.test_sync_role_skill_observation_concept()
             RETURNS trigger
             LANGUAGE plpgsql
-            AS $
+            AS $test_fixture$
             BEGIN
                 IF NEW.canonical_concept_id IS NOT NULL THEN
                     INSERT INTO jobber.role_skill_observation_concept (
@@ -190,7 +190,7 @@ def _configure_app_database(postgres_test_db, monkeypatch_session):
                 END IF;
                 RETURN NEW;
             END;
-            $;
+            $test_fixture$;
 
             DROP TRIGGER IF EXISTS test_sync_role_skill_observation_concept
                 ON jobber.role_skill_observation;
