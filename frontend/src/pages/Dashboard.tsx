@@ -56,7 +56,7 @@ export default function Dashboard() {
   const track = params.get('track') ?? ''
   const facetType = params.get('facet') ?? ''
   const conceptId = facetType ? params.get('concept') ?? '' : ''
-  const periodValue = params.get('period') ?? 'current'
+  const applicationIntent = params.get('intent') === 'apply'\n  const periodValue = params.get('period') ?? 'current'
   const period = ['current', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
   // Current's own default sort is newest/recently-captured first, not
   // similarity (brief §6.3): sending `sort=captured_at` explicitly here is
@@ -223,7 +223,7 @@ export default function Dashboard() {
         <div className="card">
           <p>{period === 'year' && year === '' ? 'Choose a posting year to see matching roles.' :
             track || conceptId || period !== 'all' || offset > 0 ? 'No roles match these filters.' : 'No roles captured yet.'}</p>
-          <button onClick={() => setParams({ period: 'all' })}>Clear filters and show all years</button>{' '}
+          <button onClick={() => setParams(applicationIntent ? { period: 'all', intent: 'apply' } : { period: 'all' })}>Clear filters and show all years</button>{' '}
           <Link to="/import">Add a posting</Link>
         </div>
       )}
@@ -232,7 +232,7 @@ export default function Dashboard() {
         {roles.map((r) => (
           <Link
             key={r.id}
-            to={`/roles/${r.id}`}
+            to={`/roles/${r.id}${applicationIntent ? '?intent=apply' : ''}`}
             state={{ returnTo: `/opportunities?${params.toString()}` }}
             className="card opportunity-card"
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textDecoration: 'none' }}
