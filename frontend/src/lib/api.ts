@@ -3478,6 +3478,7 @@ export const api = {
   setUnauthorizedHandler,
   listRoles: (
     params: {
+      q?: string
       career_track?: string
       concept_id?: string
       min_similarity?: number
@@ -3491,6 +3492,7 @@ export const api = {
     } = {},
   ) => {
     const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
     if (params.career_track) qs.set('career_track', params.career_track)
     if (params.concept_id !== undefined) qs.set('concept_id', params.concept_id)
     if (params.min_similarity !== undefined) qs.set('min_similarity', String(params.min_similarity))

@@ -165,6 +165,12 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
 
     comparison = build_role_comparison(cur, role_instance_id)
     accepted, legacy = _split_requirements(comparison["items"])
+    from .application_process import preparation, target_state
+    process_data = preparation(cur, application_id)
+    if process_data['revision']:
+        legacy = []  # Process-adopted applications use confirmed requirements only.
+        role['application_preparation_context'] = {'target': target_state(cur, role_instance_id),
+            'deadline': process_data['deadline'], 'package': process_data['package_items']}
     from .application_mode import apply_curation
     selected_sources, curated = apply_curation(cur, application_id, [*accepted, *legacy])
 
@@ -314,6 +320,8 @@ def compute_fingerprint_for(
     }
     if bundle.curated:
         parts['application_decisions'] = [r.get('application_decision') for r in (*bundle.accepted_requirements, *bundle.legacy_requirements)]
+    if 'application_preparation_context' in bundle.role:
+        parts['application_preparation_context'] = bundle.role['application_preparation_context']
     if artifact_type == "interview_prep":
         parts["application_status"] = bundle.application.get("status")
         parts["events"] = sorted(
@@ -668,6 +676,8 @@ def build_application_generation_context(
     relevant, assembles the stable source registry, and computes the
     fingerprint this specific (artifact_type, guidance) generation call would
     produce. Called once per POST .../generate — never on a GET."""
+    from .application_process import require_current_checkpoints
+    require_current_checkpoints(cur, application_id)
     bundle = gather_application_evidence(cur, application_id)
     if bundle.curated and (not (bundle.accepted_requirements or bundle.legacy_requirements) or any(not r.get('application_decision') or
                               r['application_decision']['stale'] or

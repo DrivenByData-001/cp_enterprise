@@ -72,7 +72,8 @@ class EvidenceContractTests(unittest.TestCase):
 
     def test_incomplete_curation_blocks_generation_but_not_reads(self):
         bundle = gen.EvidenceBundle(APP, 'role', {}, {}, {}, [{'concept_id': CONCEPT}], [], [], None, [], curated=True)
-        with patch.object(gen, 'gather_application_evidence', return_value=bundle):
+        with patch.object(gen, 'gather_application_evidence', return_value=bundle), \
+             patch('app.application_process.require_current_checkpoints'):
             with self.assertRaises(HTTPException) as error:
                 gen.build_application_generation_context(MagicMock(), APP, artifact_type='positioning')
         self.assertEqual(error.exception.status_code, 409)

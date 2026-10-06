@@ -144,7 +144,7 @@ function App() {
         <Route path="/opportunities" element={<Dashboard />} />
         <Route path="/applications" element={<Applications />} />
         <Route path="/applications/:id" element={<ApplicationWorkspace />} />
-        <Route path="/applications/:id/prepare/:conceptId?" element={<ApplicationMode />} />
+        <Route path="/applications/:id/prepare/:stage?/:entity?" element={<ApplicationMode />} />
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
