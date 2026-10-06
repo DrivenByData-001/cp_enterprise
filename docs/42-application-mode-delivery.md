@@ -35,8 +35,11 @@
 * Supplemental PGlite smoke validation applied migration 0035 to minimal parent
   tables and checked inserts, revision increments, constraints, resume and cascade.
   This is not a substitute for the Python/Postgres integration suite.
-* 82 selected database integration tests were skipped because no disposable
-  PostgreSQL server was available, including the three new integration tests.
+* Local database tests initially skipped because no disposable PostgreSQL server
+  was available. GitHub Actions subsequently ran the full backend suite against
+  PostgreSQL 16 + pgvector: **1,426 passed**, including the four new integration
+  tests. Frontend CI also passed. Validated code commit: `4bdcb3f`;
+  [CI run](https://github.com/DrivenByData-001/cp_enterprise/actions/runs/37517193430).
   Production databases and deployed services were not modified.
 
 ## Required before declaring the complete evidence slice finished
@@ -47,8 +50,9 @@
    automatic reuse cannot yet be implemented honestly. Queue processing must not
    be interpreted as acceptance. Existing accepted claims can be searched and
    selected manually after review.
-2. Run database integration tests with disposable PostgreSQL + pgvector and
-   validate the authenticated flow against the real Profile360 integration.
+2. Validate the authenticated flow against the real Profile360 owner integration
+   once its accepted-result contract is connected. Disposable database integration
+   is complete in CI; browser API fixtures do not replace this live acceptance check.
 
 ## Deliberate later migrations
 
