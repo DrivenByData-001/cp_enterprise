@@ -34,10 +34,13 @@
   bundle is approximately 87.6 KB against the 150 KB budget.
 * 393 frontend tests passed across 28 files.
 * 11 backend contract tests passed (`python -m unittest discover -s unit_tests`).
-* Four Chromium browser tests passed: complete save/refresh/exit/resume journey;
+* Six Chromium browser tests passed: complete save/refresh/exit/resume journey;
   conflicting save and recovered edits; mobile source-change/pending-promotion
-  flow; removed requirement recovery. APIs in these browser tests are fixtures.
-* Desktop/mobile screenshots were inspected. No horizontal overflow at 390 px.
+  flow; removed requirement recovery; explicit acceptance and immediate reuse;
+  correction conflict with stable retry identity and retained draft. APIs in these
+  browser tests are fixtures.
+* Desktop/mobile screenshots of both evidence review and the new acceptance
+  confirmation were inspected. No horizontal overflow at 390 px.
 * Supplemental PGlite smoke validation applied migration 0035 to minimal parent
   tables and checked inserts, revision increments, constraints, resume and cascade.
   This is not a substitute for the Python/Postgres integration suite.
@@ -47,6 +50,11 @@
   tests. Frontend CI also passed. Validated code commit: `4bdcb3f`;
   [CI run](https://github.com/DrivenByData-001/cp_enterprise/actions/runs/37517193430).
   Production databases and deployed services were not modified.
+* Acceptance integration CI passed on code commit `d97ec80`: **1,429 backend
+  tests passed** against PostgreSQL 16 + pgvector; frontend CI passed as well.
+  This includes canonical/provenance rollback, idempotent acceptance, immediate
+  generator reuse and correction invalidation across two applications.
+  [Acceptance CI run](https://github.com/DrivenByData-001/cp_enterprise/actions/runs/37525781815).
 
 ## Profile360 integration and release boundary
 
