@@ -603,7 +603,7 @@ function PreparationChecks({ detail, evidence }: { detail: ApplicationDetail; ev
         <CheckRow heading="Requirement review incomplete" tone="warning">
           {pluralize(review.unreviewed + review.unresolved_proposals + review.needs_reextraction, 'item')} still excluded from
           reviewed analysis.{' '}
-          {evidence && <Link to={`/role-instances/${evidence.role_instance_id}/requirements`}>Review now</Link>}
+          {evidence && <Link to={`/role-instances/${evidence.role_instance_id}/requirements?application=${detail.application.id}`}>Review now</Link>}
         </CheckRow>
       )}
 
@@ -735,7 +735,7 @@ function GapRow({
         <button type="button" onClick={() => setComposing((c) => !c)} style={{ fontSize: 14, padding: '4px 10px' }}>
           {composing ? 'Cancel' : 'Add an example for this application'}
         </button>
-        <Link to={`/comparison/${roleId}`} style={{ fontSize: 14 }}>
+        <Link to={`/comparison/${roleId}?application=${applicationId}`} style={{ fontSize: 14 }}>
           Review my evidence
         </Link>
       </div>
