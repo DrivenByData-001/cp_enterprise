@@ -168,8 +168,10 @@ def top_requirements(cur, filters: TrendFilters, *, min_sample_size: int = 5, li
             COUNT(DISTINCT rso.role_instance_id) FILTER (WHERE rso.requirement_type = 'inferred') AS n_inferred
         FROM jobber.role_skill_observation rso
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
-        LEFT JOIN jobber.role_skill_observation_concept rsoc ON rsoc.role_skill_observation_id = rso.id
-        JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
+        LEFT JOIN (
+            jobber.role_skill_observation_concept rsoc
+            JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
+        ) ON rsoc.role_skill_observation_id = rso.id
         WHERE {where_sql}
         GROUP BY rsoc.concept_id, c.canonical_name, c.type_code, surface_key
         ORDER BY role_count DESC
