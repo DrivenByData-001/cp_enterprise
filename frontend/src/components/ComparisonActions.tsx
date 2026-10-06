@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type ComparisonItem, type DevelopmentAction } from '../lib/api'
+import { useWorkflowContext } from '../lib/workflowContext'
 
 export default function ComparisonActions({ item, roleId, actions, onChanged }: {
   item: ComparisonItem; roleId: string; actions: DevelopmentAction[]; onChanged: () => Promise<void>
 }) {
+  const { applicationId } = useWorkflowContext()
   const [note, setNote] = useState(item.person_side.assertion?.note ?? '')
   const [title, setTitle] = useState('')
   const [due, setDue] = useState('')
@@ -27,7 +29,7 @@ export default function ComparisonActions({ item, roleId, actions, onChanged }: 
     {error && <p role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
     <div className="actions">
-      <Link to="/profile360">Review supporting evidence</Link>
+      <Link to={applicationId ? `/applications/${applicationId}/prepare/${item.concept.id}` : '/profile360'}>Review supporting evidence</Link>
       <button onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide next steps' : 'Record an example or plan an action'}</button>
     </div>
     {open && <fieldset disabled={busy} className="form-stack" style={{ marginTop: 12 }}>

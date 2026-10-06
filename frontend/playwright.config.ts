@@ -24,23 +24,20 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev -- --port 5183 --strictPort',
+    command: 'npm run dev -- --host 127.0.0.1 --port 5183 --strictPort',
     url: 'http://127.0.0.1:5183',
     reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
+    timeout: 60_000,
   },
   projects: [
     {
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // This sandbox's installed @playwright/test (1.63) expects a newer
-        // Chromium revision than the one pre-provisioned on this box —
-        // point at the pre-installed binary directly rather than
-        // downloading a matching revision (network policy blocks the
-        // Playwright CDN here; see /root/.ccr/README.md).
+        // Use Playwright's installed Chromium unless an environment supplies
+        // a local Chrome/Chromium executable (including Windows development).
         launchOptions: {
-          executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+          executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH,
         },
       },
     },

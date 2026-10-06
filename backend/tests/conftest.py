@@ -74,6 +74,7 @@ def _pg_available(admin_url: str) -> bool:
 # legacy_role_analysis; that data now lives directly on role_instance or in
 # profile360, per the reconciliation pass.
 _RESETTABLE_JOBBER_TABLES = [
+    "profile360_acceptance",
     "d_pathways",
     "d_target_path",
     "d_target_evidence",
@@ -126,6 +127,7 @@ _RESETTABLE_JOBBER_TABLES = [
 # migration 0015 against the same stub schema and reset alongside the rest —
 # personal earnings tests seed and clear them per test like any other table.
 _RESETTABLE_PROFILE360_TABLES = [
+    "evidence",
     "compensation_evidence", "compensation_observation",
     "claims", "capabilities", "episodes", "snapshots", "manual_import_queue",
 ]

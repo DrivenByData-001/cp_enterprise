@@ -119,6 +119,7 @@ class EvidenceBundle:
     # compute_fingerprint_for's own docstring for why an ordinary
     # CV/Positioning artifact must never go stale from this field changing.
     events: list[dict] = field(default_factory=list)
+    curated: bool = False
 
 
 def _split_requirements(items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -164,6 +165,8 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
 
     comparison = build_role_comparison(cur, role_instance_id)
     accepted, legacy = _split_requirements(comparison["items"])
+    from .application_mode import apply_curation
+    selected_sources, curated = apply_curation(cur, application_id, [*accepted, *legacy])
 
     cur.execute(
         "SELECT * FROM jobber.application_note WHERE application_id = %s ORDER BY created_at",
@@ -173,12 +176,16 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
 
     profile_snapshot = p360.get_current_snapshot(cur)
     episodes = p360.list_episodes(cur, limit=EPISODE_LIMIT)
+    if curated:
+        episode_ids = {s['episode_id'] for s in selected_sources if s.get('episode_id')}
+        episodes = [dict(ep) for eid in episode_ids if (ep := p360.get_episode(cur, eid))]
+        profile_snapshot = None
     events = _list_application_events(cur, application_id)
 
     return EvidenceBundle(
         application_id=application_id, role_instance_id=role_instance_id, application=application, role=role,
         comparison=comparison, accepted_requirements=accepted, legacy_requirements=legacy,
-        notes=notes, profile_snapshot=profile_snapshot, episodes=episodes, events=events,
+        notes=notes, profile_snapshot=profile_snapshot, episodes=episodes, events=events, curated=curated,
     )
 
 
@@ -305,6 +312,8 @@ def compute_fingerprint_for(
         ),
         "guidance": guidance,
     }
+    if bundle.curated:
+        parts['application_decisions'] = [r.get('application_decision') for r in (*bundle.accepted_requirements, *bundle.legacy_requirements)]
     if artifact_type == "interview_prep":
         parts["application_status"] = bundle.application.get("status")
         parts["events"] = sorted(
@@ -482,10 +491,10 @@ def build_source_registry(
 
     for r in bundle.accepted_requirements:
         sources.append(_requirement_source(r, legacy=False))
-        sources.extend(_mapping_sources(r["canonical_name"], r["person_side"]))
+        sources.extend(_curated_requirement_sources(r) if bundle.curated else _mapping_sources(r["canonical_name"], r["person_side"]))
     for r in bundle.legacy_requirements:
         sources.append(_requirement_source(r, legacy=True))
-        sources.extend(_mapping_sources(r["canonical_name"], r["person_side"]))
+        sources.extend(_curated_requirement_sources(r) if bundle.curated else _mapping_sources(r["canonical_name"], r["person_side"]))
 
     if bundle.profile_snapshot:
         sources.append(SourceEntry(
@@ -497,7 +506,10 @@ def build_source_registry(
     for ep in bundle.episodes:
         sources.append(SourceEntry(
             ref=f"profile_episode:{ep['id']}", kind="profile_episode", category=CATEGORY_CANONICAL_EVIDENCE,
-            label=p360.episode_display(ep), content=_episode_text(ep),
+            label=p360.episode_display(ep), content=(
+                '\n'.join(f'{key}={ep.get(key)}' for key in ('title', 'organisation', 'start_date', 'end_date'))
+                + f"\nepisode_id={ep['id']}\nChronology only; use selected claims for experience assertions."
+                if bundle.curated else _episode_text(ep)),
         ))
 
     for note in bundle.notes:
@@ -522,6 +534,21 @@ def build_source_registry(
         sources.extend(_application_material_sources(active_application_materials or {}))
         sources.extend(_event_sources(bundle.events))
 
+    return sources
+
+
+def _curated_requirement_sources(requirement):
+    decision = requirement.get('application_decision')
+    if not decision:
+        return []
+    sources = [SourceEntry(ref=s['ref'], kind=s['kind'], label=s['label'],
+                           content=s['content'], category=CATEGORY_CANONICAL_EVIDENCE)
+               for s in decision['sources']]
+    sources.append(SourceEntry(
+        ref=f"application_decision:{requirement['concept_id']}", kind='application_decision',
+        category=CATEGORY_STRATEGY, label=f"Evidence decision: {requirement['canonical_name']}",
+        content=f"User judgment: {decision['disposition']}. {decision['rationale']}. "
+                "This is application strategy, not an additional career fact. Do not disguise gaps."))
     return sources
 
 
@@ -642,6 +669,12 @@ def build_application_generation_context(
     fingerprint this specific (artifact_type, guidance) generation call would
     produce. Called once per POST .../generate — never on a GET."""
     bundle = gather_application_evidence(cur, application_id)
+    if bundle.curated and (not (bundle.accepted_requirements or bundle.legacy_requirements) or any(not r.get('application_decision') or
+                              r['application_decision']['stale'] or
+                              r['application_decision']['disposition'] == 'investigate'
+                              for r in (*bundle.accepted_requirements, *bundle.legacy_requirements))):
+        from fastapi import HTTPException
+        raise HTTPException(409, 'Review incomplete or changed evidence decisions in Application Mode before generating')
     active_positioning = get_active_positioning(cur, application_id) if artifact_type != "positioning" else None
     active_application_materials = (
         get_active_application_materials(cur, application_id) if artifact_type == "interview_prep" else None

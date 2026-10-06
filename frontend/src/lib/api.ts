@@ -2310,7 +2310,7 @@ export interface AcceptedVocabularyOverview {
   recent_concepts: Array<{ id: string; canonical_name: string; type_code: string; reviewed_at: string | null; created_at: string | null }>
 }
 
-async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+export async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,

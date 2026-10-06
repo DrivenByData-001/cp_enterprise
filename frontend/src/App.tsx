@@ -10,6 +10,7 @@ const CareerDirectionBuilder = lazy(() => import('./pages/CareerDirectionBuilder
 const CareerDirectionDetail = lazy(() => import('./pages/CareerDirectionDetail'))
 const Applications = lazy(() => import('./pages/Applications'))
 const ApplicationWorkspace = lazy(() => import('./pages/ApplicationWorkspace'))
+const ApplicationMode = lazy(() => import('./pages/ApplicationMode'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const RoleDetail = lazy(() => import('./pages/RoleDetail'))
 const RoleEdit = lazy(() => import('./pages/RoleEdit'))
@@ -67,6 +68,7 @@ function App() {
   const { pathname, search } = useLocation()
   const [toolsOpen, setToolsOpen] = useState(false)
   const menuButton = useRef<HTMLButtonElement>(null)
+  const inApplicationMode = /^\/applications\/[^/]+\/prepare(?:\/|$)/.test(pathname)
   const secondaryGroups = [
     {
       label: 'My profile & evidence',
@@ -92,9 +94,9 @@ function App() {
   ]
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${inApplicationMode ? ' application-mode-shell' : ''}`}>
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <header className="site-header">
+      {!inApplicationMode && <><header className="site-header">
         <NavLink to="/" className="brand" aria-label="Career Navigator home"><span className="brand-mark" aria-hidden="true">↗</span><span>Career Navigator<small>Your next chapter</small></span></NavLink>
         <button ref={menuButton} className="tools-toggle" aria-expanded={toolsOpen} aria-controls="workspace-tools" onClick={() => setToolsOpen(v => !v)} onKeyDown={e => { if (e.key === 'Escape') setToolsOpen(false) }}>Menu</button>
       </header>
@@ -131,7 +133,7 @@ function App() {
           Add posting
         </NavLink>
         <button type="button" className="nav-logout" onClick={logout} title="Sign out of Career Navigator">Log out</button>
-      </div></nav>
+      </div></nav></>}
       <main id="main-content" className="workspace-main" tabIndex={-1}>
       <RouteErrorBoundary key={pathname}><Suspense fallback={<div role="status" className="page-skeleton">Loading your workspace…<span /><span /><span /></div>}>
       <Routes>
@@ -142,6 +144,7 @@ function App() {
         <Route path="/opportunities" element={<Dashboard />} />
         <Route path="/applications" element={<Applications />} />
         <Route path="/applications/:id" element={<ApplicationWorkspace />} />
+        <Route path="/applications/:id/prepare/:conceptId?" element={<ApplicationMode />} />
         <Route path="/space" element={<Space />} />
         <Route path="/trends" element={<Trends />} />
         <Route path="/economics" element={<Economics />} />
