@@ -17,7 +17,7 @@ vi.mock('./lib/api', () => ({
     listApplications: vi.fn(), getApplication: vi.fn(), createOrReopenApplication: vi.fn(),
     listRoles: vi.fn(), getFacets: vi.fn(), getRole: vi.fn(), getRoleContext: vi.fn(),
     getRoleCompensation: vi.fn(), compareRole: vi.fn(), getCareerAlignment: vi.fn(),
-    listRequirements: vi.fn(), listDevelopmentActions: vi.fn(),
+    listRequirements: vi.fn(), listDevelopmentActions: vi.fn(), updateRoleMetadata: vi.fn(),
   },
 }))
 
@@ -153,16 +153,42 @@ describe('application context on shared screens', () => {
     expect(api.getApplication).toHaveBeenCalledWith('app-1')
   })
 
-  it('fails gracefully when the application is unavailable or belongs to another role', async () => {
-    vi.mocked(api.getApplication).mockRejectedValueOnce(new Error('404'))
-    renderApp('/comparison/role-1?application=gone')
-    expect(await screen.findByText(/couldn't be loaded/)).toBeTruthy()
-    expect(await screen.findByText(/Structural comparison/)).toBeTruthy()
-    cleanup()
-    vi.mocked(api.getApplication).mockResolvedValueOnce(detail('other-role'))
-    renderApp('/role-instances/role-1/requirements?application=app-1')
-    expect(await screen.findByText(/couldn't be matched to this opportunity/)).toBeTruthy()
+  it('discards an unavailable application: nav, Apply and later links become ordinary', async () => {
+    vi.mocked(api.getApplication).mockRejectedValue(new Error('404'))
+    renderApp('/roles/role-1?application=gone')
+    expect(await screen.findByText(/application that couldn't be loaded/)).toBeTruthy()
+    await waitFor(() => expect(loc()).toBe('/roles/role-1'))
+    expect(activeNav()).toEqual(['Opportunities'])
+    expect(await screen.findByText('I want to apply')).toBeTruthy()
     expect(screen.queryByText('Back to application')).toBeNull()
+    expect(screen.getByText('Review requirements', { selector: 'a.button' }).getAttribute('href')).toBe('/role-instances/role-1/requirements')
+    expect(screen.getByText('Correct role details').closest('a')?.getAttribute('href')).toBe('/roles/role-1/edit')
+  })
+
+  it('discards an application that belongs to another role (shared screen still renders)', async () => {
+    vi.mocked(api.getApplication).mockResolvedValue(detail('other-role'))
+    renderApp('/comparison/role-1?application=app-1')
+    expect(await screen.findByText(/couldn't be matched to this opportunity/)).toBeTruthy()
+    expect(await screen.findByText(/Structural comparison/)).toBeTruthy()
+    await waitFor(() => expect(loc()).toBe('/comparison/role-1'))
+    expect(activeNav()).toEqual(['Opportunities'])
+    expect(screen.queryByText('Back to application')).toBeNull()
+  })
+
+  it('keeps the application through Role Detail → RoleEdit → back, including a deep link', async () => {
+    renderApp('/roles/role-1?application=app-1')
+    fireEvent.click(await screen.findByText('Correct role details'))
+    await waitFor(() => expect(loc()).toBe('/roles/role-1/edit?application=app-1'))
+    expect(await screen.findByText('Back to application')).toBeTruthy()
+    expect(activeNav()).toEqual(['Applications'])
+    expect(screen.getByText(/Back to Head of Capital/).closest('a')?.getAttribute('href')).toBe('/roles/role-1?application=app-1')
+    fireEvent.click(screen.getByText(/Back to Head of Capital/))
+    await waitFor(() => expect(loc()).toBe('/roles/role-1?application=app-1'))
+    expect(await screen.findByText('Working on your application')).toBeTruthy()
+    cleanup()
+    renderApp('/roles/role-1/edit?application=app-1')
+    expect(await screen.findByText('Back to application')).toBeTruthy()
+    expect(activeNav()).toEqual(['Applications'])
   })
 })
 

@@ -791,7 +791,7 @@ export default function RoleDetail() {
           <WorkflowLink to={`/comparison/${role.id}`} className="button">
             {isTarget ? 'Compare' : 'Review evidence in detail'}
           </WorkflowLink>
-          <Link to={isTarget ? `/targets/${role.id}/edit` : `/roles/${role.id}/edit`} className="button">
+          <Link to={isTarget ? `/targets/${role.id}/edit` : workflow.link(`/roles/${role.id}/edit`)} className="button">
             {isTarget ? 'Edit' : 'Correct role details'}
           </Link>
           {!isTarget && (
