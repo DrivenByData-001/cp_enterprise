@@ -71,6 +71,13 @@ def _legacy_observation(cur, role_id: str, concept_id: str, surface_form: str, r
         "VALUES (%s, %s, %s, 'app_capture', %s)",
         (role_id, surface_form, requirement_type, concept_id),
     )
+    cur.execute(
+        "INSERT INTO jobber.role_skill_observation_concept (role_skill_observation_id, concept_id, mapping_basis) "
+        "SELECT id, %s, 'legacy_single' FROM jobber.role_skill_observation "
+        "WHERE role_instance_id = %s AND canonical_concept_id = %s ORDER BY created_at DESC LIMIT 1 "
+        "ON CONFLICT DO NOTHING",
+        (concept_id, role_id, concept_id),
+    )
 
 
 def _episode(cur, *, title="Senior Actuary", organisation="PrevCo", start_date="2020-01-01", end_date=None, responsibilities=None) -> str:
