@@ -401,7 +401,7 @@ def cluster_summary(ev: ClusterEvidence, *, current_year: int) -> dict:
 
 def _resolved_cluster_rows(cur, statuses: list[str]) -> list[dict]:
     """Lighter-weight rows for clusters with no pending member left. Once
-    resolved, a cluster's observations carry a non-NULL canonical_concept_id
+    resolved, a cluster's observations carry authoritative M:N concept mappings
     and drop out of the "unresolved" evidence query above, so the rich
     role/year/country breakdown isn't recomputed here — this is audit/
     history information (what happened, when, onto what concept), not an
