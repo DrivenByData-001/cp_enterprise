@@ -497,6 +497,16 @@ def build_source_registry(
             label="Captured posting text", content=_truncate(posting_text),
         ))
 
+    preparation_context = bundle.role.get('application_preparation_context')
+    if preparation_context:
+        sources.append(SourceEntry(
+            ref=f'application_package:{bundle.application_id}', kind='application_package',
+            category=CATEGORY_ROLE_SIDE, label='Reviewed application package',
+            content='Application deadline and requested materials (target context, never career evidence):\n'
+                + json.dumps({'deadline': preparation_context['deadline'],
+                              'package': preparation_context['package']}, default=str),
+        ))
+
     for r in bundle.accepted_requirements:
         sources.append(_requirement_source(r, legacy=False))
         sources.extend(_curated_requirement_sources(r) if bundle.curated else _mapping_sources(r["canonical_name"], r["person_side"]))

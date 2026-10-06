@@ -490,10 +490,13 @@ export function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCanc
   onCancel: () => void
   registerSave?: (key: string, save: (() => Promise<boolean>) | null) => void
 }) {
-  const [concept, setConcept] = useState<Concept | null>(null)
-  const [requirementType, setRequirementType] = useState<string>('required')
-  const [importance, setImportance] = useState('')
-  const [evidenceSpan, setEvidenceSpan] = useState('')
+  const draftKey = `requirement-add:${roleId}`
+  const [recovered] = useState(() => { if (!registerSave) return null; try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') } catch { return null } })
+  const [concept, setConcept] = useState<Concept | null>(recovered?.concept ?? null)
+  const [requirementType, setRequirementType] = useState<string>(recovered?.requirementType ?? 'required')
+  const [importance, setImportance] = useState(recovered?.importance ?? '')
+  const [evidenceSpan, setEvidenceSpan] = useState(recovered?.evidenceSpan ?? '')
+  useEffect(() => { if (registerSave) sessionStorage.setItem(draftKey, JSON.stringify({ concept, requirementType, importance, evidenceSpan })) }, [registerSave, draftKey, concept, requirementType, importance, evidenceSpan])
   const [error, setError] = useState<string | null>(null)
 
   const save = async () => {
@@ -507,6 +510,7 @@ export function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCanc
         importance: importance.trim() === '' ? null : Number(importance),
         evidence_span: evidenceSpan,
       })
+      sessionStorage.removeItem(draftKey)
       onAdded(created)
       return true
     } catch (e) {
@@ -559,7 +563,7 @@ export function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCanc
       {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" disabled={busy} onClick={save}>Save requirement</button>
-        <button disabled={busy} onClick={onCancel}>Cancel</button>
+        <button disabled={busy} onClick={() => { sessionStorage.removeItem(draftKey); onCancel() }}>Cancel</button>
       </div>
     </div>
   )

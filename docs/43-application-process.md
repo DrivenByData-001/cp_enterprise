@@ -47,3 +47,42 @@ action: stage navigation, explicit workspace/exit, or external source link.
 Positioning/Documents migration, immutable submission and interview migration are
 deferred as specified in this phase's brief. No production changes are part of PR
 validation; use the disposable PostgreSQL suite and fixture-backed browser journeys.
+
+## Implemented boundaries and outbound-action audit
+
+Migration 0037 adds application preparation data and a stage to the existing resume
+record. It changes no Profile360 tables. Preparation is server-owned behind the
+existing authenticated API. Requirements and vocabulary remain shared domains;
+application checkpoints and selected evidence remain application-local.
+
+Saved target/package context participates in generation fingerprints and is supplied
+as role-side context, never as applicant evidence. Existing Positioning/CV/letter/
+statement versions remain intact; their derived freshness appears beside the
+explicit workspace exit. Saving a checkpoint does not adopt a generated document.
+
+| Action | Destination / behavior |
+| --- | --- |
+| Stage rail, mobile selector, overview tasks | Same application; flush active editor before changing stage |
+| Requirement card, concept search and scoped vocabulary resolution | Inline; no global Vocabulary navigation |
+| Evidence selection, claim review/correction, queued examples | Inline; retained PR51 acceptance boundaries |
+| Save & exit | Saves current work and resume context, then Applications |
+| Save & leave mode for workspace | Explicitly labelled exit to this application's existing workspace |
+| Open original posting | External HTTP(S) source, labelled and opened in a new tab |
+| Missing application recovery | Explicit Return to Applications link |
+| Skip-to-content accessibility link | In-page anchor only |
+
+Unconfirmed vocabulary choices are browser-local drafts and are never silently
+accepted by Save & exit. Requirement edit/add drafts and Opportunity drafts also
+recover on refresh; failed/conflicting server saves retain edits and block stage
+navigation. Unfinished add-requirement forms must be completed or cancelled.
+
+Verified locally: frontend lint, typecheck/build, 393 unit tests, initial bundle
+87,588 gzip bytes (150,000 budget), 11 backend pure contract tests, and 11 Playwright
+journeys across the existing Evidence and new process/search suites. Inspected
+desktop/mobile screenshots; mobile coverage includes a long title and 50 evidence
+requirements. Database integration results are recorded in the PR's CI checks.
+
+Role search uses literal case-insensitive word matching, not fuzzy or semantic
+search. It retains selected filters and offers Search all dates. Existing corpus
+scale permits the current server-side filtering/ranking approach; an indexed search
+implementation can follow if corpus growth makes latency material.

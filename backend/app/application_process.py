@@ -52,6 +52,31 @@ def require_current_checkpoints(cur, application_id):
         raise HTTPException(409, 'Complete the current evidence reviews before generating')
 
 
+def downstream_states(cur, application_id, upstream_current):
+    """Expose existing artifact freshness without migrating their editors."""
+    from .application_artifacts import compute_staleness
+    from .application_generation import gather_application_evidence, get_active_positioning
+    cur.execute("SELECT * FROM jobber.application_artifact WHERE application_id=%s "
+                "AND status IN ('active','draft') AND artifact_type IN "
+                "('positioning','cv','cover_letter','supporting_statement')", (application_id,))
+    rows = [dict(row) for row in cur.fetchall()]
+    if not rows:
+        return {}
+    bundle = gather_application_evidence(cur, application_id)
+    positioning = get_active_positioning(cur, application_id)
+    states = {}
+    for row in rows:
+        state = ('needs_attention' if not upstream_current or compute_staleness(
+            cur, application_id, row, bundle=bundle, active_positioning=positioning)
+            else 'complete' if row['status'] == 'active' else 'in_progress')
+        previous = states.get(row['artifact_type'])
+        # An outstanding or stale draft remains visible even beside an active version.
+        priority = {'complete': 0, 'in_progress': 1, 'needs_attention': 2}
+        if previous is None or priority[state] > priority[previous]:
+            states[row['artifact_type']] = state
+    return states
+
+
 def process_view(cur, application_id):
     app, saved, comparison, accepted, opp_fp, req_fp, opp_ok, req_ok = checkpoints(cur, application_id)
     evidence, _ = mode.reviewed_items(cur, application_id, {**comparison, 'items': accepted})
@@ -76,5 +101,6 @@ def process_view(cur, application_id):
             'opportunity_fingerprint': opp_fp, 'requirements_fingerprint': req_fp,
             'target_revision': mode.fingerprint(target_state(cur, str(app['role_instance_id']))),
             'stages': stages, 'resume': resume, 'items': evidence, 'review_summary': comparison['review_summary'],
+            'downstream': downstream_states(cur, application_id, opp_ok and req_ok and evidence_ok),
             'legacy_requirement_count': len(comparison['items']) - len(accepted),
             'next_stage': next((s for s, state in stages.items() if state != 'complete'), 'evidence')}

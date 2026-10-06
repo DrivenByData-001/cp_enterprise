@@ -1,9 +1,10 @@
 from uuid import uuid4
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
 
-from app import db, application_generation as gen
+from app import db, application_generation as gen, application_artifacts as artifacts
 from tests.test_application_mode import seed
 from tests.test_application_artifacts import _concept, _legacy_observation
 
@@ -79,12 +80,26 @@ def test_process_generation_requires_checkpoints_and_evidence(client):
     with db.db_cursor() as cur:
         context = gen.build_application_generation_context(cur, app, artifact_type='positioning')
         before = context.input_fingerprint
+        assert context.category_for_ref(f'application_package:{app}') == gen.CATEGORY_ROLE_SIDE
+        artifacts._insert(cur, application_id=app, artifact_type='positioning', status='active', origin='ai',
+            model='test', prompt_name='test', prompt_version='1', guidance=None, input_fingerprint=before,
+            source_manifest=context.source_manifest(), content={}, raw_output={}, now=datetime.now(timezone.utc))
     view = client.get(base).json()
+    assert view['downstream']['positioning'] == 'complete'
     client.put(base + '/opportunity', json=opportunity_payload(view, deadline='2026-12-01'))
     with db.db_cursor() as cur:
         context = gen.build_application_generation_context(cur, app, artifact_type='positioning')
         assert context.input_fingerprint != before
-    assert client.get(base).json()['stages']['evidence'] == 'complete'
+        assert '2026-12-01' in context.prompt_text
+    changed = client.get(base).json()
+    assert changed['stages']['evidence'] == 'complete'
+    assert changed['downstream']['positioning'] == 'needs_attention'
+    with db.db_cursor() as cur:
+        cur.execute("UPDATE jobber.requirement_claim SET requirement_type='preferred' WHERE role_instance_id=%s AND concept_id=%s", (view['role']['id'], concept))
+    changed = client.get(base).json()
+    assert changed['stages']['requirements'] == 'needs_attention'
+    assert changed['stages']['evidence'] == 'needs_attention'
+    assert changed['downstream']['positioning'] == 'needs_attention'
 
 
 def test_scoped_vocabulary_reuses_resolution_and_rejects_unrelated_proposals(client):
