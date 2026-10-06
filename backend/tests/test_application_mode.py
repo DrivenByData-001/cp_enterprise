@@ -133,6 +133,10 @@ def test_accepted_addition_is_reusable_audited_and_idempotent(client):
 
 def test_correction_preserves_history_and_invalidates_other_reviews(client):
     app, concept, claim = seed(client)
+    with db.db_cursor() as cur:
+        other_role = _posting(cur)
+        _accepted_claim(cur, other_role, concept)
+    other_app = client.post('/api/applications', json={'role_instance_id': other_role}).json()['id']
     base = f'/api/applications/{app}/mode'
     item = client.get(base).json()['items'][0]
     source = item['sources'][0]
@@ -140,12 +144,19 @@ def test_correction_preserves_history_and_invalidates_other_reviews(client):
         'disposition': 'covered', 'selected_refs': [source['ref']],
         'source_revisions': {source['ref']: source['source_revision']},
         'requirement_fingerprint': item['requirement_fingerprint']}).status_code == 200
+    other_base = f'/api/applications/{other_app}/mode'
+    other_item = client.get(other_base).json()['items'][0]
+    assert client.put(f'{other_base}/evidence/{concept}', json={
+        'disposition': 'covered', 'selected_refs': [source['ref']],
+        'source_revisions': {source['ref']: source['source_revision']},
+        'requirement_fingerprint': other_item['requirement_fingerprint']}).status_code == 200
     context = client.get(f'{base}/evidence/{concept}/claim-context?claim_id={claim}').json()
     payload = acceptance_payload(claim_id=claim, source_revision=context['claim']['source_revision'])
     url = f'{base}/evidence/{concept}/accept-claim'
     accepted = client.post(url, json=payload)
     assert accepted.status_code == 200, accepted.text
     assert client.get(base).json()['items'][0]['stale']
+    assert client.get(other_base).json()['items'][0]['stale']
     assert client.post(url, json={**payload, 'operation_id': str(uuid4())}).status_code == 409
     with db.db_cursor() as cur:
         cur.execute('SELECT before_state, after_state FROM jobber.profile360_acceptance')

@@ -14,6 +14,12 @@
 * Reviewed new examples can be saved as application notes and explicitly queued
   through the existing Profile360 promotion route. Pending is visibly distinct
   from accepted evidence; a failed promotion can reuse the saved note on retry.
+* Direct human acceptance for new or corrected career claims, after a separate
+  review step. Confirmed against the `profile360` schema in Supabase `open-brain`.
+  The backend atomically writes claim, provenance and audit receipt; optimistic
+  source revisions reject conflicting corrections and operation UUIDs make retries
+  idempotent. Accepted claims are immediately selectable in the same requirement.
+  Existing application decisions become stale when selected claims change.
 * Generator context uses curated source selections and decisions, excludes broad
   profile snapshots/unselected episode narratives, and retains only linked episode
   chronology for CV construction. Incomplete/stale reviews block new generation;
@@ -42,17 +48,25 @@
   [CI run](https://github.com/DrivenByData-001/cp_enterprise/actions/runs/37517193430).
   Production databases and deployed services were not modified.
 
-## Required before declaring the complete evidence slice finished
+## Profile360 integration and release boundary
 
-1. Identify/access the Profile360 owning repository/service and implement its
-   accepted-addition/correction response contract. The current queue has no
-   canonical accepted-result identifiers, so immediate accepted write-back and
-   automatic reuse cannot yet be implemented honestly. Queue processing must not
-   be interpreted as acceptance. Existing accepted claims can be searched and
-   selected manually after review.
-2. Validate the authenticated flow against the real Profile360 owner integration
-   once its accepted-result contract is connected. Disposable database integration
-   is complete in CI; browser API fixtures do not replace this live acceptance check.
+The ownership ambiguity is resolved: Profile360 is a schema in the same Supabase
+project, not a required separate service. Read-only catalog inspection confirmed
+claims, episodes and provenance shapes and found no acceptance functions/triggers.
+The authenticated backend now owns the narrow review-and-accept command described
+in doc 41. The database reader and the older manual-import queue retain their roles.
+
+Migration 0036 adds the acceptance audit in `jobber`; production Profile360 tables
+are already present. The local disposable baseline now includes its existing
+evidence table. The backend database role needs write access to claims/evidence
+and the new audit table. No browser Supabase key or new public schema grant is used.
+Catalog checks found no schema usage or claim read/write privileges for `anon` or
+`authenticated`; disabled RLS on existing claims is not, by itself, public access.
+
+Production was inspected only. No migration, test claim, deployment or live
+acceptance was performed. The authenticated disposable database tests exercise
+the actual SQL boundary; browser tests use API fixtures. An operator smoke check
+with a real reviewed fact remains part of deployment verification.
 
 ## Deliberate later migrations
 

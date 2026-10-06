@@ -31,6 +31,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [claimReview, setClaimReview] = useState<{ claimId?: string } | null>(null)
+  const [acceptedMessage, setAcceptedMessage] = useState(false)
   const noteKey = `${draftKey}:note`
   const recoveredNote = (() => { try { return JSON.parse(sessionStorage.getItem(noteKey) ?? '{}') } catch { return {} } })()
   const [note, setNote] = useState<string>(recoveredNote.text ?? '')
@@ -114,10 +115,12 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
       <span role="status">{dirty ? 'Unsaved review — recovered in this browser until saved.' : saved || item.decision ? 'Review saved' : 'Not reviewed yet'}</span>
     </fieldset>
     <button disabled={busy || !!claimReview} onClick={() => setClaimReview({})}>Add reviewed career claim</button>
+    {acceptedMessage && <p role="status">Accepted into Profile360 and selected here. Review your assessment and save this application’s evidence review.</p>}
     {claimReview && <ApplicationClaimReview key={claimReview.claimId ?? 'new'} applicationId={applicationId} conceptId={item.concept.id} claimId={claimReview.claimId} onClose={() => setClaimReview(null)} onAccepted={source => {
       const nextSources = [...new Map([...sources, source].map(s => [s.ref, s])).values()]
       const next = { ...decision, selected_refs: [...new Set([...decision.selected_refs, source.ref])], disposition: decision.disposition === 'gap' ? 'investigate' as const : decision.disposition }
       setSources(nextSources); setDecision(next); setDirty(true); setSaved(false); setClaimReview(null)
+      setAcceptedMessage(true)
       sessionStorage.setItem(draftKey, JSON.stringify({ decision: next, sources: nextSources, requirement_fingerprint: recovered?.requirement_fingerprint ?? item.requirement_fingerprint }))
     }} />}
     <details className="mode-new-evidence"><summary>Remembered another example?</summary>
