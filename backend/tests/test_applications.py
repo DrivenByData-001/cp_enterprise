@@ -468,8 +468,15 @@ def test_evidence_flags_reviewed_claim_vs_legacy_observation(client):
         cur.execute(
             "INSERT INTO jobber.role_skill_observation "
             "(role_instance_id, surface_form, requirement_type, observation_basis, canonical_concept_id) "
-            "VALUES (%s, 'SQL', 'required', 'legacy_extraction', %s)",
+            "VALUES (%s, 'SQL', 'required', 'legacy_extraction', %s) RETURNING id",
             (legacy_role_id, legacy_concept),
+        )
+        observation_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO jobber.role_skill_observation_concept "
+            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single') "
+            "ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING",
+            (observation_id, legacy_concept),
         )
     reviewed_app_id = client.post("/api/applications", json={"role_instance_id": role_id}).json()["id"]
     legacy_app_id = client.post("/api/applications", json={"role_instance_id": legacy_role_id}).json()["id"]

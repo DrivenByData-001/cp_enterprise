@@ -15,7 +15,9 @@ def claim(cur, rid, cid, status="accepted"):
     return str(cur.fetchone()["id"])
 
 def observation(cur, rid, cid):
-    cur.execute("INSERT INTO jobber.role_skill_observation (role_instance_id, canonical_concept_id, surface_form, observation_basis, requirement_type) VALUES (%s, %s, 'Python', 'legacy_extraction', 'required')", (rid, cid))
+    cur.execute("INSERT INTO jobber.role_skill_observation (role_instance_id, canonical_concept_id, surface_form, observation_basis, requirement_type) VALUES (%s, %s, 'Python', 'legacy_extraction', 'required') RETURNING id", (rid, cid))
+    observation_id = cur.fetchone()["id"]
+    cur.execute("INSERT INTO jobber.role_skill_observation_concept (role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single') ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING", (observation_id, cid))
 
 def test_facets_filters_and_comparison_share_evidence(client):
     with db.db_cursor() as cur:

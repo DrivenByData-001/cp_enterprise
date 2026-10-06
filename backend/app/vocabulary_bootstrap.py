@@ -165,7 +165,7 @@ def analyze_cluster_keys_dryrun(cur) -> dict:
     we ran the full bootstrap. Computes without writing anything. Used by
     dry-run mode to report what the full clustering pass would generate."""
     # Get all unresolved role_skill_observations
-    cur.execute("SELECT id, surface_form FROM jobber.role_skill_observation WHERE canonical_concept_id IS NULL")
+    cur.execute("SELECT rso.id, rso.surface_form FROM jobber.role_skill_observation rso WHERE NOT EXISTS (SELECT 1 FROM jobber.role_skill_observation_concept rsoc WHERE rsoc.role_skill_observation_id = rso.id)")
     unresolved = cur.fetchall()
 
     if not unresolved:
@@ -300,7 +300,8 @@ def _role_concept_index(cur) -> tuple[dict[str, set[str]], dict[str, dict]]:
         """
         SELECT rso.role_instance_id, c.id AS concept_id, c.canonical_name, c.type_code
         FROM jobber.role_skill_observation rso
-        JOIN jobber.concept c ON c.id = rso.canonical_concept_id
+        JOIN jobber.role_skill_observation_concept rsoc ON rsoc.role_skill_observation_id = rso.id
+        JOIN jobber.concept c ON c.id = rsoc.concept_id
         WHERE c.status = 'active' AND c.type_code = ANY(%s)
         """,
         (list(ATOMIC_TYPE_CODES),),

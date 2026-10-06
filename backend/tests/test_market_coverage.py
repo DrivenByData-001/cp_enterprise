@@ -67,6 +67,13 @@ def _mapped_observation(cur, role_id, concept_id, name="python"):
         "VALUES (%s, %s, %s, 'app_capture')",
         (role_id, name, concept_id),
     )
+    cur.execute(
+        "INSERT INTO jobber.role_skill_observation_concept (role_skill_observation_id, concept_id, mapping_basis) "
+        "SELECT id, %s, 'legacy_single' FROM jobber.role_skill_observation "
+        "WHERE role_instance_id = %s AND canonical_concept_id = %s ORDER BY created_at DESC LIMIT 1 "
+        "ON CONFLICT DO NOTHING",
+        (concept_id, role_id, concept_id),
+    )
 
 
 def _unmapped_observation(cur, role_id, name="raw skill"):

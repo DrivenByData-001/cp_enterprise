@@ -63,8 +63,10 @@ def target_mapping_summary(cur, target_id, requirements):
     cur.execute("""SELECT o.id, o.surface_form AS name, c.id AS concept_id, c.canonical_name,
                           c.status AS concept_status
                    FROM jobber.role_skill_observation o
-                   LEFT JOIN jobber.concept c ON c.id = o.canonical_concept_id
-                   WHERE o.role_instance_id = %s ORDER BY o.created_at, o.id""", (target_id,))
+                   LEFT JOIN jobber.role_skill_observation_concept rsoc ON rsoc.role_skill_observation_id = o.id
+                   LEFT JOIN jobber.concept c ON c.id = rsoc.concept_id
+                   WHERE o.role_instance_id = %s
+                   ORDER BY o.created_at, o.id, c.canonical_name""", (target_id,))
     included = {r["concept_id"] for r in requirements}
     items = []
     for row in cur.fetchall():

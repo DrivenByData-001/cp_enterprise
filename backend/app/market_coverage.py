@@ -181,7 +181,7 @@ def fetch_scope_candidate_roles(cur, scope: CoverageScope) -> list[dict]:
 
 def _fetch_legacy_fallback_counts(cur, role_ids: list[str]) -> dict[str, dict]:
     """Per role_instance_id: role_skill_observation counts, split into
-    `resolved` (canonical_concept_id resolves to an *active* concept — the
+    `resolved` (at least one M:N mapping resolves to an *active* concept — the
     same eligibility condition `role_requirements.py`'s own fallback branch
     requires) and `unresolved`. A simplified corpus-processing proxy for
     "legacy fallback available" — it deliberately does not replay
@@ -195,10 +195,17 @@ def _fetch_legacy_fallback_counts(cur, role_ids: list[str]) -> dict[str, dict]:
     cur.execute(
         """
         SELECT rso.role_instance_id,
-               COUNT(*) FILTER (WHERE rso.canonical_concept_id IS NOT NULL AND c.status = 'active') AS resolved,
-               COUNT(*) FILTER (WHERE rso.canonical_concept_id IS NULL) AS unresolved
+               COUNT(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM jobber.role_skill_observation_concept rsoc
+                   JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
+                   WHERE rsoc.role_skill_observation_id = rso.id
+               )) AS resolved,
+               COUNT(*) FILTER (WHERE NOT EXISTS (
+                   SELECT 1 FROM jobber.role_skill_observation_concept rsoc
+                   JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
+                   WHERE rsoc.role_skill_observation_id = rso.id
+               )) AS unresolved
         FROM jobber.role_skill_observation rso
-        LEFT JOIN jobber.concept c ON c.id = rso.canonical_concept_id
         WHERE rso.role_instance_id = ANY(%s::uuid[])
         GROUP BY rso.role_instance_id
         """,
