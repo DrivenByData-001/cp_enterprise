@@ -41,6 +41,8 @@ function pluralize(n: number, noun: string, plural = `${noun}s`): string {
  * "What this role asks for" (section 3), targets keep it at the page's
  * bottom exactly where it always was — see RoleDetail. */
 export function RequirementReviewPendingNotice({ role }: { role: Role }) {
+  const [params] = useSearchParams()
+  const applicationId = params.get('application')
   if (!role.requirement_review || role.requirement_review.complete) return null
   const { unreviewed, unresolved_proposals, needs_reextraction } = role.requirement_review
   const total = unreviewed + unresolved_proposals + needs_reextraction
@@ -67,6 +69,8 @@ const REQUIREMENT_GROUPS: { type: string; label: string }[] = [
  * Never invents importance the data doesn't have, and never upgrades legacy
  * (unreviewed) skills into this reviewed picture. */
 export function RequirementsAskFor({ role }: { role: Role }) {
+  const [params] = useSearchParams()
+  const applicationId = params.get('application')
   const reviewed = role.skills ?? []
   const legacyCount = role.legacy_skills?.length ?? 0
   const review = role.requirement_review
@@ -176,6 +180,8 @@ function EvidenceStateTile({
   roleId: string
   onRetry: () => void
 }) {
+  const [params] = useSearchParams()
+  const applicationId = params.get('application')
   return (
     <section className="card" aria-labelledby="ds-evidence-h">
       <h3 id="ds-evidence-h" style={{ marginTop: 0, fontSize: 14 }}>
