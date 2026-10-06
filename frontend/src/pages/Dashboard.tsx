@@ -56,7 +56,8 @@ export default function Dashboard() {
   const track = params.get('track') ?? ''
   const facetType = params.get('facet') ?? ''
   const conceptId = facetType ? params.get('concept') ?? '' : ''
-  const applicationIntent = params.get('intent') === 'apply'\n  const periodValue = params.get('period') ?? 'current'
+  const applicationIntent = params.get('intent') === 'apply'
+  const periodValue = params.get('period') ?? 'current'
   const period = ['current', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
   // Current's own default sort is newest/recently-captured first, not
   // similarity (brief §6.3): sending `sort=captured_at` explicitly here is
