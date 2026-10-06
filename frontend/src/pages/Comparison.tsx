@@ -4,7 +4,9 @@ import { api, type ComparisonItem, type ComparisonResult, type ComparisonStatus,
 
 import ComparisonActions from '../components/ComparisonActions'
 import ImportSteps from '../components/ImportSteps'
-import SavedRoleBanner from '../components/SavedRoleBanner'\nimport ApplicationContextBanner from '../components/ApplicationContextBanner'\nimport { withApplicationContext } from '../lib/applicationContext'
+import SavedRoleBanner from '../components/SavedRoleBanner'
+import ApplicationContextBanner from '../components/ApplicationContextBanner'
+import { withApplicationContext } from '../lib/applicationContext'
 
 const STATUS_LABEL: Record<ComparisonStatus, string> = {
   evidenced: 'Evidenced',
@@ -86,7 +88,9 @@ function ItemDetail({ item }: { item: ComparisonItem }) {
 
 export default function Comparison() {
   const { id } = useParams()
-  const roleId = id ?? ''\n  const [params] = useSearchParams()\n  const applicationId = params.get('application')
+  const roleId = id ?? ''
+  const [params] = useSearchParams()
+  const applicationId = params.get('application')
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actions, setActions] = useState<DevelopmentAction[]>([])
@@ -111,7 +115,8 @@ export default function Comparison() {
 
   return (
     <div>
-      <ApplicationContextBanner />\n      <Link to={withApplicationContext(`/roles/${roleId}`, applicationId)} className="muted" style={{ fontSize: 13 }}>
+      <ApplicationContextBanner />
+      <Link to={withApplicationContext(`/roles/${roleId}`, applicationId)} className="muted" style={{ fontSize: 13 }}>
         ← Back to {data.role.title}
       </Link>
       <ImportSteps step={3} />
