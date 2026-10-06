@@ -106,7 +106,8 @@ def _observation(cur, role_id, *, surface_form, canonical_concept_id=None, requi
     if canonical_concept_id is not None:
         cur.execute(
             "INSERT INTO jobber.role_skill_observation_concept "
-            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single')",
+            "(role_skill_observation_id, concept_id, mapping_basis) VALUES (%s, %s, 'legacy_single') "
+            "ON CONFLICT (role_skill_observation_id, concept_id) DO NOTHING",
             (observation_id, canonical_concept_id),
         )
     return observation_id
