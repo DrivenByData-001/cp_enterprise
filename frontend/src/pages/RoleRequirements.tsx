@@ -131,7 +131,7 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
 // TargetRequirementPicker's pattern) — never fires one uncontrolled request
 // per keystroke, and never lets the user invent a concept inline; if
 // nothing matches, the route to Vocabulary is the only way forward.
-function ConceptPicker({ onSelect }: { onSelect: (c: Concept) => void }) {
+export function ConceptPicker({ onSelect, scoped = false }: { onSelect: (c: Concept) => void; scoped?: boolean }) {
   const [query, setQuery] = useState('')
   const [options, setOptions] = useState<Concept[]>([])
   const [searching, setSearching] = useState(false)
@@ -169,8 +169,7 @@ function ConceptPicker({ onSelect }: { onSelect: (c: Concept) => void }) {
       )}
       {query.trim() && !searching && !searchError && options.length === 0 && (
         <p className="muted" style={{ fontSize: 12 }}>
-          No active concept matches. <Link to={`/vocabulary?focusConceptName=${encodeURIComponent(query)}`}>Add it in Vocabulary</Link> rather
-          than inventing one here.
+          No active concept matches. {scoped ? 'Extract the requirement from the posting to propose a term, then resolve it in Vocabulary needing resolution below.' : <><Link to={`/vocabulary?focusConceptName=${encodeURIComponent(query)}`}>Add it in Vocabulary</Link> rather than inventing one here.</>}
         </p>
       )}
     </div>
@@ -304,8 +303,8 @@ function EvidenceList({ claim }: { claim: RequirementClaim }) {
   )
 }
 
-function RequirementCard({
-  claim, roleId, busy, onBusyChange, onUpdated, onError,
+export function RequirementCard({
+  claim, roleId, busy, onBusyChange, onUpdated, onError, scoped = false, registerSave,
 }: {
   claim: RequirementClaim
   roleId: string
@@ -313,13 +312,18 @@ function RequirementCard({
   onBusyChange: (busy: boolean) => void
   onUpdated: (oldClaimId: string, updated: RequirementClaim) => void
   onError: (message: string | null) => void
+  scoped?: boolean
+  registerSave?: (key: string, save: (() => Promise<boolean>) | null) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<EditDraft>(() => draftFromClaim(claim))
+  const draftKey = `requirement-edit:${roleId}:${claim.id}`
+  const [recovered] = useState(() => { if (!scoped) return null; try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') } catch { return null } })
+  const [editing, setEditing] = useState(!!recovered)
+  const [draft, setDraft] = useState<EditDraft>(() => recovered ?? draftFromClaim(claim))
+  useEffect(() => { if (scoped && editing) sessionStorage.setItem(draftKey, JSON.stringify(draft)) }, [scoped, editing, draftKey, draft])
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const startEdit = () => { setDraft(draftFromClaim(claim)); setSaveError(null); setEditing(true) }
-  const cancelEdit = () => { setEditing(false); setSaveError(null) }
+  const cancelEdit = () => { setEditing(false); setSaveError(null); sessionStorage.removeItem(draftKey) }
 
   const run = async (action: () => Promise<RequirementClaim>) => {
     onBusyChange(true); onError(null)
@@ -355,14 +359,22 @@ function RequirementCard({
           })
       onUpdated(claim.id, updated)
       setEditing(false)
+      sessionStorage.removeItem(draftKey)
+      return true
     } catch (e) {
       // Never discard the draft on a failed save — the user's edits stay on
       // screen, with the error, so they can fix and retry.
       setSaveError(e instanceof Error ? e.message : String(e))
+      return false
     } finally {
       onBusyChange(false)
     }
   }
+
+  useEffect(() => {
+    registerSave?.(claim.id, async () => busy ? false : editing ? await saveEdit() : true)
+    return () => registerSave?.(claim.id, null)
+  })
 
   return (
     <div className="card">
@@ -417,12 +429,14 @@ function RequirementCard({
             <div>{draft.canonical_name} <span className="muted">({draft.type_code})</span></div>
             <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
               <span>Concept type comes from the accepted vocabulary.</span>{' '}
-              <Link to={`/vocabulary?focusConceptName=${encodeURIComponent(draft.canonical_name)}`}>
+              {!scoped && <><Link to={`/vocabulary?focusConceptName=${encodeURIComponent(draft.canonical_name)}`}>
                 Open in Vocabulary
               </Link>{' '}
-              if this classification looks wrong.
+              if this classification looks wrong.</>}
+              {scoped && 'Choose a better matching concept below if this mapping is wrong.'}
             </p>
             <ConceptPicker
+              scoped={scoped}
               onSelect={(c) => setDraft(d => ({ ...d, concept_id: c.id, canonical_name: c.canonical_name, type_code: c.type_code }))}
             />
           </div>
@@ -468,22 +482,26 @@ function RequirementCard({
   )
 }
 
-function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel }: {
+export function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel, registerSave }: {
   roleId: string
   busy: boolean
   onBusyChange: (busy: boolean) => void
   onAdded: (created: RequirementClaim) => void
   onCancel: () => void
+  registerSave?: (key: string, save: (() => Promise<boolean>) | null) => void
 }) {
-  const [concept, setConcept] = useState<Concept | null>(null)
-  const [requirementType, setRequirementType] = useState<string>('required')
-  const [importance, setImportance] = useState('')
-  const [evidenceSpan, setEvidenceSpan] = useState('')
+  const draftKey = `requirement-add:${roleId}`
+  const [recovered] = useState(() => { if (!registerSave) return null; try { return JSON.parse(sessionStorage.getItem(draftKey) ?? 'null') } catch { return null } })
+  const [concept, setConcept] = useState<Concept | null>(recovered?.concept ?? null)
+  const [requirementType, setRequirementType] = useState<string>(recovered?.requirementType ?? 'required')
+  const [importance, setImportance] = useState(recovered?.importance ?? '')
+  const [evidenceSpan, setEvidenceSpan] = useState(recovered?.evidenceSpan ?? '')
+  useEffect(() => { if (registerSave) sessionStorage.setItem(draftKey, JSON.stringify({ concept, requirementType, importance, evidenceSpan })) }, [registerSave, draftKey, concept, requirementType, importance, evidenceSpan])
   const [error, setError] = useState<string | null>(null)
 
   const save = async () => {
-    if (!concept) { setError('Choose an active vocabulary concept first.'); return }
-    if (!evidenceSpan.trim()) { setError('Paste the exact supporting text from the source document.'); return }
+    if (!concept) { setError('Choose an active vocabulary concept first.'); return false }
+    if (!evidenceSpan.trim()) { setError('Paste the exact supporting text from the source document.'); return false }
     onBusyChange(true); setError(null)
     try {
       const created = await api.addRequirement(roleId, {
@@ -492,14 +510,22 @@ function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel }: {
         importance: importance.trim() === '' ? null : Number(importance),
         evidence_span: evidenceSpan,
       })
+      sessionStorage.removeItem(draftKey)
       onAdded(created)
+      return true
     } catch (e) {
       // Preserve everything entered so far — only the error is new.
       setError(e instanceof Error ? e.message : String(e))
+      return false
     } finally {
       onBusyChange(false)
     }
   }
+
+  useEffect(() => {
+    registerSave?.('new', async () => busy ? false : await save())
+    return () => registerSave?.('new', null)
+  })
 
   return (
     <div className="card form-stack">
@@ -517,7 +543,7 @@ function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel }: {
             <button type="button" onClick={() => setConcept(null)}>Change</button>
           </div>
         ) : (
-          <ConceptPicker onSelect={setConcept} />
+          <ConceptPicker onSelect={setConcept} scoped={!!registerSave} />
         )}
       </div>
       <label>
@@ -537,7 +563,7 @@ function AddRequirementForm({ roleId, busy, onBusyChange, onAdded, onCancel }: {
       {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="primary" disabled={busy} onClick={save}>Save requirement</button>
-        <button disabled={busy} onClick={onCancel}>Cancel</button>
+        <button disabled={busy} onClick={() => { sessionStorage.removeItem(draftKey); onCancel() }}>Cancel</button>
       </div>
     </div>
   )

@@ -28,4 +28,16 @@
 .mode-task-list button { display: flex; justify-content: space-between; gap: 16px; text-align: left; padding: 20px; }
 .mode-new-evidence { border-top: 1px solid var(--border); padding-top: 22px; }
 .mode-new-evidence button { margin-top: 12px; }
+.mode-mobile-stages { display: none; }
+.mode-header h1 { overflow-wrap: anywhere; }
+.mode-editor .card { margin: 16px 0; }
+.mode-editor input, .mode-editor select, .mode-editor textarea { max-width: 100%; min-width: 0; }
 @media (max-width: 760px) { .mode-layout { grid-template-columns: 1fr; gap: 24px; } .mode-header { align-items: flex-start; } .mode-header button { min-width: 100px; } .mode-rail nav { flex-direction: row; overflow-x: auto; padding-bottom: 8px; } .mode-rail nav button { flex-shrink: 0; max-width: 190px; } .mode-task-state { display: none; } .mode-search { flex-direction: column; align-items: stretch; } .mode-task-list button { flex-direction: column; } }
+@media (max-width: 760px) {
+  .mode-header { flex-direction: column; gap: 12px; }
+  .mode-header button { align-self: flex-end; }
+  .mode-rail nav { display: none; }
+  .mode-mobile-stages { display: grid; gap: 8px; }
+  .mode-editor .form-grid { grid-template-columns: 1fr; }
+  .mode-editor .card > div { flex-wrap: wrap; }
+}

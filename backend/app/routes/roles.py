@@ -26,10 +26,11 @@ DEFAULT_RECENT_YEARS = 3
 
 @router.get("")
 def list_roles(
+    q: str | None = Query(None, max_length=200),
     career_track: str | None = None,
     concept_id: str | None = None,
     min_similarity: float | None = None,
-    sort: str | None = Query(None, pattern="^(similarity|posting_date|captured_at|title)$"),
+    sort: str | None = Query(None, pattern="^(similarity|posting_date|captured_at|title|relevance)$"),
     period: str = Query("current", pattern="^(current|recent|all|unknown_date)$"),
     year: int | None = None,
     date_from: str | None = None,
@@ -63,6 +64,11 @@ def list_roles(
 
         filters = ""
         params: list = []
+        search_terms = (q or '').strip().split()[:20]
+        for term in search_terms:
+            filters += " AND concat_ws(' ', ri.title, ri.organisation, ri.location, ri.description, ri.requirements, ri.responsibilities, d.url, d.content_text) ILIKE %s"
+            escaped = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            params.append('%' + escaped + '%')
         if career_track:
             filters += " AND ri.career_track = %s"
             params.append(career_track)
@@ -139,9 +145,15 @@ def list_roles(
     # captured first, not similarity — a role the user just saved must show
     # up immediately near the top rather than wherever it happens to rank
     # against the profile.
-    effective_sort = sort or ("captured_at" if applied_period == "current" else "similarity")
+    effective_sort = sort or ('relevance' if search_terms else "captured_at" if applied_period == "current" else "similarity")
 
-    if effective_sort == "similarity":
+    if effective_sort == 'relevance':
+        def search_score(row):
+            primary = ' '.join(str(row.get(k) or '') for k in ('title', 'organisation')).casefold()
+            secondary = ' '.join(str(row.get(k) or '') for k in ('location', 'url')).casefold()
+            return sum(3 if term.casefold() in primary else 1 if term.casefold() in secondary else 0 for term in search_terms)
+        rows.sort(key=lambda r: (-search_score(r), str(r.get('title') or '').casefold(), str(r['id'])))
+    elif effective_sort == "similarity":
         rows.sort(key=lambda r: (r["similarity"] is None, -(r["similarity"] or 0)))
     elif effective_sort == "captured_at":
         # One implementation for "sort by captured_at", whether the caller

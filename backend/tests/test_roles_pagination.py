@@ -8,6 +8,31 @@ from datetime import date, datetime, timedelta, timezone
 from app import db
 
 
+def test_search_missing_employer_and_metadata_relevance(client):
+    with db.db_cursor() as cur:
+        metadata = _role_with_document(cur, 'Capital lead', posting_date='2026-01-01')
+        missing = _role_with_document(cur, 'Risk analyst', posting_date='2026-01-01')
+        cur.execute('UPDATE jobber.role_instance SET organisation=%s WHERE id=%s', ('Example Insurance', metadata))
+        cur.execute('UPDATE jobber.document SET content_text=%s WHERE id=(SELECT document_id FROM jobber.role_instance WHERE id=%s)', ('Example Insurance seeks a capital specialist in Dublin', missing))
+    result = client.get('/api/roles', params={'q': 'example insurance', 'period': 'all', 'limit': 1}).json()
+    assert result['total'] == 2
+    assert result['items'][0]['id'] == metadata
+    page = client.get('/api/roles', params={'q': 'example capital', 'period': 'all', 'limit': 1, 'offset': 1}).json()
+    assert page['items'][0]['id'] == missing
+    assert page['items'][0]['organisation'] is None
+
+
+def test_search_literals_and_date_filters(client):
+    with db.db_cursor() as cur:
+        match = _role_with_document(cur, '100% specialist', posting_date='2009-01-01')
+        _role_with_document(cur, 'Ordinary specialist', posting_date='2026-01-01')
+    assert client.get('/api/roles', params={'q': '100%', 'period': 'current'}).json()['total'] == 0
+    all_dates = client.get('/api/roles', params={'q': '100%', 'period': 'all'}).json()
+    assert all_dates['total'] == 1
+    assert all_dates['items'][0]['id'] == match
+    assert client.get('/api/roles', params={'q': "' OR 1=1 --", 'period': 'all'}).json()['total'] == 0
+
+
 def _role(cur, title, posting_date=None, career_track="actuarial"):
     return db.upsert_role_instance(
         cur, None,

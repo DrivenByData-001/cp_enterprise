@@ -2,7 +2,7 @@ const KEY = 'career-navigator-role-list'
 
 // The Opportunities list (Dashboard.tsx) is the only consumer of these —
 // keep in sync with the params it actually reads from useSearchParams().
-export const LEGACY_ROLE_LIST_PARAMS = ['period', 'track', 'facet', 'concept', 'sort', 'year', 'offset'] as const
+export const LEGACY_ROLE_LIST_PARAMS = ['period', 'track', 'facet', 'concept', 'sort', 'year', 'offset', 'q'] as const
 
 // Phase 1 product shell: root-query compatibility layer (App.tsx's Root
 // route) uses this to tell an old bookmarked `/?period=current`-style link

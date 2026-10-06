@@ -9,6 +9,10 @@ async function setup(page: Page, options: { conflict?: boolean; stale?: boolean 
   const state = {
     application: { id: appId, role_instance_id: 'role-1', status: 'preparing', created_at: '2026-10-06', updated_at: '2026-10-06' },
     role: { id: 'role-1', title: 'Head of Capital' }, resume_concept_id: null as string | null,
+    preparation: { revision: 0, deadline: null, package_items: [] }, target_revision: 'target-v1',
+    opportunity_fingerprint: 'opp-v1', requirements_fingerprint: 'req-v1', legacy_requirement_count: 0,
+    stages: { opportunity: 'complete', requirements: 'complete', evidence: 'not_started' },
+    resume: { stage: 'overview', concept_id: null as string | null }, next_stage: 'evidence',
     evidence_complete: false, review_summary: { complete: true },
     items: [{ concept: { id: conceptId, canonical_name: 'Model governance', type_code: 'tool' }, status: 'evidenced',
       role_side: { requirement_type: 'required', evidence_span: 'Experience challenging internal model assumptions', review_status: 'accepted', basis: 'stated', document: null },
@@ -22,8 +26,8 @@ async function setup(page: Page, options: { conflict?: boolean; stale?: boolean 
     const request = route.request(), path = new URL(request.url()).pathname
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
     if (path === '/api/auth/status') return reply({ authenticated: true })
-    if (path === `/api/applications/${appId}/mode`) return reply(state)
-    if (path.endsWith('/mode/resume')) { state.resume_concept_id = request.postDataJSON().concept_id; return reply({ saved: true }) }
+    if (path === `/api/applications/${appId}/process`) return reply(state)
+    if (path.endsWith('/process/resume')) { state.resume = request.postDataJSON(); state.resume_concept_id = state.resume.concept_id; return reply({ saved: true }) }
     if (path.endsWith(`/mode/evidence/${conceptId}/search`)) return reply({ sources: [source] })
     if (path.endsWith(`/mode/evidence/${conceptId}`)) {
       if (options.conflict) return reply({ detail: 'This review changed in another tab. Reload before saving' }, 409)

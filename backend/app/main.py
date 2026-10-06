@@ -139,6 +139,8 @@ app.include_router(role_economics.router, dependencies=_protected)
 app.include_router(pathways.router, dependencies=_protected)
 app.include_router(applications.router, dependencies=_protected)
 app.include_router(application_mode.router, dependencies=_protected)
+from .routes import application_process
+app.include_router(application_process.router, dependencies=_protected)
 app.include_router(application_artifacts.router, dependencies=_protected)
 app.include_router(cockpit.router, dependencies=_protected)
 

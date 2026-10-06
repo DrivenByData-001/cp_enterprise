@@ -57,6 +57,9 @@ export default function Dashboard() {
   const workflow = useWorkflowContext()
   useEffect(() => { rememberRoleList(params.toString()) }, [params])
   const track = params.get('track') ?? ''
+  const query = params.get('q') ?? ''
+  const [searchDraft, setSearchDraft] = useState(query)
+  useEffect(() => { setSearchDraft(query) }, [query])
   const facetType = params.get('facet') ?? ''
   const conceptId = facetType ? params.get('concept') ?? '' : ''
   const periodValue = params.get('period') ?? 'current'
@@ -69,7 +72,7 @@ export default function Dashboard() {
   // dropdown's own displayed value is never out of step with what's
   // actually being requested. An explicit choice from the dropdown always
   // wins over the default (brief §6.3/§13).
-  const sort = params.get('sort') ?? (period === 'current' ? 'captured_at' : 'similarity')
+  const sort = params.get('sort') ?? (query ? 'relevance' : period === 'current' ? 'captured_at' : 'similarity')
   const year = /^\d{4}$/.test(params.get('year') ?? '') ? Number(params.get('year')) : ''
   const rawOffset = Number(params.get('offset') ?? 0)
   const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0
@@ -103,6 +106,7 @@ export default function Dashboard() {
     if (period === 'year' && year === '') { setLoading(false); return }
     setLoading(true)
     api.listRoles({
+      q: query || undefined,
       career_track: track || undefined, concept_id: conceptId || undefined, sort,
       period: period === 'year' ? 'all' : period as 'current' | 'all' | 'recent' | 'unknown_date',
       year: period === 'year' && year !== '' ? year : undefined,
@@ -113,7 +117,7 @@ export default function Dashboard() {
     }).catch((e) => { if (current) setError(String(e)) })
       .finally(() => { if (current) setLoading(false) })
     return () => { current = false }
-  }, [track, conceptId, sort, period, year, offset, retry])
+  }, [track, conceptId, sort, period, year, offset, retry, query])
 
   const availableYears: number[] = yearRange ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, i) => yearRange.max - i) : []
   const pageStart = total === 0 ? 0 : offset + 1
@@ -122,6 +126,12 @@ export default function Dashboard() {
   return (
     <div>
       <ApplyIntentNotice />
+      <form className="list-toolbar" onSubmit={e => { e.preventDefault(); update('q', searchDraft.trim()) }}>
+        <label style={{ flex: 1 }}>Find a role<input type="search" value={searchDraft} maxLength={200} onChange={e => setSearchDraft(e.target.value)} placeholder="Employer, role title, location or words from the posting" /></label>
+        <button type="submit">Search roles</button>
+        {query && <button type="button" onClick={() => update('q', '')}>Clear search</button>}
+      </form>
+      {query && <p className="secondary">Searching title, employer, location and posting text within the selected filters. {period !== 'all' && <button onClick={() => { const next = new URLSearchParams(params); next.set('period', 'all'); next.delete('year'); next.delete('offset'); setParams(next) }}>Search all dates</button>}</p>}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h1 style={{ fontSize: 22, margin: 0 }}>Opportunities</h1>
@@ -140,6 +150,7 @@ export default function Dashboard() {
             ))}
           </select>
           <select aria-label="Sort roles" value={sort} onChange={(e) => update('sort', e.target.value)}>
+            <option value="relevance">Sort: search relevance</option>
             <option value="similarity">Sort: similarity</option>
             <option value="posting_date">Sort: posting date</option>
             <option value="captured_at">Sort: captured</option>
@@ -252,7 +263,7 @@ export default function Dashboard() {
                   <ExtractionQualityBadge role={r} />
                 </div>
                 <div className="secondary" style={{ fontSize: 14 }}>
-                  {r.organisation ?? 'Unknown org'}
+                  {r.organisation?.trim() || 'Employer not recorded'}
                   {r.location ? ` · ${r.location}` : ''}
                   {r.posting_date ? ` · ${r.posting_date}` : ''}
                 </div>

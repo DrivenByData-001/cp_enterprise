@@ -94,7 +94,7 @@ def save_resume(application_id: UUID, payload: ResumeInput):
             if not any(str(i['concept']['id']) == str(payload.concept_id) for i in comparison['items']):
                 raise HTTPException(404, 'Requirement is no longer on this application')
         cur.execute('INSERT INTO jobber.application_resume (application_id, concept_id) VALUES (%s, %s) '
-                    'ON CONFLICT (application_id) DO UPDATE SET concept_id = EXCLUDED.concept_id, updated_at = now()',
+                    "ON CONFLICT (application_id) DO UPDATE SET stage = 'evidence', concept_id = EXCLUDED.concept_id, updated_at = now()",
                     (str(application_id), str(payload.concept_id) if payload.concept_id else None))
     return {'saved': True}
 
@@ -139,7 +139,7 @@ def save_decision(application_id: UUID, concept_id: UUID, payload: DecisionInput
                      payload.rationale.strip(), mode.review_fingerprint(item, selected)))
         result = dict(cur.fetchone())
         cur.execute('INSERT INTO jobber.application_resume (application_id, concept_id) VALUES (%s, %s) '
-                    'ON CONFLICT (application_id) DO UPDATE SET concept_id = EXCLUDED.concept_id, updated_at = now()',
+                    "ON CONFLICT (application_id) DO UPDATE SET stage = 'evidence', concept_id = EXCLUDED.concept_id, updated_at = now()",
                     (str(application_id), str(concept_id)))
         cur.execute('UPDATE jobber.application SET updated_at = now() WHERE id = %s', (str(application_id),))
     return result

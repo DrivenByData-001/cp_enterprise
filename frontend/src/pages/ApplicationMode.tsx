@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { applicationMode, type ApplicationModeData, type Disposition, type EvidenceDecision, type ModeItem } from '../lib/applicationMode'
+import { applicationMode, type Disposition, type EvidenceDecision, type ModeItem } from '../lib/applicationMode'
 import './ApplicationMode.css'
 import ApplicationClaimReview from '../components/ApplicationClaimReview'
+import ApplicationOpportunity from '../components/ApplicationOpportunity'
+import ApplicationRequirements from '../components/ApplicationRequirements'
+import { applicationProcess, stageLabels, stateLabels, type ProcessData, type Stage } from '../lib/applicationProcess'
 
 const LABELS: Record<Disposition, string> = { covered: 'Covered', partial: 'Partial evidence', investigate: 'Needs investigation', gap: 'Genuine gap acknowledged' }
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
@@ -133,40 +136,66 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
 }
 
 export default function ApplicationMode() {
-  const { id = '', conceptId } = useParams()
+  const { id = '', stage: stageParam, entity } = useParams()
   const [params] = useSearchParams()
   const navigate = useNavigate()
-  const [data, setData] = useState<ApplicationModeData | null>(null)
+  const [data, setData] = useState<ProcessData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const save = useRef<Save>(async () => true)
   const base = `/applications/${id}/prepare`
-  const reload = useCallback(async () => { const next = await applicationMode.get(id); setData(next) }, [id])
+  const known = !stageParam || Object.hasOwn(stageLabels, stageParam)
+  const stage: Stage = known ? (stageParam as Stage || 'overview') : 'evidence'
+  const conceptId = known ? entity : stageParam
+  const path = (s: Stage, concept?: string | null) => s === 'overview' ? base : `${base}/${s}${concept ? `/${concept}` : ''}`
+  const reload = useCallback(async () => { setData(await applicationProcess.get(id)) }, [id])
   useEffect(() => {
     let current = true
     setData(null); setError(null)
-    applicationMode.get(id).then(next => { if (current) {
+    applicationProcess.get(id).then(next => { if (current) {
       setData(next)
-      if (!conceptId && params.get('resume') === '1' && next.resume_concept_id && next.items.some(i => i.concept.id === next.resume_concept_id)) navigate(`${base}/${next.resume_concept_id}`, { replace: true })
+      if (!known) navigate(`${base}/evidence/${stageParam}`, { replace: true })
+      else if (!stageParam && params.get('resume') === '1') {
+        const resumed = next.resume.stage === 'overview' ? next.next_stage : next.resume.stage
+        navigate(`${base}/${resumed}${resumed === 'evidence' && next.resume.concept_id ? `/${next.resume.concept_id}` : ''}`, { replace: true })
+      }
     } }).catch(e => { if (current) setError(message(e)) })
     return () => { current = false }
-  }, [id, base, navigate, conceptId, params])
-  const item = data?.items.find(i => i.concept.id === conceptId)
-  const go = async (destination: string, nextConcept: string | null = item?.concept.id ?? null) => {
+  }, [id, base, navigate, known, stageParam, params])
+  const item = stage === 'evidence' ? data?.items.find(i => i.concept.id === conceptId) : undefined
+  const go = async (nextStage: Stage, concept: string | null = null, exit?: string) => {
+    if (busy) return
     setBusy(true); setError(null)
     try {
-      if (!item || await save.current()) {
-        await applicationMode.resume(id, nextConcept)
-        navigate(destination)
-      }
+      const editable = stage === 'opportunity' || stage === 'requirements' || !!item
+      if (editable && !await save.current()) return
+      await applicationProcess.resume(id, exit ? stage : nextStage, exit ? item?.concept.id ?? null : concept)
+      save.current = async () => true
+      navigate(exit ?? path(nextStage, concept))
+      await reload()
     } catch (e) { setError(message(e)) } finally { setBusy(false) }
   }
+  const attention = data?.items.filter(i => !i.decision || i.stale || i.decision.disposition === 'investigate') ?? []
   return <div className="application-mode">
-    <header className="mode-header"><div><p className="eyebrow">Application Mode</p><h1>{data?.role.title ?? 'Your application'}</h1><p>{data?.role.organisation ?? 'Prepare a clear, supported case for this role.'}</p></div><button disabled={busy || !data} onClick={() => go('/applications')}>{busy ? 'Saving…' : 'Save & exit'}</button></header>
+    <header className="mode-header"><div><p className="eyebrow">Application Mode · {stageLabels[stage]}</p><h1>{data?.role.title ?? 'Your application'}</h1><p>{data?.role.organisation || 'Employer not recorded'}</p>{data && <p className="secondary">{stage === 'overview' ? data.application.status : stateLabels[data.stages[stage]]}</p>}</div><button disabled={busy || !data} onClick={() => go(stage, null, '/applications')}>{busy ? 'Saving…' : 'Save & exit'}</button></header>
     {error && <div role="alert" className="mode-notice">{error}<button onClick={() => reload().then(() => setError(null)).catch(e => setError(message(e)))}>Retry</button></div>}
     {!data && !error && <p role="status">Loading your application…</p>}
-    {data && <div className="mode-layout"><aside className="mode-rail"><nav aria-label="Application tasks"><button disabled={busy} onClick={() => go(base, null)}>Evidence overview</button><p className="mode-task-state">{data.evidence_complete ? 'Evidence case reviewed' : `${data.items.filter(i => !i.decision || i.stale || i.decision.disposition === 'investigate').length} requirements need attention`}</p>{data.items.map(i => <button disabled={busy} aria-current={i.concept.id === conceptId ? 'step' : undefined} key={i.concept.id} onClick={() => go(`${base}/${i.concept.id}`, i.concept.id)}><span>{i.concept.canonical_name}</span><small>{i.stale ? 'Needs attention' : i.decision ? LABELS[i.decision.disposition] : 'Not started'}</small></button>)}</nav><div className="mode-exit"><p>Positioning, documents and interviews are available in the existing workspace.</p><button disabled={busy} onClick={() => go(`/applications/${id}`)}>Save & leave mode for workspace</button></div></aside>
-      {item ? <EvidenceEditor key={`${id}:${item.concept.id}:${item.decision?.revision ?? 0}`} applicationId={id} item={item} register={fn => { save.current = fn }} reload={reload} /> : <section className="mode-editor"><p className="eyebrow">Your evidence case</p><h2>Choose what supports your application</h2>{conceptId && <p role="alert">This requirement is no longer available. Select another requirement below.</p>}<p>Review each requirement, choose relevant career examples, and acknowledge any gaps. You can return to any review later.</p>{!data.review_summary.complete && <p className="mode-notice">The role’s requirement review is incomplete. Evidence progress is provisional until requirements are confirmed in the workspace.</p>}{data.items.length === 0 ? <p>No requirements are available yet. Leave mode for the workspace to review the role.</p> : <div className="mode-task-list">{data.items.map(i => <button key={i.concept.id} disabled={busy} onClick={() => go(`${base}/${i.concept.id}`, i.concept.id)}><strong>{i.concept.canonical_name}</strong><span>{i.stale ? 'Needs attention — sources changed' : i.decision ? LABELS[i.decision.disposition] : 'Start review'} →</span></button>)}</div>}<p className="secondary">Saved reviews persist across devices. Continue application returns to your last saved requirement.</p></section>}
+    {data && <div className="mode-layout"><aside className="mode-rail">
+      <label className="mode-mobile-stages">Application stage<select disabled={busy} value={stage} onChange={e => go(e.target.value as Stage)}>{Object.entries(stageLabels).map(([value, label]) => <option key={value} value={value}>{label}{value !== 'overview' ? ` · ${stateLabels[data.stages[value as Exclude<Stage, 'overview'>]]}` : ''}</option>)}</select></label>
+      <nav aria-label="Application stages">{Object.entries(stageLabels).map(([value, label]) => <button disabled={busy} aria-current={value === stage ? 'step' : undefined} key={value} onClick={() => go(value as Stage)}><span>{label}</span>{value !== 'overview' && <small>{stateLabels[data.stages[value as Exclude<Stage, 'overview'>]]}</small>}</button>)}</nav>
+      <div className="mode-exit">{Object.entries(data.downstream ?? {}).map(([kind, state]) => <p key={kind}>{({ positioning: 'Positioning', cv: 'CV', cover_letter: 'Cover letter', supporting_statement: 'Supporting statement' } as Record<string, string>)[kind] ?? kind}: {stateLabels[state]}</p>)}<p>Positioning, Documents, Review & submit, and Interviews are available in the existing workspace during migration.</p><button disabled={busy} onClick={() => go(stage, null, `/applications/${id}`)}>Save & leave mode for workspace</button></div>
+    </aside>
+    {stage === 'overview' && <section className="mode-editor"><h2>Prepare your application</h2><p>Work through the stages in the order that helps you. Saved progress and your resume location are separate.</p><div className="mode-task-list">{(['opportunity', 'requirements', 'evidence'] as const).map(s => <button key={s} disabled={busy} onClick={() => go(s)}><strong>{stageLabels[s]}</strong><span>{stateLabels[data.stages[s]]}{s === 'evidence' ? ` · ${attention.length} requirements need attention` : ''}</span></button>)}</div><button className="primary" disabled={busy} onClick={() => go(data.next_stage)}>Continue: {stageLabels[data.next_stage]}</button>{data.preparation.updated_at && <p className="secondary">Last opportunity/checkpoint save: {new Date(data.preparation.updated_at).toLocaleString()}</p>}</section>}
+    {stage === 'opportunity' && <ApplicationOpportunity key={`${id}:${data.preparation.revision}`} id={id} data={data} register={fn => { save.current = fn }} onSaved={setData} />}
+    {stage === 'requirements' && <ApplicationRequirements key={id} id={id} data={data} register={fn => { save.current = fn }} reload={reload} />}
+    {stage === 'evidence' && <div><button disabled={busy} onClick={() => go('evidence')}>Evidence overview</button>
+      {item ? <EvidenceEditor key={`${id}:${item.concept.id}:${item.decision?.revision ?? 0}`} applicationId={id} item={item} register={fn => { save.current = fn }} reload={reload} /> : <section className="mode-editor"><h2>Build your evidence case</h2>{conceptId && <p role="alert">This requirement is no longer available. Select another requirement below.</p>}
+        {data.stages.requirements !== 'complete' && <p className="mode-notice">Confirm the current requirement set in Requirements. Evidence progress is provisional until then.</p>}
+        <p>{Object.entries(LABELS).map(([key, label]) => `${data.items.filter(i => i.decision?.disposition === key && !i.stale).length} ${label.toLowerCase()}`).join(' · ')}</p>
+        {!data.items.length && <p>No confirmed requirements yet. Review Requirements to build this list.</p>}
+        {[['Needs attention', attention], ['Reviewed', data.items.filter(i => !attention.includes(i))]] .map(([label, items]) => <section key={label as string}><h3>{label as string}</h3><div className="mode-task-list">{(items as ModeItem[]).map(i => <button key={i.concept.id} disabled={busy} onClick={() => go('evidence', i.concept.id)}><strong>{i.concept.canonical_name}</strong><span>{i.stale ? 'Needs attention — sources changed' : i.decision ? LABELS[i.decision.disposition] : 'Start review'} →</span></button>)}</div></section>)}
+      </section>}
+    </div>}
     </div>}
     {!data && error && <Link to="/applications">Return to Applications</Link>}
   </div>

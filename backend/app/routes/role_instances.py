@@ -288,7 +288,7 @@ def list_requirements(role_id: str, history: bool = False):
 
 def _current_claim(cur, role_id: str, claim_id: str) -> dict:
     cur.execute(
-        "SELECT * FROM jobber.requirement_claim WHERE id = %s AND role_instance_id = %s",
+        "SELECT * FROM jobber.requirement_claim WHERE id = %s AND role_instance_id = %s FOR UPDATE",
         (claim_id, role_id),
     )
     row = cur.fetchone()
