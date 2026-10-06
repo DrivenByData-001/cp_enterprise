@@ -318,7 +318,7 @@ describe('Preparation checks', () => {
       }),
     )
     expect(await screen.findByText('Requirement review incomplete')).toBeTruthy()
-    expect(screen.getByText('Review now').closest('a')?.getAttribute('href')).toBe('/role-instances/role-1/requirements')
+    expect(screen.getByText('Review now').closest('a')?.getAttribute('href')).toBe('/role-instances/role-1/requirements?application=app-1')
   })
 
   it('shows a never-extracted role distinctly from a reviewed-and-empty one', async () => {
@@ -386,7 +386,7 @@ describe('Gaps and uncertainties', () => {
     const gapsSection = (await screen.findByRole('heading', { name: 'Gaps and uncertainties' })).closest('section') as HTMLElement
     expect(within(gapsSection).getByText('No accepted evidence found for this requirement. This does not mean you lack the capability.')).toBeTruthy()
     expect(within(gapsSection).getByText('Add an example for this application')).toBeTruthy()
-    expect(within(gapsSection).getByText('Review my evidence').closest('a')?.getAttribute('href')).toBe('/comparison/role-1')
+    expect(within(gapsSection).getByText('Review my evidence').closest('a')?.getAttribute('href')).toBe('/comparison/role-1?application=app-1')
     expect(within(gapsSection).getByText(/continue without adding anything/i)).toBeTruthy()
   })
 

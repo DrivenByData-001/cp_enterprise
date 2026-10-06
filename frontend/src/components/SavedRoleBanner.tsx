@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Role } from '../lib/api'
+import { useWorkflowContext } from '../lib/workflowContext'
 
 // Explicit-save-checkpoint UX: once a page has a real roleId, the role is
 // already persisted (POST /api/role-instances/ingest writes the source
@@ -12,6 +13,7 @@ import { api, type Role } from '../lib/api'
 // for this real, already-persisted id, so it can never disagree with the
 // database the way local-only state could.
 export default function SavedRoleBanner({ roleId, refreshKey }: { roleId: string; refreshKey?: unknown }) {
+  const workflow = useWorkflowContext()
   const [role, setRole] = useState<Role | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -46,7 +48,7 @@ export default function SavedRoleBanner({ roleId, refreshKey }: { roleId: string
       )}
       {error && <p role="alert" style={{ fontSize: 13, color: 'var(--critical)' }}>Could not confirm saved details: {error}</p>}
       <div className="actions" style={{ display: 'flex', gap: 8 }}>
-        <Link to={`/roles/${roleId}`}>Open saved role</Link>
+        <Link to={workflow.link(`/roles/${roleId}`)}>Open saved role</Link>
         {/* Deliberately not roleListUrl() (which restores whatever Roles
             filters were last remembered, e.g. a specific old year or a
             narrow facet) — right after saving, this link's whole point is

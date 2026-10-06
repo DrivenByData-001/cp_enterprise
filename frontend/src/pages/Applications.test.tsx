@@ -46,7 +46,7 @@ describe('Applications index — empty state', () => {
     renderPage()
     expect(await screen.findByText(/No applications yet\. Choose an opportunity/)).toBeTruthy()
     const link = screen.getByText('Browse opportunities').closest('a') as HTMLAnchorElement
-    expect(link.getAttribute('href')).toBe('/opportunities')
+    expect(link.getAttribute('href')).toBe('/opportunities?intent=apply')
   })
 })
 
@@ -82,8 +82,8 @@ describe('Applications index — populated', () => {
     const open = screen.getByText('Open application').closest('a') as HTMLAnchorElement
     expect(open.getAttribute('href')).toBe('/applications/app-1')
     const view = screen.getByText('View opportunity').closest('a') as HTMLAnchorElement
-    expect(view.getAttribute('href')).toBe('/roles/role-1')
-    expect(screen.getByText('Browse opportunities').closest('a')?.getAttribute('href')).toBe('/opportunities')
+    expect(view.getAttribute('href')).toBe('/roles/role-1?application=app-1')
+    expect(screen.getByText('Browse opportunities').closest('a')?.getAttribute('href')).toBe('/opportunities?intent=apply')
   })
 })
 

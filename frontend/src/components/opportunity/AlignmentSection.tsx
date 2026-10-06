@@ -1,3 +1,4 @@
+import { WorkflowLink } from '../WorkflowContextBanner'
 import { Link } from 'react-router-dom'
 import type {
   AlignmentEconomics,
@@ -194,7 +195,7 @@ function YouToOpportunityPanel({ data, roleId }: { data: YouToOpportunity; roleI
         </p>
       )}
       <p style={{ marginTop: 10, marginBottom: 0 }}>
-        <Link to={`/comparison/${roleId}`}>Review evidence in detail</Link>
+        <WorkflowLink to={`/comparison/${roleId}`}>Review evidence in detail</WorkflowLink>
       </p>
     </div>
   )

@@ -5,6 +5,8 @@ import { api, type ComparisonItem, type ComparisonResult, type ComparisonStatus,
 import ComparisonActions from '../components/ComparisonActions'
 import ImportSteps from '../components/ImportSteps'
 import SavedRoleBanner from '../components/SavedRoleBanner'
+import { ApplicationContextBanner } from '../components/WorkflowContextBanner'
+import { useWorkflowContext } from '../lib/workflowContext'
 
 const STATUS_LABEL: Record<ComparisonStatus, string> = {
   evidenced: 'Evidenced',
@@ -87,6 +89,7 @@ function ItemDetail({ item }: { item: ComparisonItem }) {
 export default function Comparison() {
   const { id } = useParams()
   const roleId = id ?? ''
+  const workflow = useWorkflowContext()
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actions, setActions] = useState<DevelopmentAction[]>([])
@@ -111,7 +114,8 @@ export default function Comparison() {
 
   return (
     <div>
-      <Link to={`/roles/${roleId}`} className="muted" style={{ fontSize: 13 }}>
+      <ApplicationContextBanner roleId={roleId} />
+      <Link to={workflow.link(`/roles/${roleId}`)} className="muted" style={{ fontSize: 13 }}>
         ← Back to {data.role.title}
       </Link>
       <ImportSteps step={3} />
@@ -123,7 +127,7 @@ export default function Comparison() {
           {data.review_summary.unreviewed + data.review_summary.unresolved_proposals + data.review_summary.needs_reextraction === 1 ? '' : 's'}
           {data.review_summary.unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''}
           {data.review_summary.needs_reextraction > 0 ? ' (including terms newly added to the vocabulary awaiting re-extraction)' : ''} excluded below.{' '}
-          <Link to={`/role-instances/${data.role.id}/requirements`}>Review requirements</Link>
+          <Link to={workflow.link(`/role-instances/${data.role.id}/requirements`)}>Review requirements</Link>
         </p>
       )}
       {data.target_mapping && <div className="card">
@@ -172,7 +176,7 @@ export default function Comparison() {
 
       {data.items.length === 0 && (
         <p className="muted">
-          No requirement claims for this role yet. <Link to={`/role-instances/${roleId}/requirements`}>Review and extract requirements</Link>.
+          No requirement claims for this role yet. <Link to={workflow.link(`/role-instances/${roleId}/requirements`)}>Review and extract requirements</Link>.
         </p>
       )}
 

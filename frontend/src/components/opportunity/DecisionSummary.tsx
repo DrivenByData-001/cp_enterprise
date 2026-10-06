@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { WorkflowLink } from '../WorkflowContextBanner'
 import {
   type ComparisonResult,
   type ComparisonStatus,
@@ -50,7 +50,7 @@ export function RequirementReviewPendingNotice({ role }: { role: Role }) {
       {unresolved_proposals > 0 ? ' (including terms not yet matched to the vocabulary)' : ''}
       {needs_reextraction > 0 ? ' (including terms newly added to the vocabulary awaiting re-extraction)' : ''} and
       excluded from comparison/analysis.{' '}
-      <Link to={`/role-instances/${role.id}/requirements`}>Review now</Link>
+      <WorkflowLink to={`/role-instances/${role.id}/requirements`}>Review now</WorkflowLink>
     </p>
   )
 }
@@ -123,7 +123,7 @@ export function RequirementsAskFor({ role }: { role: Role }) {
       <RequirementReviewPendingNotice role={role} />
 
       <p style={{ marginTop: 12, marginBottom: 0 }}>
-        <Link to={`/role-instances/${role.id}/requirements`}>Review requirements</Link>
+        <WorkflowLink to={`/role-instances/${role.id}/requirements`}>Review requirements</WorkflowLink>
       </p>
     </section>
   )
@@ -222,7 +222,7 @@ function EvidenceStateTile({
         )
       )}
       <p style={{ marginTop: 10, marginBottom: 0 }}>
-        <Link to={`/comparison/${roleId}`}>Review evidence in detail</Link>
+        <WorkflowLink to={`/comparison/${roleId}`}>Review evidence in detail</WorkflowLink>
       </p>
     </section>
   )
