@@ -99,10 +99,11 @@ def process_view(cur, application_id):
     resume = dict(resume) if resume else {'stage': 'overview', 'concept_id': None}
     if resume.get('concept_id') and not any(str(i['concept']['id']) == str(resume['concept_id']) for i in accepted):
         resume['concept_id'] = None
-    return {'application': app, 'role': build_role_view(cur, str(app['role_instance_id'])), 'preparation': saved,
+    role = build_role_view(cur, str(app['role_instance_id']))
+    return {'application': app, 'role': role, 'preparation': saved,
             'opportunity_fingerprint': opp_fp, 'requirements_fingerprint': req_fp,
             'target_revision': mode.fingerprint(target_state(cur, str(app['role_instance_id']))),
             'stages': stages, 'resume': resume, 'items': evidence, 'review_summary': comparison['review_summary'],
             'downstream': downstream_states(cur, application_id, opp_ok and req_ok and evidence_ok),
-            'legacy_requirement_count': len(comparison['items']) - len(accepted),
+            'legacy_requirement_count': len(role['legacy_skills']),
             'next_stage': next((s for s, state in stages.items() if state != 'complete'), 'evidence')}

@@ -68,6 +68,7 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
   return <section className="mode-editor"><h2>Review the employer’s requirements</h2>
     <p>Accept, refine or reject each requirement. Only confirmed requirements appear in Evidence. Changes preserve your previous work and may require fresh review downstream.</p>
     {data.legacy_requirement_count > 0 && <p className="mode-notice">{data.legacy_requirement_count} legacy requirement signals are excluded from the new Evidence stage. Extract and review the posting, or add a supported requirement below. Earlier evidence decisions are retained.</p>}
+    {!!data.role.legacy_skills?.length && <details><summary>Inspect legacy signals (not confirmed requirements)</summary><ul>{data.role.legacy_skills.map((skill, i) => <li key={i}>{skill.name}{skill.requirement_type ? ` · ${skill.requirement_type}` : ''}</li>)}</ul></details>}
     {error && <div role="alert">{error}<button onClick={() => reloadAll().then(() => setError(null)).catch(e => setError(String(e)))}>Reload requirements</button></div>}
     <button disabled={busy || loading} onClick={() => run(async () => { const result = await api.extractRequirements(data.role.id); if (result.status === 'failed') throw new Error(result.error || 'Extraction failed. Your existing requirements are preserved.') })}>{busy ? 'Working…' : 'Extract requirements with AI'}</button>
     {loading && <p role="status">Loading requirements…</p>}
