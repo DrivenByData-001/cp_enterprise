@@ -639,8 +639,8 @@ export default function RoleRequirements() {
       <div hidden={!detailsStep}>
         <MetadataEnrichmentPanel key={roleId} roleId={roleId} onSaved={() => setSavedRoleVersion((v) => v + 1)} />
       </div>
-      {detailsStep ? <button className="primary" onClick={() => setParams({})}>Continue to requirements</button> :
-        <button onClick={() => setParams({ step: 'details' })}>Back to role details</button>}
+      {detailsStep ? <button className="primary" onClick={() => setParams(applicationId ? { application: applicationId } : {})}>Continue to requirements</button> :
+        <button onClick={() => setParams(applicationId ? { application: applicationId, step: 'details' } : { step: 'details' })}>Back to role details</button>}
       <div hidden={detailsStep}>
 
       <p className="secondary">
