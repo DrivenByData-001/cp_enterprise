@@ -703,6 +703,7 @@ function GapRow({
   concept,
   status,
   roleId,
+  applicationId,
   existingNotes,
   onAddExample,
   busy,
@@ -710,6 +711,7 @@ function GapRow({
   concept: GapConcept
   status: ComparisonStatus
   roleId: string
+  applicationId: string
   existingNotes: ApplicationNote[]
   onAddExample: (conceptId: string, text: string) => void
   busy: boolean
@@ -783,6 +785,7 @@ function GapsAndUncertainties({
           concept={gap}
           status="not_found"
           roleId={roleId}
+          applicationId={evidence.application_id}
           existingNotes={notesByConcept.get(gap.id) ?? []}
           onAddExample={onAddExample}
           busy={busy}
@@ -794,6 +797,7 @@ function GapsAndUncertainties({
           concept={gap}
           status={gap.status}
           roleId={roleId}
+          applicationId={evidence.application_id}
           existingNotes={notesByConcept.get(gap.id) ?? []}
           onAddExample={onAddExample}
           busy={busy}
