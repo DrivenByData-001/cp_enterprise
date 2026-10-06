@@ -16,7 +16,7 @@ through the document-processing pipeline (docs/17), while `requirement_claim`
 (the Phase 2 closed-vocabulary model) is populated only for roles that have
 been through the separate, later, opt-in requirement-extraction step, which
 the historical corpus has not been. Both are read where available:
-`canonical_concept_id` (a resolved, curated concept) is preferred when set;
+an active M:N concept mapping is preferred when present;
 an unresolved `surface_form` is used as a raw fallback key, exactly the
 brief's own ordering ("canonical concept/capability once vocabulary is
 accepted; raw skill observation as a fallback while vocabulary is still
@@ -169,7 +169,7 @@ def top_requirements(cur, filters: TrendFilters, *, min_sample_size: int = 5, li
         FROM jobber.role_skill_observation rso
         JOIN jobber.role_instance ri ON ri.id = rso.role_instance_id
         LEFT JOIN jobber.role_skill_observation_concept rsoc ON rsoc.role_skill_observation_id = rso.id
-        LEFT JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
+        JOIN jobber.concept c ON c.id = rsoc.concept_id AND c.status = 'active'
         WHERE {where_sql}
         GROUP BY rsoc.concept_id, c.canonical_name, c.type_code, surface_key
         ORDER BY role_count DESC
