@@ -19,6 +19,10 @@ def test_opportunity_requirement_checkpoints_resume_and_invalidation(client):
     base = f'/api/applications/{app}/process'
     initial = client.get(base).json()
     assert initial['stages']['opportunity'] == 'not_started'
+    draft = client.put(base + '/opportunity', json=opportunity_payload(initial, confirm=False))
+    assert draft.status_code == 200, draft.text
+    initial = draft.json()
+    assert initial['stages']['opportunity'] == 'in_progress'
     package = [{'id': str(uuid4()), 'kind': 'question', 'label': 'Why this role?', 'required': True,
                 'word_limit': 300, 'instructions': 'Explain motivation'}]
     body = opportunity_payload(initial, metadata={'organisation': 'Corrected Employer'}, package_items=package)

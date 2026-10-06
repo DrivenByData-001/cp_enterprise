@@ -90,6 +90,8 @@ def process_view(cur, application_id):
         'evidence': 'complete' if evidence_ok else 'needs_attention' if any(i['stale'] for i in evidence)
             or (saved['requirements_fingerprint'] and not req_ok) else 'in_progress' if any(i['decision'] for i in evidence) else 'not_started',
     }
+    if stages['opportunity'] == 'not_started' and saved['revision']:
+        stages['opportunity'] = 'in_progress'
     if stages['requirements'] == 'not_started' and (accepted or comparison['review_summary']['extraction_attempted']):
         stages['requirements'] = 'in_progress'
     cur.execute('SELECT stage, concept_id, updated_at FROM jobber.application_resume WHERE application_id = %s', (application_id,))
