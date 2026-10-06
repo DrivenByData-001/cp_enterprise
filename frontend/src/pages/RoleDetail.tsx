@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useLocation, useParams } from 'react-router-dom'
+import { Link, useNavigate, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import {
   api,
   type ComparisonResult,
@@ -13,6 +13,8 @@ import {
 } from '../lib/api'
 import { trackColor, trackLabel } from '../lib/trackColor'
 import { roleListUrl } from '../lib/roleNavigation'
+import { withApplicationContext } from '../lib/applicationContext'
+import ApplicationContextBanner from '../components/ApplicationContextBanner'
 import { RoleEconomicsSection } from '../components/economics/RoleEconomicsSection'
 import { DecisionSummary, RequirementsAskFor, RequirementReviewPendingNotice } from '../components/opportunity/DecisionSummary'
 import { AlignmentFullSection } from '../components/opportunity/AlignmentSection'
@@ -320,6 +322,8 @@ export default function RoleDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const applicationId = searchParams.get('application')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
@@ -453,9 +457,10 @@ export default function RoleDetail() {
 
   return (
     <div>
+      <ApplicationContextBanner />
       {deleteError && <p role="alert">{deleteError} Your role is still open; retry Delete below.</p>}
-      <Link to={isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 14 }}>
-        ← Back to {isTarget ? 'targets' : 'opportunities'}
+      <Link to={applicationId ? `/applications/${applicationId}` : isTarget ? '/targets' : location.state?.returnTo ?? roleListUrl()} className="muted" style={{ fontSize: 14 }}>
+        ← Back to {applicationId ? 'application' : isTarget ? 'targets' : 'opportunities'}
       </Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 12 }}>
@@ -776,15 +781,15 @@ export default function RoleDetail() {
           </p>
         )}
         <div className="actions">
-          {!isTarget && (
+          {!isTarget && !applicationId && (
             <button type="button" className="button primary" disabled={applying} onClick={handleApply}>
               {applying ? 'Opening application…' : 'I want to apply'}
             </button>
           )}
-          <Link to={`/role-instances/${role.id}/requirements`} className="button">
+          <Link to={withApplicationContext(`/role-instances/${role.id}/requirements`, applicationId)} className="button">
             {isTarget ? 'Requirements' : 'Review requirements'}
           </Link>
-          <Link to={`/comparison/${role.id}`} className="button">
+          <Link to={withApplicationContext(`/comparison/${role.id}`, applicationId)} className="button">
             {isTarget ? 'Compare' : 'Review evidence in detail'}
           </Link>
           <Link to={isTarget ? `/targets/${role.id}/edit` : `/roles/${role.id}/edit`} className="button">
