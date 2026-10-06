@@ -78,6 +78,6 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
     {proposals.length > 0 && <section aria-label="Vocabulary for this role"><h3>Vocabulary needing resolution</h3>{proposals.map(p => <VocabularyIssue key={p.id} id={id} proposal={p} done={reloadAll} busy={busy} onBusyChange={setBusy} />)}</section>}
     {data.review_summary.needs_reextraction > 0 && <p className="mode-notice">Some resolved terms need another extraction before their requirements can be reviewed.</p>}
     <p>{data.review_summary.unreviewed} requirements need review; {proposals.length} vocabulary proposals remain.</p>
-    <button className="primary" disabled={busy || loading} onClick={() => run(async () => { const latest = await applicationProcess.get(id); await applicationProcess.confirmRequirements(id, latest.requirements_fingerprint) })}>Confirm requirement set</button>
+    <button className="primary" disabled={busy || loading} onClick={() => run(() => applicationProcess.confirmRequirements(id, data.requirements_fingerprint))}>Confirm requirement set</button>
   </section>
 }
