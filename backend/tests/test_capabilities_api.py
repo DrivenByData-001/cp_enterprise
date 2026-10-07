@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app import db
+from app import db, capability_engine
 
 
 def test_create_list_get_update_capability(client):
@@ -129,7 +129,7 @@ def test_rebuild_endpoint(client):
     resp = client.post("/api/capabilities/rebuild")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["engine_version"] == "capability-engine-v1"
+    assert body["engine_version"] == capability_engine.ENGINE_VERSION
     assert body["capability_coverage"]["computed"] >= 1
     assert "role_fit" in body
 

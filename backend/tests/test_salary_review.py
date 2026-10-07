@@ -33,6 +33,8 @@ def test_review_save_and_resolve(client, monkeypatch):
     with db.db_cursor() as cur:
         cur.execute('SELECT count(*) AS n FROM jobber.role_salary_estimate WHERE role_instance_id=%s', (role,))
         assert cur.fetchone()['n'] == 0
+        cur.execute('SELECT economics FROM jobber.target_analysis_revision WHERE singleton')
+        before_economics = cur.fetchone()['economics']
     payload = {**proposal['proposal'], 'compensation_review': review}
     assert client.patch(f'/api/role-instances/{role}/metadata', json=payload).status_code == 200
     assert client.patch(f'/api/role-instances/{role}/metadata', json=payload).status_code == 200
@@ -41,6 +43,8 @@ def test_review_save_and_resolve(client, monkeypatch):
         assert cur.fetchone()['n'] == 1
         cur.execute('SELECT count(*) AS n FROM jobber.compensation_observation WHERE role_instance_id=%s', (role,))
         assert cur.fetchone()['n'] == 0
+        cur.execute('SELECT economics FROM jobber.target_analysis_revision WHERE singleton')
+        assert cur.fetchone()['economics'] > before_economics
     resolved = client.get(f'/api/role-instances/{role}/compensation').json()['compensation']
     assert resolved['basis'] == 'ai_estimate'
     assert resolved['amount_min'] == 80000
