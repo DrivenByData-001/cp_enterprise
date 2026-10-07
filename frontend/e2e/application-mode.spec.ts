@@ -5,6 +5,46 @@ const conceptId = 'c0000000-0000-0000-0000-000000000001'
 const base = `/applications/${appId}/prepare`
 const source = { ref: 'profile_claim:10000000-0000-0000-0000-000000000001', kind: 'profile_claim', label: 'Challenged model assumptions', content: 'In 2019 I challenged lapse and expense assumptions during an internal model change.', source_revision: 'source-v1', episode_id: null }
 
+test('discover, inspect, edit and approve a recent career example', async ({ page }) => {
+  const { unexpected } = await setup(page)
+  let started = false
+  const finding = { id: 'finding-1',revision: 1,status: 'pending',stale: false,reviewed_payload: null,
+    proposal: { rationale:'Reframed unreliable translation as a deterministic transformation system.',limitations:'Architecture and validation ownership; substantial AI-assisted coding.',question:'Who reviewed the validation results?',depth:'owned',autonomy:'independent' },
+    requirement_snapshot: { canonical_name:'Problem solving',evidence_span:'A self-driven unstructured problem solver' },
+    source_snapshot: { claim: { claim_text:'Identified unreliable DCS-to-Python translation and designed a deterministic compiler/runtime approach.',evidence_class:'mixed',uncertainty:'Wider adoption is not established.' },
+      episode: { organisation:'MetLife',title:'Actuary',start_date:'2024-09-01',autonomy:'Technical ownership under management review' },
+      evidence: [{id:'e1',passage:'Owned the problem framing and validation approach.',locator:'project-review:ownership',document_title:'Project review',evidence_type:'user_asserted_plus_project_evidence',notes:null}] } }
+  await page.route(`**/api/applications/${appId}/evidence-discovery**`, async route => {
+    if (route.request().url().endsWith('/review')) {
+      const body=route.request().postDataJSON()
+      expect(body.action).toBe('approve')
+      expect(body.clarification).toBe('Reviewed with the modelling team.')
+      finding.status='accepted'; finding.revision=2
+      return route.fulfill({json:finding})
+    }
+    if (route.request().method()==='POST') { started=true; return route.fulfill({json:{id:'run-1',status:'running'}}) }
+    return route.fulfill({json:{run:started?{status:'complete',total_sources:308,model:'gpt-5.4-mini'}:null,findings:started?[finding]:[]}})
+  })
+  await page.goto(`${base}/evidence`)
+  await page.getByRole('button',{name:'Find supporting evidence',exact:true}).click()
+  await expect(page.getByText('Problem solving · MetLife')).toBeVisible()
+  await page.getByText('Inspect supporting records (1)').click()
+  await expect(page.getByText('Owned the problem framing and validation approach.')).toBeVisible()
+  await page.getByLabel(/Your clarification/).fill('Reviewed with the modelling team.')
+  await expect(page.getByRole('button',{name:'Approve finding'})).toBeDisabled()
+  await page.getByLabel(/I have reviewed the source/).check()
+  await page.screenshot({path:'test-results/evidence-discovery-desktop.png',fullPage:true})
+  await page.setViewportSize({width:390,height:844})
+  await expect(page.getByRole('button',{name:'Approve finding'})).toBeVisible()
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({path:'test-results/evidence-discovery-mobile.png',fullPage:true})
+  await page.getByRole('button',{name:'Approve finding'}).click()
+  await expect(page.getByText('Problem solving · MetLife')).toHaveCount(0)
+  await page.getByLabel('Show accepted and rejected findings').check()
+  await expect(page.getByText('Problem solving · MetLife')).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
 async function setup(page: Page, options: { conflict?: boolean; stale?: boolean } = {}) {
   const state = {
     application: { id: appId, role_instance_id: 'role-1', status: 'preparing', created_at: '2026-10-06', updated_at: '2026-10-06' },
@@ -26,6 +66,7 @@ async function setup(page: Page, options: { conflict?: boolean; stale?: boolean 
     const request = route.request(), path = new URL(request.url()).pathname
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
     if (path === '/api/auth/status') return reply({ authenticated: true })
+    if (path.endsWith('/evidence-discovery')) return reply({ run: null, findings: [] })
     if (path === `/api/applications/${appId}/process`) return reply(state)
     if (path.endsWith('/process/resume')) { state.resume = request.postDataJSON(); state.resume_concept_id = state.resume.concept_id; return reply({ saved: true }) }
     if (path.endsWith(`/mode/evidence/${conceptId}/search`)) return reply({ sources: [source] })

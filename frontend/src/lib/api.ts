@@ -832,6 +832,7 @@ export type IngestResult = {
 // --- Source-aware metadata (manual Edit + reviewable AI enrichment) --------
 
 export type RoleMetadataInput = {
+  compensation_review?: SalaryReview | null
   title?: string | null
   organisation?: string | null
   location?: string | null
@@ -849,6 +850,21 @@ export type MetadataProposalResult = {
   extraction_run_id: string
   error: string | null
   proposal: RoleMetadataProposal | null
+  compensation?: SalarySuggestion
+}
+
+export type SalaryEstimate = {
+  amount_min: number; amount_max: number; currency: string
+  pay_period: 'annual' | 'daily'; employment_basis: 'permanent' | 'contract' | 'unknown'
+  rationale: string; assumptions: string; confidence: 'low' | 'medium' | 'high'; evidence_ids: string[]
+}
+export type SalaryReview = { run_id: string; stated_items: CompensationProposalItem[]; estimate: SalaryEstimate | null }
+export type SalarySuggestion = {
+  error: string | null; review: SalaryReview | null; reason?: string; model?: string | null
+  stated_items?: CompensationProposalItem[]
+  evidence?: { id: string; title: string | null; raw_role_label: string | null; document_title: string | null;
+    amount_min: number | null; amount_max: number | null; amount_mid: number | null; currency: string;
+    pay_period: string; component: string; observed_at: string | null; market: string | null }[]
 }
 
 export type MappingReviewStatus = 'unreviewed' | 'accepted' | 'rejected'
@@ -2333,6 +2349,7 @@ export async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 // and not a reason to show a zero.
 
 export type CompensationBasis =
+  | 'ai_estimate'
   | 'advert_stated'
   | 'market_estimate'
   | 'legacy_estimate'

@@ -77,7 +77,7 @@ migration/recovery/debugging. No more "take this prompt to Claude/ChatGPT."
 | Variable | Purpose |
 |---|---|
 | `OPENAI_API_KEY` | OpenAI API credential. Never committed; read from the environment only. |
-| `CP_AI_MODEL` | Model name to call, e.g. `gpt-4o-mini`. No default — an unset value is a configuration error, not a silent fallback. |
+| `CP_AI_MODEL` | Optional model override. Missing or blank values use the app-wide `gpt-5.4-mini` default. |
 
 See the README for local setup.
 
@@ -157,7 +157,7 @@ cd backend
 pip install -r requirements.txt
 export DATABASE_URL=postgresql://...       # see README / docs/14
 export OPENAI_API_KEY=sk-...
-export CP_AI_MODEL=gpt-4o-mini
+export CP_AI_MODEL=gpt-5.4-mini
 python3 -m uvicorn app.main:app --reload --port 8000
 ```
 

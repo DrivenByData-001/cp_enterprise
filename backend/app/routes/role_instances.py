@@ -19,6 +19,8 @@ from ..metadata_enrichment import MetadataEnrichmentSubjectError, propose_role_m
 from ..models import RoleMetadataUpdate
 from ..role_requirements import load_requirement_evidence, load_requirement_evidence_bulk, load_requirement_review_summary
 from ..span_validation import validate_span
+from ..salary_estimation import CompensationReview, propose_compensation, save_compensation
+from ..ai import AITaskError
 
 router = APIRouter(prefix="/api/role-instances", tags=["role-instances"])
 
@@ -217,6 +219,11 @@ def propose_metadata(role_id: str):
             result = propose_role_metadata(cur, role_id)
         except MetadataEnrichmentSubjectError as e:
             raise HTTPException(404, str(e)) from e
+        if result['status'] == 'ok':
+            try:
+                result['compensation'] = propose_compensation(cur, role_id, result['proposal'])
+            except (AITaskError, ValueError) as e:
+                result['compensation'] = {'error': str(e), 'review': None}
     if result["status"] == "failed":
         code = _METADATA_ERROR_STATUS.get(result["error_type"], 502)
         raise HTTPException(status_code=code, detail=result["error"])
@@ -238,6 +245,13 @@ def update_metadata(role_id: str, payload: RoleMetadataUpdate):
         if row["instance_type"] != "observed_posting":
             raise HTTPException(400, "this is a target role — edit it via PUT /api/targets/{id}")
         role = update_role_metadata(cur, role_id, payload.model_dump(exclude_unset=True))
+        if payload.compensation_review is not None:
+            try:
+                review = CompensationReview.model_validate(payload.compensation_review)
+                save_compensation(cur, role_id, review)
+            except ValueError as e:
+                # Raising inside db_cursor rolls back the metadata and salary together.
+                raise HTTPException(422, str(e)) from e
     return role
 
 

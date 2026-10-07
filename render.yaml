@@ -45,7 +45,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: CP_AI_MODEL
-        value: gpt-4o-mini
+        value: gpt-5.4-mini
 
       # --- Auth secrets (app/auth.py, docs/20) — operator-provided ---
       - key: APP_AUTH_PASSWORD_HASH

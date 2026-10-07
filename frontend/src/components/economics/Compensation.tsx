@@ -12,6 +12,10 @@ import { formatMoney } from '../../lib/money'
 // from this one place. `insufficient_evidence` is a first-class answer with
 // its own presentation — not an error state and never rendered as a zero.
 const BASIS_STYLE: Record<CompensationBasis, { label: string; colour: string; blurb: string }> = {
+  ai_estimate: {
+    label: 'AI-estimated salary', colour: 'var(--warning)',
+    blurb: 'A reviewed AI estimate with recorded assumptions; not employer-stated pay.',
+  },
   advert_stated: {
     label: 'Advert salary',
     colour: 'var(--good)',

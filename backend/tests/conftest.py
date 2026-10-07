@@ -74,6 +74,10 @@ def _pg_available(admin_url: str) -> bool:
 # legacy_role_analysis; that data now lives directly on role_instance or in
 # profile360, per the reconciliation pass.
 _RESETTABLE_JOBBER_TABLES = [
+    "evidence_finding_review",
+    "evidence_assessment",
+    "evidence_finding",
+    "evidence_discovery_run",
     "profile360_acceptance",
     "d_pathways",
     "d_target_path",

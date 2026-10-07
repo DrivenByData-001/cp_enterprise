@@ -11,14 +11,15 @@ benchmark in route code.
 ## Precedence (build §3)
 
     1. accepted *stated* compensation on this role   -> basis 'advert_stated'
-    2. otherwise the role's archetype + market benchmark -> 'market_estimate'
-    3. otherwise the legacy posting estimate, if present -> 'legacy_estimate'
-    4. otherwise                                     -> 'insufficient_evidence'
+    2. reviewed role-specific AI estimate (unchanged role) -> 'ai_estimate'
+    3. otherwise the role's archetype + market benchmark -> 'market_estimate'
+    4. otherwise the legacy posting estimate, if present -> 'legacy_estimate'
+    5. otherwise                                     -> 'insufficient_evidence'
 
 Each tier produces a different, never-interchangeable `basis`, and every
-returned figure carries it. The UI is required to render these as four
-visibly distinct things ("Advert salary" / "Market estimate" / "Legacy
-estimate" / "Insufficient evidence"); nothing here merges them, and there is
+returned figure carries it. The UI renders "Advert salary", "AI-estimated
+salary", "Market estimate", "Legacy estimate" and "Insufficient evidence"
+distinctly; nothing here merges them, and there is
 no code path that promotes a lower tier's number into a higher tier's label.
 
 ### Which stated figure is the headline (tier 1)
@@ -144,6 +145,27 @@ def _insufficient(reason: str, trace: dict | None = None) -> dict:
     }
 
 
+def _from_reviewed_salary(role: dict, other_stated: list[dict]) -> dict:
+    estimate = role['reviewed_salary']
+    result = _insufficient('')
+    result.update({
+        'basis': 'ai_estimate', 'basis_label': 'AI-estimated salary',
+        'currency': estimate['currency'], 'amount_min': estimate['amount_min'],
+        'amount_max': estimate['amount_max'],
+        'amount_reference': (estimate['amount_min'] + estimate['amount_max']) / 2,
+        'component': 'day_rate' if estimate['pay_period'] == 'daily' else 'base',
+        'component_label': 'day rate' if estimate['pay_period'] == 'daily' else 'base salary',
+        'pay_period': estimate['pay_period'], 'employment_basis': estimate['employment_basis'],
+        'as_of': str(role['salary_reviewed_at'])[:10], 'reference_source': 'reviewed_ai_estimate',
+        'evidence_quality': 'thin' if estimate['evidence_ids'] else 'insufficient',
+        'reason': f"{estimate['rationale']} Assumptions: {estimate['assumptions']} "
+                  f"Model confidence: {estimate['confidence']}. Reviewed AI estimate, not advertised pay.",
+        'trace': {'model': role['salary_model'], 'evidence_ids': estimate['evidence_ids']},
+        'supplementary': _supplementary(other_stated),
+    })
+    return result
+
+
 def _evidence_quality_for_market(row: dict) -> str:
     """Same four-level vocabulary `d_gap_value.evidence_quality` uses, so one
     word never means two different things in this app. Derived from what the
@@ -170,9 +192,13 @@ def _load_roles(cur, role_ids: list[str]) -> dict[str, dict]:
     cur.execute(
         "SELECT ri.id, ri.title, ri.country, ri.currency, ri.archetype_concept_id, "
         "       ri.salary_min, ri.salary_max, ri.salary_estimate_min, ri.salary_estimate_max, "
-        "       c.canonical_name AS archetype_name, c.status AS archetype_status "
+        "       c.canonical_name AS archetype_name, c.status AS archetype_status, "
+        "       se.estimate AS reviewed_salary, se.model AS salary_model, se.reviewed_at AS salary_reviewed_at "
         "FROM jobber.role_instance ri "
         "LEFT JOIN jobber.concept c ON c.id = ri.archetype_concept_id "
+        "LEFT JOIN LATERAL (SELECT estimate, model, reviewed_at FROM jobber.role_salary_estimate "
+        " WHERE role_instance_id = ri.id AND role_updated_at = ri.updated_at "
+        " ORDER BY reviewed_at DESC, id DESC LIMIT 1) se ON true "
         "WHERE ri.id = ANY(%s::uuid[])",
         (role_ids,),
     )
@@ -484,6 +510,13 @@ def resolve_role_compensation_bulk(
         primary, other_stated = _select_primary_stated(role_observations)
         if primary is not None:
             resolved[role_id] = _from_stated_observation(primary, role, other_stated)
+            continue
+
+        # A reviewed, role-specific estimate precedes a generic archetype
+        # benchmark, but never overrides employer-stated compensation.
+        reviewed = role.get('reviewed_salary')
+        if reviewed and (not currency or currency == reviewed['currency']) and not market_id:
+            resolved[role_id] = _from_reviewed_salary(role, other_stated)
             continue
 
         archetype_id = str(role["archetype_concept_id"]) if role["archetype_concept_id"] else None

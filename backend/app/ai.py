@@ -84,10 +84,7 @@ class AITaskResult(Generic[T]):
 
 
 def ai_model_name() -> str:
-    model = os.getenv("CP_AI_MODEL")
-    if not model:
-        raise AIConfigError("CP_AI_MODEL is not set")
-    return model
+    return os.getenv("CP_AI_MODEL", "").strip() or "gpt-5.4-mini"
 
 
 def _client() -> OpenAI:
@@ -131,6 +128,7 @@ def run_json_task(
     user_input: str,
     output_model: type[T],
     max_tokens: int = 8192,
+    structured: bool = False,
 ) -> AITaskResult[T]:
     """
     Execute one AI task end to end: load the named prompt from `prompts/`,
@@ -162,11 +160,17 @@ def run_json_task(
                     "content": f"{prompt_text}\n\n---\n\nINPUT TO PROCESS:\n{user_input}",
                 }
             ],
-            response_format={"type": "json_object"},
+            response_format=({'type': 'json_schema', 'json_schema': {'name': output_model.__name__,
+                             'schema': output_model.model_json_schema(), 'strict': True}}
+                             if structured else {"type": "json_object"}),
         )
     except openai.APIError as e:
         raise AIProviderError(f"OpenAI API error: {e}") from e
 
+    if not response.choices or getattr(response.choices[0], 'finish_reason', 'stop') != 'stop':
+        raise AIResponseFormatError('AI response was incomplete; no result was accepted')
+    if getattr(response.choices[0].message, 'refusal', None):
+        raise AIResponseFormatError('AI declined this task; no result was accepted')
     raw_text = response.choices[0].message.content or ""
     text = _strip_code_fence(raw_text)
 

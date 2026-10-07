@@ -5,9 +5,17 @@
 silently replaced by the capture date."""
 
 import io
+import pytest
 
 from app import ai, db, metadata_enrichment
 from app.models import RoleMetadataProposal
+
+
+@pytest.fixture(autouse=True)
+def _isolate_salary_task(monkeypatch):
+    # This suite tests metadata only; salary orchestration has separate tests.
+    monkeypatch.setattr('app.routes.role_instances.propose_compensation',
+                        lambda *a: {'error': None, 'review': None})
 
 
 def test_ingest_pdf_accepts_manual_metadata_fallback_fields(client, monkeypatch):
