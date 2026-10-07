@@ -10,6 +10,7 @@ from . import config
 from .auth import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, require_auth
 from .db import reset_pool, run_migrations
 from .routes import (
+    evidence_discovery,
     application_mode,
     application_artifacts,
     applications,
@@ -111,6 +112,7 @@ def shutdown():
 app.include_router(auth_routes.router)
 
 _protected = [Depends(require_auth)]
+app.include_router(evidence_discovery.router, dependencies=_protected)
 app.include_router(import_routes.router, dependencies=_protected)
 app.include_router(roles.router, dependencies=_protected)
 app.include_router(role_context.router, dependencies=_protected)

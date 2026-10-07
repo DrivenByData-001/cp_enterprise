@@ -696,7 +696,7 @@ already has it (see `docs/14` §7).
 # PowerShell
 $env:DATABASE_URL = "postgresql://postgres:<password>@<project-ref>.supabase.co:5432/postgres"
 $env:OPENAI_API_KEY = "your-api-key"       # optional — only needed for AI extraction
-$env:CP_AI_MODEL = "gpt-4o-mini"           # optional — only needed for AI extraction
+$env:CP_AI_MODEL = "gpt-5.4-mini"          # optional override of the app-wide default
 ```
 
 Never commit real credentials — `.env`/`.env.*` are gitignored; `.env.example`

@@ -282,6 +282,7 @@ class RoleMetadataUpdate(BaseModel):
     omitted field is left exactly as stored, and an explicit `null` clears
     it. Never touches skills, the linked document, or requirement claims."""
 
+    compensation_review: Optional[dict] = None
     title: Optional[str] = None
     organisation: Optional[str] = None
     location: Optional[str] = None

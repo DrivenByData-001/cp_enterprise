@@ -31,6 +31,7 @@ async function setup(page: Page, conflict = false) {
     const reply = (value: unknown, status = 200) => route.fulfill({ status, json: value })
     if (request.method() !== 'GET') writes.push({ path, body })
     if (path === '/api/auth/status') return reply({ authenticated: true })
+    if (path.endsWith('/evidence-discovery')) return reply({ run: null, findings: [] })
     if (path === `/api/applications/${appId}/process`) { refresh(); return reply(state) }
     if (path.endsWith('/process/opportunity')) {
       if (conflict) return reply({ detail: 'Opportunity changed. Reload and review before saving' }, 409)

@@ -6,6 +6,7 @@ import './ApplicationMode.css'
 import ApplicationClaimReview from '../components/ApplicationClaimReview'
 import ApplicationOpportunity from '../components/ApplicationOpportunity'
 import ApplicationRequirements from '../components/ApplicationRequirements'
+import EvidenceDiscovery from '../components/EvidenceDiscovery'
 import { applicationProcess, stageLabels, stateLabels, type ProcessData, type Stage } from '../lib/applicationProcess'
 
 const LABELS: Record<Disposition, string> = { covered: 'Covered', partial: 'Partial evidence', investigate: 'Needs investigation', gap: 'Genuine gap acknowledged' }
@@ -193,6 +194,7 @@ export default function ApplicationMode() {
         {data.stages.requirements !== 'complete' && <p className="mode-notice">Confirm the current requirement set in Requirements. Evidence progress is provisional until then.</p>}
         <p>{Object.entries(LABELS).map(([key, label]) => `${data.items.filter(i => i.decision?.disposition === key && !i.stale).length} ${label.toLowerCase()}`).join(' · ')}</p>
         {!data.items.length && <p>No confirmed requirements yet. Review Requirements to build this list.</p>}
+        {!!data.items.length && <EvidenceDiscovery applicationId={id} onChanged={reload} />}
         {[['Needs attention', attention], ['Reviewed', data.items.filter(i => !attention.includes(i))]] .map(([label, items]) => <section key={label as string}><h3>{label as string}</h3><div className="mode-task-list">{(items as ModeItem[]).map(i => <button key={i.concept.id} disabled={busy} onClick={() => go('evidence', i.concept.id)}><strong>{i.concept.canonical_name}</strong><span>{i.stale ? 'Needs attention — sources changed' : i.decision ? LABELS[i.decision.disposition] : 'Start review'} →</span></button>)}</div></section>)}
       </section>}
     </div>}

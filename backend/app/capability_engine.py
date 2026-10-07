@@ -54,7 +54,7 @@ from .db import to_json_param
 from .embeddings import cosine_similarity, ensure_profile_embedding, get_embedding
 from .role_requirements import load_role_requirements
 
-ENGINE_VERSION = "capability-engine-v1"
+ENGINE_VERSION = "capability-engine-v2-reviewed-evidence"
 
 DEPTH_LEVELS = ["exposed", "applied", "owned", "set_standard"]
 AUTONOMY_LEVELS = ["assisted", "independent", "directed_others", "accountable"]
@@ -333,9 +333,19 @@ def _direct_evidence(cur, capability_concept_id: str) -> list[dict]:
     episode_ids = [str(r["episode_id"]) for r in claim_rows if r["episode_id"] is not None]
     episodes_by_id = _episodes_by_id(cur, episode_ids)
 
+    cur.execute('SELECT a.*, m.profile360_claim_id FROM jobber.evidence_assessment a '
+                'JOIN jobber.profile360_claim_mapping m ON m.id=a.mapping_id WHERE m.jobber_concept_id=%s', (capability_concept_id,))
+    assessments = {str(r['profile360_claim_id']): dict(r) for r in cur.fetchall()}
+
     for r in claim_rows:
         episode_id = str(r["episode_id"]) if r["episode_id"] else None
         episode = episodes_by_id.get(episode_id) if episode_id else None
+        assessment = assessments.get(str(r['profile360_claim_id']))
+        if assessment:
+            from .evidence_sources import source_context
+            context = source_context(cur, str(r['profile360_claim_id']))
+            if not context or context['revision'] != assessment['source_revision']:
+                assessment = None
         items.append(
             {
                 "source_kind": "claim",
@@ -344,8 +354,8 @@ def _direct_evidence(cur, capability_concept_id: str) -> list[dict]:
                 "mapping_basis": r["mapping_basis"],
                 "profile360_claim_id": str(r["profile360_claim_id"]),
                 "display": r["claim_text"],
-                "depth": normalize_depth(r["raw_depth"]),
-                "autonomy": normalize_autonomy(episode.get("autonomy")) if episode else None,
+                "depth": assessment['depth'] if assessment else normalize_depth(r["raw_depth"]),
+                "autonomy": assessment['autonomy'] if assessment else normalize_autonomy(episode.get("autonomy")) if episode else None,
                 "episode_id": episode_id,
                 "episode": episode,
             }

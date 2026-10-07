@@ -108,7 +108,7 @@ In the Render service → **Environment**, set:
 | `APP_SESSION_SECRET` | **Required** | From §2 |
 | `APP_ENV` | Required | `production` (already set by `render.yaml`) |
 | `OPENAI_API_KEY` | Optional | Only needed for AI-assisted extraction. Leave unset to run without AI features. |
-| `CP_AI_MODEL` | Optional | Defaults to `gpt-4o-mini` (already set by `render.yaml`) |
+| `CP_AI_MODEL` | Optional | Defaults to `gpt-5.4-mini` app-wide (also set by `render.yaml`) |
 | `APP_CORS_ORIGINS` | Not needed | Only for the two-service variant, §13 |
 
 The app **fails to start** (deploy shows as failed, with a clear error in

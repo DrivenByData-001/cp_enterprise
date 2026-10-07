@@ -45,6 +45,42 @@ function renderPage(roleId = 'role-1') {
   )
 }
 
+describe('salary in the details review', () => {
+  const estimate = { amount_min: 80000, amount_max: 110000, currency: 'EUR', pay_period: 'annual' as const,
+    employment_basis: 'permanent' as const, rationale: 'Comparable actuarial work', assumptions: 'Base only',
+    confidence: 'low' as const, evidence_ids: [] }
+
+  it('edits and saves an estimate with the factual details in one request', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: reviewSummary() })
+    vi.mocked(api.proposeRoleMetadata).mockResolvedValue({ status: 'ok', extraction_run_id: 'metadata', error: null,
+      proposal: { title: 'Pricing Actuary', country: 'Ireland' }, compensation: {
+        error: null, model: 'gpt-5.4-mini', review: { run_id: 'salary', stated_items: [], estimate }, evidence: [] } })
+    vi.mocked(api.updateRoleMetadata).mockResolvedValue({} as Role)
+    renderPage()
+    fireEvent.click(await screen.findByText('Suggest details from the source'))
+    await screen.findByText('AI-estimated salary range')
+    expect(api.updateRoleMetadata).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Estimated maximum'), { target: { value: '120000' } })
+    fireEvent.click(screen.getByText('Save details'))
+    await waitFor(() => expect(api.updateRoleMetadata).toHaveBeenCalledWith('role-1', {
+      title: 'Pricing Actuary', country: 'Ireland', compensation_review: {
+        run_id: 'salary', stated_items: [], estimate: { ...estimate, amount_max: 120000 } } }))
+  })
+
+  it('can exclude compensation while saving details', async () => {
+    vi.mocked(api.listRequirements).mockResolvedValue({ items: [], review_summary: reviewSummary() })
+    vi.mocked(api.proposeRoleMetadata).mockResolvedValue({ status: 'ok', extraction_run_id: 'metadata', error: null,
+      proposal: { title: 'Pricing Actuary' }, compensation: { error: null,
+        review: { run_id: 'salary', stated_items: [], estimate }, evidence: [] } })
+    vi.mocked(api.updateRoleMetadata).mockResolvedValue({} as Role)
+    renderPage()
+    fireEvent.click(await screen.findByText('Suggest details from the source'))
+    fireEvent.click(await screen.findByLabelText('Save compensation with these details'))
+    fireEvent.click(screen.getByText('Save details'))
+    await waitFor(() => expect(api.updateRoleMetadata).toHaveBeenCalledWith('role-1', { title: 'Pricing Actuary' }))
+  })
+})
+
 describe('unreviewed requirement row', () => {
   it('offers Accept, Edit & accept and Reject, and requests the current list without history', async () => {
     vi.mocked(api.listRequirements).mockResolvedValue({ items: [claim()], review_summary: reviewSummary({ accepted: 0, unreviewed: 1, rejected: 0, complete: false }) })

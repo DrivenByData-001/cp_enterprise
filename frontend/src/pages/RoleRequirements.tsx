@@ -14,6 +14,8 @@ import {
 import ImportSteps from '../components/ImportSteps'
 import RoleMetadataForm from '../components/RoleMetadataForm'
 import SavedRoleBanner from '../components/SavedRoleBanner'
+import SalarySuggestionReview from '../components/SalarySuggestionReview'
+import type { SalarySuggestion, SalaryReview } from '../lib/api'
 
 const BASIS_LABEL: Record<string, string> = {
   stated: 'stated',
@@ -32,6 +34,8 @@ const BASIS_OPTIONS = ['stated', 'implied', 'inferred', 'user_asserted'] as cons
 // ("nothing here was auto-accepted"). Placed on this page rather than a new
 // one, per the brief's own suggestion that this is the cleanest fit.
 function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved: () => void }) {
+  const [salary, setSalary] = useState<SalarySuggestion | null>(null)
+  const [salaryReview, setSalaryReview] = useState<SalaryReview | null>(null)
   const [proposal, setProposal] = useState<RoleMetadataInput | null>(null)
   const [proposing, setProposing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -48,6 +52,8 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
         setError(result.error ?? 'Metadata proposal failed.')
       } else {
         setProposal(result.proposal)
+        setSalary(result.compensation ?? null)
+        setSalaryReview(result.compensation?.review ?? null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -57,6 +63,7 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
   }
 
   const manual = async () => {
+    setSalary(null); setSalaryReview(null)
     setProposing(true); setError(null); setSaved(false)
     try {
       const role = await api.getRole(roleId)
@@ -72,7 +79,7 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
     setSaving(true)
     setError(null)
     try {
-      await api.updateRoleMetadata(roleId, proposal)
+      await api.updateRoleMetadata(roleId, salaryReview ? { ...proposal, compensation_review: salaryReview } : proposal)
       setSaved(true)
       // The persisted-role banner above (SavedRoleBanner) fetched its own
       // copy of the role on mount and has no other way to learn this just
@@ -93,9 +100,9 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
         <div>
           <h3 style={{ marginTop: 0, marginBottom: 4, fontSize: 14 }}>Review role details</h3>
           <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 560 }}>
-            Proposes title/employer/location/date/etc. from this role's own captured source — never invented, and
-            never authoritative until you accept it below. A posting date left blank in the source stays blank here
-            too; it is never filled in from the capture date.
+            Extracts factual details and stated pay from the captured source. When usable pay is absent,
+            proposes a separate AI-estimated salary range using relevant salary evidence where available.
+            Review and edit before saving. An unstated posting date stays blank.
           </p>
         </div>
         {!proposal && (
@@ -112,6 +119,8 @@ function MetadataEnrichmentPanel({ roleId, onSaved }: { roleId: string; onSaved:
         <div style={{ marginTop: 12 }}>
           <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>Proposed details (not yet saved)</div>
           <RoleMetadataForm value={proposal} onChange={value => { setProposal(value); setSaved(false) }} disabled={saving} />
+          {salary && <SalarySuggestionReview suggestion={salary} value={salaryReview}
+            onChange={value => { setSalaryReview(value); setSaved(false) }} disabled={saving} />}
           <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="primary" onClick={accept} disabled={saving}>
               {saving ? 'Saving…' : 'Save details'}

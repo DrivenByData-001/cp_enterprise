@@ -42,10 +42,11 @@ def _configured_env(monkeypatch):
 # --- missing configuration -------------------------------------------------
 
 
-def test_missing_model_raises_config_error(monkeypatch):
+def test_missing_model_defaults_to_gpt54mini(monkeypatch):
     monkeypatch.delenv("CP_AI_MODEL", raising=False)
-    with pytest.raises(ai.AIConfigError):
-        ai.run_json_task(task="t", prompt_name="widget.md", user_input="x", output_model=_Widget)
+    assert ai.ai_model_name() == 'gpt-5.4-mini'
+    monkeypatch.setenv('CP_AI_MODEL', '  ')
+    assert ai.ai_model_name() == 'gpt-5.4-mini'
 
 
 def test_missing_api_key_raises_config_error(monkeypatch):
