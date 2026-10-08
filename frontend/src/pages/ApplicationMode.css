@@ -29,6 +29,8 @@
 .mode-search { display: flex; align-items: end; gap: 12px; margin: 10px 0; }
 .mode-search label { flex: 1; }
 .mode-notice { padding: 16px; margin: 16px 0; border: 1px solid var(--warning); border-radius: 8px; }
+.discovery-failure { border: 2px solid #a33131; background: #fff3f2; color: #702323; }
+.discovery-failure h4 { margin-top: 0; font-size: 1.1rem; }
 .mode-task-list { display: grid; gap: 12px; margin: 26px 0; }
 .mode-task-list button { display: flex; justify-content: space-between; gap: 16px; text-align: left; padding: 20px; }
 .mode-new-evidence { border-top: 1px solid var(--border); padding-top: 22px; }

@@ -52,9 +52,17 @@ persists it for return later. No generated SQL is executed.
 All native AI tasks use `gpt-5.4-mini` by default. `CP_AI_MODEL` remains an optional
 explicit override; render.yaml and .env.example specify the same default. No
 separate discovery model is introduced. Discovery requests strict JSON Schema,
-validates IDs against the supplied batch and accepted requirements, and rejects
+with per-batch enum constraints for source and concept IDs. Requirement-claim IDs
+are omitted from the model's requirement payload to avoid confusing them with
+concept IDs. Schema or reference-validation failures receive one bounded retry;
+an invalid batch is never persisted or silently repaired by guessing a reference.
+The app also validates IDs against the supplied batch and accepted requirements, and rejects
 incomplete/refused output. Existing task schemas retain their existing JSON-mode
 behaviour with added incomplete/refusal checks.
+
+Failed scans display a prominent alert explaining that the search did not finish,
+whether findings remain for review, and that scanning did not change the profile.
+Successful empty scans are distinguished from failures and from reviewed findings.
 
 ## Verification and deployment limits
 
