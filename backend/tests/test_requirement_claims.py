@@ -47,7 +47,7 @@ def test_exact_match_resolves_without_adjudication_call(client, monkeypatch):
         assert prompt_name == "extract_role_requirements.md", "adjudication must not run when exact match resolves everything"
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
             ),
             task, prompt_name,
         )
@@ -77,7 +77,7 @@ def test_hallucinated_span_is_rejected_not_stored(client, monkeypatch):
         if prompt_name == "extract_role_requirements.md":
             return _fake_run(
                 RequirementExtractionResult(
-                    requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="a quote that was never in the document")]
+                    requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="a quote that was never in the document")]
                 ),
                 task, prompt_name,
             )
@@ -106,7 +106,7 @@ def test_legacy_extracted_document_downgrades_basis_and_drops_span(client, monke
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
             ),
             task, prompt_name,
         )
@@ -136,7 +136,7 @@ def test_unresolved_surface_form_becomes_concept_proposal_and_accumulates(client
         if prompt_name == "extract_role_requirements.md":
             return _fake_run(
                 RequirementExtractionResult(
-                    requirements=[RequirementItem(surface_form="Solvency II", requirement_type="required", basis="stated", evidence_span="Solvency II expertise")]
+                    requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Solvency II", requirement_type="required", basis="stated", evidence_span="Solvency II expertise")]
                 ),
                 task, prompt_name,
             )
@@ -181,9 +181,9 @@ def test_unresolved_rerun_refreshes_occurrence_when_the_new_reading_is_stronger(
         assert prompt_name == "extract_role_requirements.md"
         calls["n"] += 1
         reading = (
-            RequirementItem(surface_form="Widget Modelling", requirement_type="contextual", basis="implied", evidence_span="Widget Modelling context.")
+            RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Widget Modelling", requirement_type="contextual", basis="implied", evidence_span="Widget Modelling context.")
             if calls["n"] == 1
-            else RequirementItem(surface_form="Widget Modelling", requirement_type="required", basis="stated", evidence_span="Requires Widget Modelling")
+            else RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Widget Modelling", requirement_type="required", basis="stated", evidence_span="Requires Widget Modelling")
         )
         return _fake_run(RequirementExtractionResult(requirements=[reading]), task, prompt_name)
 
@@ -233,9 +233,9 @@ def test_unresolved_rerun_does_not_downgrade_occurrence_with_a_weaker_reading(cl
         assert prompt_name == "extract_role_requirements.md"
         calls["n"] += 1
         reading = (
-            RequirementItem(surface_form="Gadget Tuning", requirement_type="required", basis="stated", evidence_span="Gadget Tuning expertise")
+            RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Gadget Tuning", requirement_type="required", basis="stated", evidence_span="Gadget Tuning expertise")
             if calls["n"] == 1
-            else RequirementItem(surface_form="Gadget Tuning", requirement_type="contextual", basis="implied", evidence_span="Requires Gadget Tuning expertise.")
+            else RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Gadget Tuning", requirement_type="contextual", basis="implied", evidence_span="Requires Gadget Tuning expertise.")
         )
         return _fake_run(RequirementExtractionResult(requirements=[reading]), task, prompt_name)
 
@@ -270,7 +270,7 @@ def test_declined_adjudication_falls_through_to_proposal(client, monkeypatch):
         if prompt_name == "extract_role_requirements.md":
             return _fake_run(
                 RequirementExtractionResult(
-                    requirements=[RequirementItem(surface_form="stochastic reserving", requirement_type="required", basis="stated", evidence_span="stochastic reserving skills")]
+                    requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="stochastic reserving", requirement_type="required", basis="stated", evidence_span="stochastic reserving skills")]
                 ),
                 task, prompt_name,
             )
@@ -328,7 +328,7 @@ def test_out_of_range_importance_is_clamped_to_null(client, monkeypatch):
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", importance=99, evidence_span="Python required.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", importance=99, evidence_span="Python required.")]
             ),
             task, prompt_name,
         )
@@ -351,7 +351,7 @@ def test_rerun_does_not_duplicate_an_identical_unreviewed_proposal(client, monke
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
             ),
             task, prompt_name,
         )
@@ -386,7 +386,7 @@ def test_rerun_with_a_different_interpretation_supersedes_the_earlier_unreviewed
         requirement_type = "preferred" if calls["n"] == 1 else "required"
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type=requirement_type, basis="stated",
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type=requirement_type, basis="stated",
                                                evidence_span="Requires Python experience, ideally advanced.")]
             ),
             task, prompt_name,
@@ -427,7 +427,7 @@ def test_rerun_never_touches_an_accepted_human_reviewed_decision(client, monkeyp
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="preferred", basis="stated", evidence_span="Requires Python experience.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="preferred", basis="stated", evidence_span="Requires Python experience.")]
             ),
             task, prompt_name,
         )
@@ -463,7 +463,7 @@ def test_rerun_never_touches_a_rejected_human_reviewed_decision(client, monkeypa
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(
-                requirements=[RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+                requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
             ),
             task, prompt_name,
         )

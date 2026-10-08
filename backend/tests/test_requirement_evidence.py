@@ -74,9 +74,9 @@ def test_two_occurrences_of_one_concept_create_one_claim_with_both_as_evidence(c
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="effective communicator", requirement_type="required", basis="stated",
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="effective communicator", requirement_type="required", basis="stated",
                                  evidence_span="effective communicator"),
-                RequirementItem(surface_form="communicate with colleagues", requirement_type="required", basis="stated",
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="communicate with colleagues", requirement_type="required", basis="stated",
                                  evidence_span="communicate with colleagues"),
             ]),
             task, prompt_name,
@@ -104,7 +104,7 @@ def test_identical_rerun_does_not_duplicate_evidence(client, monkeypatch):
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience."),
             ]),
             task, prompt_name,
         )
@@ -133,9 +133,9 @@ def test_rerun_with_a_new_passage_adds_evidence_not_another_claim(client, monkey
 
     def _dispatch(*, task, prompt_name, user_input, output_model):
         calls["n"] += 1
-        items = [RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+        items = [RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
         if calls["n"] == 2:
-            items.append(RequirementItem(surface_form="Python design", requirement_type="required", basis="stated", evidence_span="about Python design"))
+            items.append(RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python design", requirement_type="required", basis="stated", evidence_span="about Python design"))
         return _fake_run(RequirementExtractionResult(requirements=items), task, prompt_name)
 
     monkeypatch.setattr(extraction, "run_json_task", _dispatch)
@@ -168,9 +168,9 @@ def test_accepted_review_status_survives_rerun_and_still_gains_evidence(client, 
 
     def _dispatch(*, task, prompt_name, user_input, output_model):
         calls["n"] += 1
-        items = [RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
+        items = [RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python experience.")]
         if calls["n"] == 2:
-            items.append(RequirementItem(surface_form="Python skills", requirement_type="required", basis="stated", evidence_span="Strong Python skills are a must."))
+            items.append(RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python skills", requirement_type="required", basis="stated", evidence_span="Strong Python skills are a must."))
         return _fake_run(RequirementExtractionResult(requirements=items), task, prompt_name)
 
     monkeypatch.setattr(extraction, "run_json_task", _dispatch)
@@ -205,9 +205,9 @@ def test_differing_occurrence_requirement_types_resolve_deterministically(client
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="Python context", requirement_type="contextual", basis="stated", evidence_span="Python context"),
-                RequirementItem(surface_form="Python is required", requirement_type="required", basis="stated", evidence_span="Python is required"),
-                RequirementItem(surface_form="Python is preferred", requirement_type="preferred", basis="stated", evidence_span="Python is preferred"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python context", requirement_type="contextual", basis="stated", evidence_span="Python context"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python is required", requirement_type="required", basis="stated", evidence_span="Python is required"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python is preferred", requirement_type="preferred", basis="stated", evidence_span="Python is preferred"),
             ]),
             task, prompt_name,
         )
@@ -238,8 +238,8 @@ def test_api_returns_all_evidence_occurrences(client, monkeypatch):
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="effective communicator", requirement_type="required", basis="stated", evidence_span="Effective communicator needed"),
-                RequirementItem(surface_form="communicate with colleagues", requirement_type="required", basis="stated", evidence_span="communicate with colleagues"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="effective communicator", requirement_type="required", basis="stated", evidence_span="Effective communicator needed"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="communicate with colleagues", requirement_type="required", basis="stated", evidence_span="communicate with colleagues"),
             ]),
             task, prompt_name,
         )
@@ -265,8 +265,8 @@ def test_analytical_loader_returns_one_row_per_role_concept(client, monkeypatch)
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="effective communicator", requirement_type="required", basis="stated", evidence_span="Effective communicator needed"),
-                RequirementItem(surface_form="communicate with colleagues", requirement_type="required", basis="stated", evidence_span="communicate with colleagues"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="effective communicator", requirement_type="required", basis="stated", evidence_span="Effective communicator needed"),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="communicate with colleagues", requirement_type="required", basis="stated", evidence_span="communicate with colleagues"),
             ]),
             task, prompt_name,
         )
@@ -295,9 +295,9 @@ def test_no_duplicate_current_rows_remain_and_0020_invariant_holds(client, monke
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python."),
-                RequirementItem(surface_form="Python essential", requirement_type="required", basis="stated", evidence_span="Python is essential."),
-                RequirementItem(surface_form="Python must-have", requirement_type="required", basis="stated", evidence_span="Python is a must-have."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python essential", requirement_type="required", basis="stated", evidence_span="Python is essential."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python must-have", requirement_type="required", basis="stated", evidence_span="Python is a must-have."),
             ]),
             task, prompt_name,
         )

@@ -315,6 +315,8 @@ class RoleMetadataProposal(BaseModel):
 
 
 class RequirementItem(BaseModel):
+    category: Literal['professional_requirement', 'eligibility_condition', 'role_metadata', 'irrelevant']
+    classification_reason: str = Field(min_length=1)
     surface_form: str
     requirement_type: str  # required | preferred | contextual
     basis: str             # stated | implied
@@ -323,7 +325,7 @@ class RequirementItem(BaseModel):
 
 
 class RequirementExtractionResult(BaseModel):
-    requirements: list[RequirementItem] = []
+    requirements: list[RequirementItem]
 
 
 class ConceptAdjudicationDecision(BaseModel):

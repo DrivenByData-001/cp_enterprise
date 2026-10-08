@@ -140,7 +140,7 @@ def test_package_validation_and_process_auth(client, anon_client):
     assert client.put(base + '/requirements', json={'fingerprint': 'outdated'}).status_code == 409
 
 
-def test_existing_location_proposal_does_not_interrupt_application(client):
+def test_existing_location_proposal_does_not_interrupt_application(client, monkeypatch):
     app, _, _ = seed(client)
     base = f'/api/applications/{app}/process'
     role = client.get(base).json()['role']['id']
@@ -153,7 +153,21 @@ def test_existing_location_proposal_does_not_interrupt_application(client):
                     '(concept_proposal_id,role_instance_id,document_id,basis,evidence_span,requirement_type) '
                     "VALUES (%s,%s,%s,'stated','Location: Dublin, Ireland','contextual')",
                     (proposal, role, document))
-    assert client.get(base + '/vocabulary').json()['items'] == []
+    assert len(client.get(base + '/vocabulary').json()['items']) == 1
+    from app import extraction
+    from app.models import RequirementItem, RequirementExtractionResult
+    from tests.test_extraction_vocabulary_outcome import _fake_run
+    monkeypatch.setattr(extraction, 'run_json_task', lambda **kw: _fake_run(
+        RequirementExtractionResult(requirements=[RequirementItem(
+            category='role_metadata', classification_reason='Office location, not a skill',
+            surface_form='dublin, ireland', evidence_span='Location: Dublin, Ireland',
+            requirement_type='contextual', basis='stated')]), kw['task'], kw['prompt_name']))
+    with db.db_cursor() as cur:
+        cur.execute('UPDATE jobber.role_instance SET document_id=%s WHERE id=%s', (document, role))
+        extraction.extract_role_requirements(cur, role)
+    response = client.get(base + '/vocabulary').json()
+    assert response['items'] == []
+    assert response['classification']['statements'][0]['category'] == 'role_metadata'
     view = client.get(base).json()
     assert view['review_summary']['unresolved_proposals'] == 0
     assert view['review_summary']['complete'] is True
@@ -162,7 +176,7 @@ def test_existing_location_proposal_does_not_interrupt_application(client):
     with db.db_cursor() as cur:
         cur.execute('SELECT status FROM jobber.concept_proposal WHERE id=%s', (proposal,))
         assert cur.fetchone()['status'] == 'pending'
-        cur.execute("UPDATE jobber.concept_proposal_occurrence SET evidence_span='Experience advising clients in Dublin, Ireland.' "
-                    'WHERE concept_proposal_id=%s', (proposal,))
+        cur.execute("UPDATE jobber.document SET content_text='Experience advising clients in Dublin, Ireland.' "
+                    'WHERE id=%s', (document,))
     assert len(client.get(base + '/vocabulary').json()['items']) == 1
     assert client.get(base).json()['review_summary']['unresolved_proposals'] == 1

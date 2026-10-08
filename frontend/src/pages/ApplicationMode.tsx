@@ -153,16 +153,18 @@ export default function ApplicationMode() {
   useEffect(() => {
     let current = true
     setData(null); setError(null)
-    applicationProcess.get(id).then(next => { if (current) {
-      setData(next)
-      if (!known) navigate(`${base}/evidence/${stageParam}`, { replace: true })
-      else if (!stageParam && params.get('resume') === '1') {
-        const resumed = next.resume.stage === 'overview' ? next.next_stage : next.resume.stage
-        navigate(`${base}/${resumed}${resumed === 'evidence' && next.resume.concept_id ? `/${next.resume.concept_id}` : ''}`, { replace: true })
-      }
-    } }).catch(e => { if (current) setError(message(e)) })
+    applicationProcess.get(id).then(next => { if (current) setData(next) })
+      .catch(e => { if (current) setError(message(e)) })
     return () => { current = false }
-  }, [id, base, navigate, known, stageParam, params])
+  }, [id])
+  useEffect(() => {
+    if (!data || data.application.id !== id) return
+    if (!known) navigate(`${base}/evidence/${stageParam}`, { replace: true })
+    else if (!stageParam && params.get('resume') === '1') {
+      const resumed = data.resume.stage === 'overview' ? data.next_stage : data.resume.stage
+      navigate(`${base}/${resumed}${resumed === 'evidence' && data.resume.concept_id ? `/${data.resume.concept_id}` : ''}`, { replace: true })
+    }
+  }, [data, id, base, navigate, known, stageParam, params])
   const item = stage === 'evidence' ? data?.items.find(i => i.concept.id === conceptId) : undefined
   const go = async (nextStage: Stage, concept: string | null = null, exit?: string) => {
     if (busy) return
@@ -171,9 +173,9 @@ export default function ApplicationMode() {
       const editable = stage === 'opportunity' || stage === 'requirements' || !!item
       if (editable && !await save.current()) return
       await applicationProcess.resume(id, exit ? stage : nextStage, exit ? item?.concept.id ?? null : concept)
+      setData(current => current ? { ...current, resume: { stage: exit ? stage : nextStage, concept_id: exit ? item?.concept.id ?? null : concept } } : current)
       save.current = async () => true
       navigate(exit ?? path(nextStage, concept))
-      await reload()
     } catch (e) { setError(message(e)) } finally { setBusy(false) }
   }
   const attention = data?.items.filter(i => !i.decision || i.stale || i.decision.disposition === 'investigate') ?? []
@@ -190,6 +192,7 @@ export default function ApplicationMode() {
     {stage === 'opportunity' && <ApplicationOpportunity key={`${id}:${data.preparation.revision}`} id={id} data={data} register={fn => { save.current = fn }} onSaved={setData} />}
     {stage === 'requirements' && <ApplicationRequirements key={id} id={id} data={data} register={fn => { save.current = fn }} reload={reload} />}
     {stage === 'evidence' && <div><button disabled={busy} onClick={() => go('evidence')}>Evidence overview</button>
+      {item && <aside className="mode-notice"><p>Need help finding an example? AI can search your Profile360 career records and propose supporting evidence for the confirmed requirements.</p><button disabled={busy} onClick={() => go('evidence')}>Find supporting evidence with AI</button></aside>}
       {item ? <EvidenceEditor key={`${id}:${item.concept.id}:${item.decision?.revision ?? 0}`} applicationId={id} item={item} register={fn => { save.current = fn }} reload={reload} /> : <section className="mode-editor"><h2>Build your evidence case</h2>{conceptId && <p role="alert">This requirement is no longer available. Select another requirement below.</p>}
         {data.stages.requirements !== 'complete' && <p className="mode-notice">Confirm the current requirement set in Requirements. Evidence progress is provisional until then.</p>}
         <p>{Object.entries(LABELS).map(([key, label]) => `${data.items.filter(i => i.decision?.disposition === key && !i.stale).length} ${label.toLowerCase()}`).join(' · ')}</p>

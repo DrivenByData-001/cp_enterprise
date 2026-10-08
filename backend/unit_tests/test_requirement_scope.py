@@ -1,30 +1,22 @@
 import pytest
-
-from app.requirement_scope import is_posting_metadata
-
-
-@pytest.mark.parametrize('term,span', [
-    ('dublin, ireland', 'Location: Dublin, Ireland'),
-    ('Dublin', 'Location: Dublin, Ireland'),
-    ('Ireland', 'Location: Dublin, Ireland'),
-    ('London', '• Job location: London / UK'),
-    ('Location: Dublin, Ireland', 'Location: Dublin, Ireland'),
-    ('€80,000–€100,000', 'Salary: €80,000–€100,000'),
-    ('full time', 'Employment type: Full time'),
-    ('hybrid', 'Working pattern: hybrid'),
-])
-def test_labelled_metadata_is_not_a_capability(term, span):
-    assert is_posting_metadata(term, span)
+from pydantic import ValidationError
+from app.models import RequirementItem, RequirementExtractionResult
+from app.requirement_scope import excluded_surface_keys
 
 
-@pytest.mark.parametrize('term,span', [
-    ('Irish insurance regulation', 'Knowledge of Irish insurance regulation required.'),
-    ('remote team management', 'Experience in remote team management.'),
-    ('Python', 'Location: Dublin, Ireland\nPython experience required.'),
-    ('Python', 'Location: Dublin, Ireland. Python experience required.'),
-    ('Dublin market knowledge', 'Location: Dublin, Ireland'),
-    ('Ireland', 'Experience advising clients in Ireland.'),
-    ('unfamiliar technical method', None),
-])
-def test_professional_requirements_and_uncertain_items_remain(term, span):
-    assert not is_posting_metadata(term, span)
+def test_classification_is_required_and_not_guessed():
+    raw = dict(surface_form='Dublin', evidence_span='Our office is in Dublin.',
+               basis='stated', requirement_type='contextual')
+    with pytest.raises(ValidationError):
+        RequirementExtractionResult(requirements=[raw])
+    with pytest.raises(ValidationError):
+        RequirementItem(**raw, category='location', classification_reason='Office location')
+    item = RequirementItem(**raw, category='role_metadata', classification_reason='Office location')
+    assert item.category == 'role_metadata'
+
+
+@pytest.mark.parametrize('category', ['role_metadata', 'eligibility_condition', 'irrelevant'])
+def test_only_professional_readings_enter_vocabulary(category):
+    assert excluded_surface_keys({'statements': [dict(surface_key='test term', category=category)]}) == {'test term'}
+    assert excluded_surface_keys({'statements': [dict(surface_key='test term', category=category),
+        dict(surface_key='test term', category='professional_requirement')]}) == set()

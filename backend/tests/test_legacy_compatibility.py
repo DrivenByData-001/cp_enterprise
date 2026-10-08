@@ -132,7 +132,7 @@ def test_delete_role_with_extraction_run_history_succeeds(client, monkeypatch):
         )
         output = RequirementExtractionResult(
             requirements=[
-                RequirementItem(
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source',
                     surface_form="Solvency II", requirement_type="required", basis="stated",
                     evidence_span="Requires IFRS 17 and Solvency II.",
                 )

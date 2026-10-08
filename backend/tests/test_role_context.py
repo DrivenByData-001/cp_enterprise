@@ -308,7 +308,7 @@ def test_generation_falls_back_to_source_aware_ingest_evidence(client, monkeypat
             )
             return ai.AITaskResult(
                 output=RequirementExtractionResult(
-                    requirements=[RequirementItem(surface_form="Solvency II", requirement_type="required", basis="stated", evidence_span="Solvency II")]
+                    requirements=[RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Solvency II", requirement_type="required", basis="stated", evidence_span="Solvency II")]
                 ),
                 run=run,
             )

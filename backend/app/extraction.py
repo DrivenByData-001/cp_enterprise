@@ -32,7 +32,7 @@ from . import profile360_mapping as p360map
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
 from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
-from .requirement_scope import is_posting_metadata
+from .requirement_scope import save_classification
 
 
 class ExtractionSubjectError(ValueError):
@@ -132,7 +132,13 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     started_at = datetime.now(timezone.utc)
     model, pversion = _safe_task_metadata("extract_role_requirements.md")
 
-    user_input = f"Source document text:\n\n{document['content_text']}"
+    cur.execute("SELECT cp.surface_form, o.evidence_span FROM jobber.concept_proposal cp "
+                "JOIN jobber.concept_proposal_occurrence o ON o.concept_proposal_id=cp.id "
+                "WHERE o.role_instance_id=%s AND cp.status='pending'", (role_instance_id,))
+    previous_proposals = [dict(row) for row in cur.fetchall()]
+    user_input = (f"Source document text:\n\n{document['content_text']}\n\n"
+                  "Previously proposed terms to reconsider in this source (not accepted requirements):\n"
+                  + json.dumps(previous_proposals, default=str))
     try:
         result = run_json_task(
             task="requirement_extract",
@@ -163,11 +169,13 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     validated: list[tuple] = []
     rejected_span_count = 0
     excluded_metadata_count = 0
+    classified_items = []
     for item in result.output.requirements:
         if not validate_span(document["content_text"], item.evidence_span):
             rejected_span_count += 1
             continue
-        if is_posting_metadata(item.surface_form, item.evidence_span):
+        classified_items.append(item)
+        if item.category != 'professional_requirement':
             excluded_metadata_count += 1
             continue
         importance = item.importance if item.importance in _VALID_IMPORTANCE else None
@@ -247,11 +255,12 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         notes="; ".join(filter(None, [
             f"{rejected_span_count} item(s) rejected: proposed evidence_span did not occur verbatim in the document"
             if rejected_span_count else None,
-            f"{excluded_metadata_count} posting metadata item(s) excluded from requirements"
+            f"{excluded_metadata_count} non-professional item(s) routed outside vocabulary"
             if excluded_metadata_count else None,
         ])) or None,
     )
 
+    save_classification(cur, role_instance_id, document, main_run_id, classified_items)
     claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
     evidence_created = evidence_deduplicated = 0
 

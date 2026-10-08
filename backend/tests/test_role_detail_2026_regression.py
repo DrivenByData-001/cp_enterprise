@@ -83,7 +83,7 @@ def _run_requirement_extraction(cur, role_id: str, monkeypatch) -> None:
         from app import ai
 
         requirements = [
-            RequirementItem(surface_form=name, requirement_type="required", basis="stated", evidence_span=span)
+            RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form=name, requirement_type="required", basis="stated", evidence_span=span)
             for name, span, _type in _REQUIREMENTS
         ]
         run = ai.AITaskRun(

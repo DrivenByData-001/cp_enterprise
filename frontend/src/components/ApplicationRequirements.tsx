@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Concept, type ConceptType, type RequirementClaim } from '../lib/api'
-import { applicationProcess, type ProcessData, type ScopedProposal, type StageSave } from '../lib/applicationProcess'
+import { applicationProcess, type ProcessData, type ScopedProposal, type StageSave, type RequirementClassification } from '../lib/applicationProcess'
 import { RequirementCard, AddRequirementForm, ConceptPicker } from '../pages/RoleRequirements'
 
 function VocabularyIssue({ id, proposal, done, busy, onBusyChange }: { id: string; proposal: ScopedProposal; done: () => Promise<void>; busy: boolean; onBusyChange: (busy: boolean) => void }) {
@@ -40,6 +40,7 @@ function VocabularyIssue({ id, proposal, done, busy, onBusyChange }: { id: strin
 export default function ApplicationRequirements({ id, data, register, reload }: { id: string; data: ProcessData; register: (save: StageSave) => void; reload: () => Promise<void> }) {
   const [claims, setClaims] = useState<RequirementClaim[]>([])
   const [proposals, setProposals] = useState<ScopedProposal[]>([])
+  const [classification, setClassification] = useState<RequirementClassification | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState(() => !!sessionStorage.getItem(`requirement-add:${data.role.id}`))
@@ -49,6 +50,7 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
   const load = useCallback(async () => {
     const [requirements, vocabulary] = await Promise.all([api.listRequirements(data.role.id), applicationProcess.proposals(id)])
     setClaims(requirements.items); setProposals(vocabulary.items)
+    setClassification(vocabulary.classification ?? null)
   }, [id, data.role.id])
   useEffect(() => { load().catch(e => setError(String(e))).finally(() => setLoading(false)) }, [load])
   const reloadAll = async () => { await load(); await reload() }
@@ -72,6 +74,18 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
     {error && <div role="alert">{error}<button onClick={() => reloadAll().then(() => setError(null)).catch(e => setError(String(e)))}>Reload requirements</button></div>}
     <button disabled={busy || loading} onClick={() => run(async () => { const result = await api.extractRequirements(data.role.id); if (result.status === 'failed') throw new Error(result.error || 'Extraction failed. Your existing requirements are preserved.') })}>{busy ? 'Working…' : 'Extract requirements with AI'}</button>
     {loading && <p role="status">Loading requirements…</p>}
+    {!loading && !classification && <p>Extract requirements to classify the posting and reconsider earlier vocabulary proposals. AI separates professional requirements, eligibility conditions, role details and unrelated text.</p>}
+    {classification && <section aria-label="Other information from the posting">
+      <p>AI has separated the posting by meaning. Only professional requirements enter vocabulary review. You can inspect the other information below; these are suggestions from the source, not confirmed changes to your profile or role details.</p>
+      {(['eligibility_condition', 'role_metadata', 'irrelevant'] as const).map(category => {
+        const items = classification.statements.filter(item => item.category === category)
+        const label = { eligibility_condition: 'Practical eligibility conditions', role_metadata: 'Role details', irrelevant: 'Other text excluded from requirements' }[category]
+        return items.length > 0 && <details key={category}><summary>{label} ({items.length})</summary>
+          {items.map((item, index) => <article className="mode-source" key={index}><h4>{item.surface_form}</h4><blockquote>{item.evidence_span}</blockquote><p>{item.classification_reason}</p></article>)}
+        </details>
+      })}
+      <p>If AI has classified a professional requirement incorrectly, use “Add requirement” below to record it with its supporting text.</p>
+    </section>}
     {claims.map(claim => <RequirementCard key={claim.id} claim={claim} roleId={data.role.id} scoped busy={busy} onBusyChange={setBusy} onError={setError} onUpdated={(oldId, updated) => { setClaims(rows => rows.map(r => r.id === oldId ? updated : r)); void reload().catch(e => setError(String(e))) }} registerSave={registerSave} />)}
     {!loading && !claims.length && <p>No reviewed requirement set yet. Extract from the posting or add a requirement supported by its text.</p>}
     {adding ? <AddRequirementForm roleId={data.role.id} busy={busy} onBusyChange={setBusy} onAdded={claim => { setClaims(prev => [...prev, claim]); setAdding(false); void reload().catch(e => setError(String(e))) }} onCancel={() => setAdding(false)} registerSave={registerSave} /> : <button disabled={busy} onClick={() => setAdding(true)}>Add requirement</button>}

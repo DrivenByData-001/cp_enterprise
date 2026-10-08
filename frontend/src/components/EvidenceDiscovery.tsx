@@ -84,7 +84,7 @@ export default function EvidenceDiscovery({ applicationId, onChanged }: { applic
   const pending = data?.findings.filter(f => f.status === 'pending') ?? []
   return <section aria-label="Discover supporting evidence">
     <h3>Find supporting evidence</h3>
-    <p>Search your career records against the reviewed role requirements, starting with recent work. Review each finding before anything changes.</p>
+    <p>AI searches your Profile360 career claims and their supporting records against the reviewed role requirements, starting with recent work. It explains each proposed connection and remaining gaps. Approve, edit or reject the findings; nothing is accepted automatically.</p>
     <button onClick={start} disabled={busy || data?.run?.status === 'running'}>{busy || data?.run?.status === 'running' ? 'Searching career records…' : 'Find supporting evidence'}</button>
     {error && <p role="alert">{error}<button onClick={() => load().then(() => setError('')).catch(e => setError(String(e)))}>Reload findings</button></p>}
     {data?.run && <p role="status">{data.run.status === 'running' ? `Searching: ${data.run.completed_batches} of ${data.run.total_batches} batches complete. You can leave and return.` : data.run.status === 'failed' ? `Search failed: ${data.run.error}. Completed findings remain available; retry to continue.` : `Search complete: ${data.run.total_sources} career claims checked using ${data.run.model ?? 'the configured model'}.`} {pending.length} findings await review.</p>}

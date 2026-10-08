@@ -9,7 +9,7 @@ from .. import application_mode as mode, application_process as process
 from ..db import db_cursor, to_json_param, update_role_metadata
 from ..models import RoleMetadataUpdate
 from ..vocabulary_curation import resolve_surface_form_group
-from ..requirement_scope import pending_requirement_proposals
+from ..requirement_scope import pending_requirement_proposals, classification_snapshots
 
 router = APIRouter(prefix='/api/applications', tags=['application process'])
 
@@ -106,9 +106,10 @@ def save_process_resume(application_id: UUID, payload: ProcessResumeInput):
         app = mode.application(cur, str(application_id))
         concept = str(payload.concept_id) if payload.concept_id and payload.stage == 'evidence' else None
         if concept:
-            from ..comparison_service import build_role_comparison
-            comparison = build_role_comparison(cur, str(app['role_instance_id']))
-            if not any(str(i['concept']['id']) == concept and i['role_side']['requirement_source'] == 'claim' for i in comparison['items']):
+            cur.execute("SELECT 1 FROM jobber.requirement_claim WHERE role_instance_id=%s "
+                        "AND concept_id=%s AND review_status='accepted' AND superseded_by IS NULL",
+                        (app['role_instance_id'], concept))
+            if not cur.fetchone():
                 raise HTTPException(404, 'Confirmed requirement is no longer on this application')
         cur.execute('INSERT INTO jobber.application_resume (application_id,stage,concept_id) VALUES (%s,%s,%s) '
                     'ON CONFLICT (application_id) DO UPDATE SET stage=EXCLUDED.stage,concept_id=EXCLUDED.concept_id,updated_at=now()',
@@ -127,7 +128,9 @@ def proposals(cur, role_id):
 def list_scoped_vocabulary(application_id: UUID):
     with db_cursor() as cur:
         app = mode.application(cur, str(application_id))
-        return {'items': proposals(cur, str(app['role_instance_id']))}
+        role_id = str(app['role_instance_id'])
+        snapshot = classification_snapshots(cur, [role_id]).get(role_id)
+        return {'items': proposals(cur, role_id), 'classification': snapshot}
 
 
 class VocabularyResolution(BaseModel):
