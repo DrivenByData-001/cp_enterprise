@@ -75,6 +75,9 @@ for the same concept):
    this is not a new gap.
 """
 
+from .requirement_scope import pending_requirement_proposals
+
+
 SOURCE_CLAIM = "claim"
 SOURCE_OBSERVATION = "role_skill_observation"
 
@@ -254,18 +257,8 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
         if row["review_status"] in summary[role_id]:
             summary[role_id][row["review_status"]] += row["n"]
 
-    cur.execute(
-        """
-        SELECT o.role_instance_id, COUNT(DISTINCT o.concept_proposal_id) AS n
-        FROM jobber.concept_proposal_occurrence o
-        JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id AND cp.status = 'pending'
-        WHERE o.role_instance_id = ANY(%s::uuid[])
-        GROUP BY o.role_instance_id
-        """,
-        (role_ids,),
-    )
-    for row in cur.fetchall():
-        summary[str(row["role_instance_id"])]["unresolved_proposals"] = row["n"]
+    for row in pending_requirement_proposals(cur, role_ids):
+        summary[str(row["role_instance_id"])]["unresolved_proposals"] += 1
 
     cur.execute(
         """

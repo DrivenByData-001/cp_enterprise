@@ -9,6 +9,7 @@ from .. import application_mode as mode, application_process as process
 from ..db import db_cursor, to_json_param, update_role_metadata
 from ..models import RoleMetadataUpdate
 from ..vocabulary_curation import resolve_surface_form_group
+from ..requirement_scope import pending_requirement_proposals
 
 router = APIRouter(prefix='/api/applications', tags=['application process'])
 
@@ -116,10 +117,10 @@ def save_process_resume(application_id: UUID, payload: ProcessResumeInput):
 
 
 def proposals(cur, role_id):
-    cur.execute("SELECT cp.*, o.evidence_span AS role_evidence_span FROM jobber.concept_proposal cp "
-                "JOIN jobber.concept_proposal_occurrence o ON o.concept_proposal_id=cp.id "
-                "WHERE o.role_instance_id=%s AND cp.status='pending' ORDER BY cp.surface_form, cp.id", (role_id,))
-    return [{**dict(row), 'revision': mode.fingerprint(dict(row))} for row in cur.fetchall()]
+    rows = pending_requirement_proposals(cur, [role_id])
+    for row in rows:
+        row.pop('role_instance_id')
+    return [{**row, 'revision': mode.fingerprint(row)} for row in rows]
 
 
 @router.get('/{application_id}/process/vocabulary')

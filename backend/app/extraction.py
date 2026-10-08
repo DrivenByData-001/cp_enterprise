@@ -32,6 +32,7 @@ from . import profile360_mapping as p360map
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
 from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
+from .requirement_scope import is_posting_metadata
 
 
 class ExtractionSubjectError(ValueError):
@@ -161,9 +162,13 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     # (surface_form, requirement_type, basis_to_store, span_to_store, importance, context_text)
     validated: list[tuple] = []
     rejected_span_count = 0
+    excluded_metadata_count = 0
     for item in result.output.requirements:
         if not validate_span(document["content_text"], item.evidence_span):
             rejected_span_count += 1
+            continue
+        if is_posting_metadata(item.surface_form, item.evidence_span):
+            excluded_metadata_count += 1
             continue
         importance = item.importance if item.importance in _VALID_IMPORTANCE else None
         basis = item.basis if item.basis in ("stated", "implied") else "implied"
@@ -239,8 +244,12 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         vocabulary_version_id=vocabulary_version_id, started_at=started_at,
         status="partial" if rejected_span_count else "ok",
         input_chars=len(user_input),
-        notes=f"{rejected_span_count} item(s) rejected: proposed evidence_span did not occur verbatim in the document"
-        if rejected_span_count else None,
+        notes="; ".join(filter(None, [
+            f"{rejected_span_count} item(s) rejected: proposed evidence_span did not occur verbatim in the document"
+            if rejected_span_count else None,
+            f"{excluded_metadata_count} posting metadata item(s) excluded from requirements"
+            if excluded_metadata_count else None,
+        ])) or None,
     )
 
     claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
@@ -537,6 +546,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,
+        "excluded_metadata_count": excluded_metadata_count,
         # User-facing vocabulary feedback (brief §7/§8): what this run
         # actually did with the vocabulary, on top of the operational counts
         # above. matched_existing_count/pending_term_count are both counted

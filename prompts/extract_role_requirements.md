@@ -32,6 +32,17 @@ the posting asks for:
 
 Rules:
 
+- Extract candidate capabilities, knowledge, tools, methods and credentials,
+  not administrative details about the posting. Exclude locations/countries,
+  employer names, job titles, salaries/benefits, employment types, working
+  arrangements, dates and application instructions. For example, "Location:
+  Dublin, Ireland" produces no requirement and no vocabulary term.
+- `contextual` is only for relevant professional domains, tools or knowledge
+  described in the role's context; it is not permission to extract every fact.
+  Keep genuine requirements such as "knowledge of Irish insurance regulation"
+  or "manage a remote team". Never reduce these to "Ireland" or "remote".
+- Practical eligibility conditions (work permission, relocation, office
+  attendance, availability) are not capability vocabulary; exclude them here.
 - Before including an item, check the exact words appear in the source text.
   If they don't, drop the item rather than adjust the span to fit.
 - Deduplicate: if the same requirement is mentioned twice, report it once,

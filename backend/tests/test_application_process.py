@@ -138,3 +138,31 @@ def test_package_validation_and_process_auth(client, anon_client):
     assert anon_client.get(base).status_code == 401
     assert client.put(base + '/opportunity', json=opportunity_payload(view, deadline='invalid')).status_code == 422
     assert client.put(base + '/requirements', json={'fingerprint': 'outdated'}).status_code == 409
+
+
+def test_existing_location_proposal_does_not_interrupt_application(client):
+    app, _, _ = seed(client)
+    base = f'/api/applications/{app}/process'
+    role = client.get(base).json()['role']['id']
+    with db.db_cursor() as cur:
+        document, _ = db.create_document(cur, kind='job_posting',
+            content_text='Location: Dublin, Ireland', provenance_quality='original')
+        cur.execute("INSERT INTO jobber.concept_proposal(surface_form) VALUES ('dublin, ireland') RETURNING id")
+        proposal = str(cur.fetchone()['id'])
+        cur.execute('INSERT INTO jobber.concept_proposal_occurrence '
+                    '(concept_proposal_id,role_instance_id,document_id,basis,evidence_span,requirement_type) '
+                    "VALUES (%s,%s,%s,'stated','Location: Dublin, Ireland','contextual')",
+                    (proposal, role, document))
+    assert client.get(base + '/vocabulary').json()['items'] == []
+    view = client.get(base).json()
+    assert view['review_summary']['unresolved_proposals'] == 0
+    assert view['review_summary']['complete'] is True
+    assert client.put(base + '/requirements', json={'fingerprint': view['requirements_fingerprint']}).status_code == 200
+    # Filtering is scoped to the occurrence; it does not make a global curation decision.
+    with db.db_cursor() as cur:
+        cur.execute('SELECT status FROM jobber.concept_proposal WHERE id=%s', (proposal,))
+        assert cur.fetchone()['status'] == 'pending'
+        cur.execute("UPDATE jobber.concept_proposal_occurrence SET evidence_span='Experience advising clients in Dublin, Ireland.' "
+                    'WHERE concept_proposal_id=%s', (proposal,))
+    assert len(client.get(base + '/vocabulary').json()['items']) == 1
+    assert client.get(base).json()['review_summary']['unresolved_proposals'] == 1
