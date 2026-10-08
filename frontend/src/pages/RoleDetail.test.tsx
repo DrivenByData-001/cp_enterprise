@@ -827,6 +827,11 @@ describe('Cross-role navigation never leaks stale state', () => {
     expect(within(evidenceTile).getByText('Loading…')).toBeTruthy()
 
     // B's own responses land first.
+    await waitFor(() => {
+      expect(resolveCompB).toBeTypeOf('function')
+      expect(resolveCmpB).toBeTypeOf('function')
+      expect(resolveAlignB).toBeTypeOf('function')
+    })
     resolveCompB(advertCompensation())
     resolveCmpB(
       emptyComparison({
