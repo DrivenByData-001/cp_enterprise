@@ -5,6 +5,10 @@ depth (null or exposed/applied/owned/set_standard), and autonomy (null or
 assisted/independent/directed_others/accountable). All fields are required.
 
 Use ONLY supplied claim and concept IDs. A claim may support several concepts.
+Copy claim_id from sources[].data.claim.id and concept_id from
+requirements[].concept_id. Never use an episode ID, document ID, evidence ID or
+requirement-claim ID in these fields. The output schema restricts each field to
+the allowed IDs for this batch; never substitute a similarly named record.
 Prefer recent work; older work can fill a gap or provide stronger direct evidence.
 Read the exact requirement passage, not just its label. Propose only relevant
 connections; do not fill quotas. Do not invent qualifications, dates or outcomes.

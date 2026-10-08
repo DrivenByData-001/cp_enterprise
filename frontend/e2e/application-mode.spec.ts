@@ -206,3 +206,12 @@ test('correction conflict retains draft and acceptance retry uses the same opera
   await page.getByRole('button', { name: 'Correct career claim', exact: true }).click()
   await expect(page.getByLabel('Career fact', { exact: true })).toHaveValue('Corrected to 2020')
 })
+
+
+test('individual requirement leads to AI evidence discovery', async ({ page }) => {
+  await setup(page)
+  await page.goto(`${base}/evidence/${conceptId}`)
+  await page.getByRole('button', { name: 'Find supporting evidence with AI', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Find supporting evidence', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Find supporting evidence', exact: true })).toBeVisible()
+})

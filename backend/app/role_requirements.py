@@ -75,6 +75,9 @@ for the same concept):
    this is not a new gap.
 """
 
+from .requirement_scope import pending_requirement_proposals, filter_classified_occurrences
+
+
 SOURCE_CLAIM = "claim"
 SOURCE_OBSERVATION = "role_skill_observation"
 
@@ -254,18 +257,8 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
         if row["review_status"] in summary[role_id]:
             summary[role_id][row["review_status"]] += row["n"]
 
-    cur.execute(
-        """
-        SELECT o.role_instance_id, COUNT(DISTINCT o.concept_proposal_id) AS n
-        FROM jobber.concept_proposal_occurrence o
-        JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id AND cp.status = 'pending'
-        WHERE o.role_instance_id = ANY(%s::uuid[])
-        GROUP BY o.role_instance_id
-        """,
-        (role_ids,),
-    )
-    for row in cur.fetchall():
-        summary[str(row["role_instance_id"])]["unresolved_proposals"] = row["n"]
+    for row in pending_requirement_proposals(cur, role_ids):
+        summary[str(row["role_instance_id"])]["unresolved_proposals"] += 1
 
     cur.execute(
         """
@@ -278,8 +271,11 @@ def load_requirement_review_summary_bulk(cur, role_ids: list[str]) -> dict[str, 
         summary[str(row["role_instance_id"])]["extraction_attempted"] = True
 
     cur.execute(_ROLES_NEEDING_REEXTRACTION_SQL, (list(_RESOLVED_PROPOSAL_STATUSES), role_ids))
-    for row in cur.fetchall():
-        summary[str(row["role_instance_id"])]["needs_reextraction"] = row["n"]
+    missing = {rid: set() for rid in summary}
+    for row in filter_classified_occurrences(cur, [dict(r) for r in cur.fetchall()]):
+        missing[str(row['role_instance_id'])].add(str(row['resolved_concept_id']))
+    for rid, concepts in missing.items():
+        summary[rid]['needs_reextraction'] = len(concepts)
 
     for entry in summary.values():
         entry["complete"] = (
@@ -409,19 +405,24 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
         return {"claims_created": 0, "already_covered": 0, "needs_reextraction": 0}
     cur.execute(
         f"""
-        SELECT DISTINCT ON (o.role_instance_id)
+        SELECT cp.surface_form,
                o.role_instance_id, o.document_id, o.extraction_run_id,
                o.requirement_type, o.basis, o.evidence_span
         FROM jobber.concept_proposal_occurrence o
+        JOIN jobber.concept_proposal cp ON cp.id=o.concept_proposal_id
         WHERE o.concept_proposal_id = ANY(%s::uuid[])
         ORDER BY o.role_instance_id, {requirement_type_rank_sql("o.requirement_type")}, o.created_at
         """,
         (proposal_ids,),
     )
-    occurrences = cur.fetchall()
+    occurrences = filter_classified_occurrences(cur, [dict(row) for row in cur.fetchall()])
+    seen_roles = set()
     claims_created = already_covered = needs_reextraction = 0
     for occ in occurrences:
         role_id = str(occ["role_instance_id"])
+        if role_id in seen_roles:
+            continue
+        seen_roles.add(role_id)
         cur.execute(
             "SELECT 1 FROM jobber.requirement_claim WHERE role_instance_id = %s AND concept_id = %s AND superseded_by IS NULL",
             (role_id, resolved_concept_id),
@@ -474,7 +475,7 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
 # current claim for that concept. Self-healing — the moment any current claim
 # appears for that (role, concept) pair, from any source, this stops matching.
 _ROLES_NEEDING_REEXTRACTION_SQL = """
-    SELECT o.role_instance_id, COUNT(DISTINCT cp.resolved_concept_id) AS n
+    SELECT o.role_instance_id, cp.resolved_concept_id, cp.surface_form
     FROM jobber.concept_proposal_occurrence o
     JOIN jobber.concept_proposal cp ON cp.id = o.concept_proposal_id
     WHERE cp.status = ANY(%s) AND cp.resolved_concept_id IS NOT NULL
@@ -485,5 +486,4 @@ _ROLES_NEEDING_REEXTRACTION_SQL = """
             AND rc.concept_id = cp.resolved_concept_id
             AND rc.superseded_by IS NULL
       )
-    GROUP BY o.role_instance_id
 """

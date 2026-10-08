@@ -32,6 +32,7 @@ from . import profile360_mapping as p360map
 from .profile360_reader import Profile360UnavailableError, display_text, get_capability, get_claim, list_claims
 from .role_requirements import requirement_type_rank_sql
 from .span_validation import validate_span
+from .requirement_scope import save_classification
 
 
 class ExtractionSubjectError(ValueError):
@@ -131,7 +132,13 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     started_at = datetime.now(timezone.utc)
     model, pversion = _safe_task_metadata("extract_role_requirements.md")
 
-    user_input = f"Source document text:\n\n{document['content_text']}"
+    cur.execute("SELECT cp.surface_form, o.evidence_span FROM jobber.concept_proposal cp "
+                "JOIN jobber.concept_proposal_occurrence o ON o.concept_proposal_id=cp.id "
+                "WHERE o.role_instance_id=%s AND cp.status='pending'", (role_instance_id,))
+    previous_proposals = [dict(row) for row in cur.fetchall()]
+    user_input = (f"Source document text:\n\n{document['content_text']}\n\n"
+                  "Previously proposed terms to reconsider in this source (not accepted requirements):\n"
+                  + json.dumps(previous_proposals, default=str))
     try:
         result = run_json_task(
             task="requirement_extract",
@@ -161,9 +168,15 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
     # (surface_form, requirement_type, basis_to_store, span_to_store, importance, context_text)
     validated: list[tuple] = []
     rejected_span_count = 0
+    excluded_metadata_count = 0
+    classified_items = []
     for item in result.output.requirements:
         if not validate_span(document["content_text"], item.evidence_span):
             rejected_span_count += 1
+            continue
+        classified_items.append(item)
+        if item.category != 'professional_requirement':
+            excluded_metadata_count += 1
             continue
         importance = item.importance if item.importance in _VALID_IMPORTANCE else None
         basis = item.basis if item.basis in ("stated", "implied") else "implied"
@@ -239,10 +252,15 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         vocabulary_version_id=vocabulary_version_id, started_at=started_at,
         status="partial" if rejected_span_count else "ok",
         input_chars=len(user_input),
-        notes=f"{rejected_span_count} item(s) rejected: proposed evidence_span did not occur verbatim in the document"
-        if rejected_span_count else None,
+        notes="; ".join(filter(None, [
+            f"{rejected_span_count} item(s) rejected: proposed evidence_span did not occur verbatim in the document"
+            if rejected_span_count else None,
+            f"{excluded_metadata_count} non-professional item(s) routed outside vocabulary"
+            if excluded_metadata_count else None,
+        ])) or None,
     )
 
+    save_classification(cur, role_instance_id, document, main_run_id, classified_items)
     claims_created = claims_superseded = claims_deduplicated = proposals_created = proposals_updated = 0
     evidence_created = evidence_deduplicated = 0
 
@@ -537,6 +555,7 @@ def extract_role_requirements(cur, role_instance_id: str) -> dict:
         "proposals_created": proposals_created,
         "proposals_updated": proposals_updated,
         "rejected_span_count": rejected_span_count,
+        "excluded_metadata_count": excluded_metadata_count,
         # User-facing vocabulary feedback (brief §7/§8): what this run
         # actually did with the vocabulary, on top of the operational counts
         # above. matched_existing_count/pending_term_count are both counted

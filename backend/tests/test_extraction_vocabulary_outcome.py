@@ -42,6 +42,30 @@ def _make_active_concept(cur, canonical_name: str, type_code: str = "capability"
     return concept_id
 
 
+def test_metadata_never_reaches_matching_or_proposal_creation(client, monkeypatch):
+    body = 'Location: Dublin, Ireland\nEmployment type: Full time\nPython required.'
+    readings = [('Dublin, Ireland', 'Location: Dublin, Ireland'),
+                ('Full time', 'Employment type: Full time'),
+                ('Python', 'Python required.')]
+    monkeypatch.setattr(extraction, 'run_json_task', lambda **kw: _fake_run(
+        RequirementExtractionResult(requirements=[
+            RequirementItem(category='professional_requirement' if term == 'Python' else 'role_metadata', classification_reason='Meaning in this source', surface_form=term, evidence_span=span,
+                            requirement_type='required', basis='stated')
+            for term, span in readings]), kw['task'], kw['prompt_name']))
+    with db.db_cursor() as cur:
+        # Even a pre-existing vocabulary concept must not turn metadata into a claim.
+        _make_active_concept(cur, 'dublin, ireland', type_code='domain')
+        python = _make_active_concept(cur, 'python', type_code='tool')
+        role, _ = _make_role_with_document(cur, body)
+        result = extraction.extract_role_requirements(cur, role)
+        assert result['excluded_metadata_count'] == 2
+        assert result['vocabulary_outcome']['pending_term_count'] == 0
+        cur.execute('SELECT concept_id FROM jobber.requirement_claim WHERE role_instance_id=%s', (role,))
+        assert [str(row['concept_id']) for row in cur.fetchall()] == [python]
+        cur.execute('SELECT notes FROM jobber.extraction_run WHERE id=%s', (result['extraction_run_id'],))
+        assert '2 non-professional item(s) routed outside vocabulary' in cur.fetchone()['notes']
+
+
 def test_alias_match_reports_matched_existing_and_creates_no_pending_proposal(client, monkeypatch):
     body = "Familiarity with ALM is preferred. Experience with NumPy is a bonus."
 
@@ -54,9 +78,9 @@ def test_alias_match_reports_matched_existing_and_creates_no_pending_proposal(cl
             return _fake_run(ConceptAdjudicationResult(decisions=[]), task, prompt_name)
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="ALM", requirement_type="preferred", basis="stated",
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="ALM", requirement_type="preferred", basis="stated",
                                  evidence_span="Familiarity with ALM is preferred."),
-                RequirementItem(surface_form="NumPy", requirement_type="preferred", basis="stated",
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="NumPy", requirement_type="preferred", basis="stated",
                                  evidence_span="Experience with NumPy is a bonus."),
             ]),
             task, prompt_name,
@@ -115,7 +139,7 @@ def test_rerun_does_not_misreport_an_already_pending_term_as_newly_created(clien
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="NumPy", requirement_type="preferred", basis="stated",
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="NumPy", requirement_type="preferred", basis="stated",
                                  evidence_span="Experience with NumPy is a bonus."),
             ]),
             task, prompt_name,
@@ -146,7 +170,7 @@ def test_a_second_role_contributing_to_an_already_pending_term_is_not_double_cou
         def _dispatch(*, task, prompt_name, user_input, output_model):
             return _fake_run(
                 RequirementExtractionResult(requirements=[
-                    RequirementItem(surface_form="NumPy", requirement_type="preferred", basis="stated", evidence_span=body_text),
+                    RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="NumPy", requirement_type="preferred", basis="stated", evidence_span=body_text),
                 ]),
                 task, prompt_name,
             )
@@ -180,8 +204,8 @@ def test_matched_existing_is_deduplicated_by_surface_form_within_one_run(client,
     def _dispatch(*, task, prompt_name, user_input, output_model):
         return _fake_run(
             RequirementExtractionResult(requirements=[
-                RequirementItem(surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python."),
-                RequirementItem(surface_form="Python", requirement_type="preferred", basis="stated", evidence_span="Strong Python skills expected."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="required", basis="stated", evidence_span="Requires Python."),
+                RequirementItem(category='professional_requirement', classification_reason='Professional competence in the source', surface_form="Python", requirement_type="preferred", basis="stated", evidence_span="Strong Python skills expected."),
             ]),
             task, prompt_name,
         )

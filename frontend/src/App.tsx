@@ -135,7 +135,7 @@ function App() {
         <button type="button" className="nav-logout" onClick={logout} title="Sign out of Career Navigator">Log out</button>
       </div></nav></>}
       <main id="main-content" className="workspace-main" tabIndex={-1}>
-      <RouteErrorBoundary key={pathname}><Suspense fallback={<div role="status" className="page-skeleton">Loading your workspace…<span /><span /><span /></div>}>
+      <RouteErrorBoundary key={inApplicationMode ? pathname.split('/').slice(0, 4).join('/') : pathname}><Suspense fallback={<div role="status" className="page-skeleton">Loading your workspace…<span /><span /><span /></div>}>
       <Routes>
         <Route path="/" element={<Root />} />
         <Route path="/future" element={<Explore />} />

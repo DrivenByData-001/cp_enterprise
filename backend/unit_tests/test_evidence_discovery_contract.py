@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from app import ai
-from app.evidence_discovery import DiscoveryOutput, Proposal, Review, batch_sources, validate_proposals
+from app.evidence_discovery import DiscoveryOutput, Proposal, Review, batch_sources, validate_proposals, batch_output_model, discover_batch
 
 
 def proposal(claim, concept, **overrides):
@@ -27,6 +27,39 @@ def test_multiple_capabilities_allowed_duplicate_pairs_removed():
     claim, c1, c2 = [str(uuid4()) for _ in range(3)]
     output = DiscoveryOutput(findings=[proposal(claim,c1),proposal(claim,c1),proposal(claim,c2)])
     assert len(list(validate_proposals(output, [{'data': {'claim': {'id': claim}}}], {c1: {},c2: {}}))) == 2
+
+
+def test_batch_schema_restricts_ids_before_generation():
+    claim, other, concept = [str(uuid4()) for _ in range(3)]
+    sources = [{'data': {'claim': {'id': claim}}}, {'data': {'claim': {'id': other}}}]
+    model = batch_output_model(sources, {concept: {}})
+    schema = model.model_json_schema()['$defs']['BatchEvidenceProposal']
+    assert set(schema['properties']['claim_id']['enum']) == {claim, other}
+    valid = proposal(claim, concept).model_dump(mode='json')
+    assert len(model.model_validate({'findings': [valid]}).findings) == 1
+    with pytest.raises(ValidationError):
+        model.model_validate({'findings': [{**valid, 'concept_id': str(uuid4())}]})
+    with pytest.raises(ValidationError):
+        model.model_validate({'findings': [{**valid, 'claim_id': str(uuid4())}]})
+
+
+def test_invalid_reference_retried_once_without_weakening_validation(monkeypatch):
+    import json
+    claim, concept = str(uuid4()), str(uuid4())
+    calls = []
+    def call(**kw):
+        calls.append(json.loads(kw['user_input']))
+        result = proposal(str(uuid4()) if len(calls) == 1 else claim, concept)
+        return SimpleNamespace(output=DiscoveryOutput(findings=[result]))
+    monkeypatch.setattr(ai, 'run_json_task', call)
+    _, findings = discover_batch([{'data': {'claim': {'id': claim}}}], {concept: {'id': str(uuid4())}}, '', [])
+    assert len(calls) == 2 and len(findings) == 1
+    assert calls[0]['requirements'][0]['concept_id'] == concept
+    assert 'id' not in calls[0]['requirements'][0]
+    assert 'validation_reminder' in calls[1]
+    monkeypatch.setattr(ai, 'run_json_task', lambda **kw: SimpleNamespace(output=DiscoveryOutput(findings=[proposal(str(uuid4()), concept)])))
+    with pytest.raises(ValueError):
+        discover_batch([{'data': {'claim': {'id': claim}}}], {concept: {}}, '', [])
 
 
 def test_batches_preserve_recent_first_order_and_do_not_truncate():

@@ -147,6 +147,9 @@ test('mobile stages fit long titles without horizontal navigation', async ({ pag
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
   state.items = Array.from({ length: 50 }, (_, i) => ({ concept: { ...concept, id: `concept-${i}`, canonical_name: `Requirement ${i}` }, decision: null, stale: false }))
   await page.route(`**/api/applications/${appId}/process`, route => route.fulfill({ json: state }))
+  // The server-side fixture changed externally; fetch it explicitly, not via a step switch.
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Review the employer’s requirements' })).toBeVisible()
   await page.getByRole('combobox', { name: /^Application stage/ }).selectOption('evidence')
   await expect(page.getByRole('button', { name: /Requirement \d+ Start review/ })).toHaveCount(50)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
@@ -176,4 +179,40 @@ test('role search retains query and offers all dates when employer is absent', a
   await expect(page.getByLabel('Find a role')).toHaveValue('Example Mutual')
   await expect(page.getByLabel('Sort roles')).toHaveValue('relevance')
   expect(searches.at(-1)?.get('q')).toBe('Example Mutual')
+})
+
+
+test('step navigation reuses the loaded application and preserves resume writes', async ({ page }) => {
+  const { writes } = await setup(page)
+  let processReads = 0
+  page.on('request', request => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === `/api/applications/${appId}/process`) processReads++
+  })
+  await page.goto(`${base}/requirements`)
+  await expect(page.getByRole('heading', { name: 'Review the employer’s requirements' })).toBeVisible()
+  const before = processReads
+  await stage(page, 'Evidence')
+  await expect(page.getByRole('heading', { name: 'Build your evidence case' })).toBeVisible()
+  await stage(page, 'Requirements')
+  await expect(page.getByRole('heading', { name: 'Review the employer’s requirements' })).toBeVisible()
+  expect(processReads).toBe(before)
+  expect(writes.filter(write => write.path.endsWith('/process/resume')).map(write => write.body.stage)).toEqual(['evidence', 'requirements'])
+})
+
+
+test('classified eligibility and role facts remain separate from vocabulary review', async ({ page }) => {
+  await setup(page)
+  await page.route(`**/api/applications/${appId}/process/vocabulary`, route => route.fulfill({ json: {
+    items: [], classification: { created_at: '2026-10-09T12:00:00Z', statements: [
+      { category: 'role_metadata', surface_form: 'Dublin', evidence_span: 'Our office is in Dublin.', classification_reason: 'This is the office location.' },
+      { category: 'eligibility_condition', surface_form: 'Work permission', evidence_span: 'You must have permission to work in Ireland.', classification_reason: 'A condition for taking the job.' },
+    ] }
+  } }))
+  await page.goto(`${base}/requirements`)
+  await page.getByText('Role details (1)', { exact: true }).click()
+  await expect(page.getByText('Our office is in Dublin.', { exact: true })).toBeVisible()
+  await page.getByText('Practical eligibility conditions (1)', { exact: true }).click()
+  await expect(page.getByText('You must have permission to work in Ireland.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Vocabulary for this role' })).toHaveCount(0)
+  await page.screenshot({ path: 'test-results/semantic-classification.png', fullPage: true })
 })

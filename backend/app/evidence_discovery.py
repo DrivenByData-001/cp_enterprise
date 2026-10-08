@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, create_model
 
 from . import ai, application_mode as mode
 from .db import db_cursor, to_json_param
@@ -85,6 +85,39 @@ def validate_proposals(output, sources, reqs):
             yield p
 
 
+def batch_output_model(sources, reqs):
+    """Constrain generation itself to the IDs in this batch, not arbitrary UUIDs."""
+    claim_ids = tuple(str(s['data']['claim']['id']) for s in sources)
+    concept_ids = tuple(reqs)
+    if not claim_ids or not concept_ids:
+        raise ValueError('Discovery needs career records and accepted requirements')
+    batch_proposal = create_model('BatchEvidenceProposal', __base__=Proposal,
+        claim_id=(Literal[claim_ids], ...), concept_id=(Literal[concept_ids], ...))
+    return create_model('BatchEvidenceOutput', __base__=DiscoveryOutput,
+        findings=(list[batch_proposal], Field(max_length=30)))
+
+
+def discover_batch(batch, reqs, document, excluded):
+    schema = batch_output_model(batch, reqs)
+    # Avoid confusing a requirement-claim ID with its capability concept ID.
+    request = {'requirements': [{'concept_id': cid, 'canonical_name': r.get('canonical_name'),
+                'definition': r.get('definition'), 'requirement_type': r.get('requirement_type'),
+                'evidence_span': r.get('evidence_span')} for cid, r in reqs.items()],
+               'job_specification': document, 'sources': batch, 'excluded_pairs': excluded}
+    for attempt in range(2):
+        try:
+            result = ai.run_json_task(task='evidence_discovery', prompt_name='discover_evidence.md',
+                user_input=json.dumps(request), output_model=schema, max_tokens=16000, structured=True)
+            proposals = list(validate_proposals(result.output, batch, reqs))
+            return result, proposals
+        except (ai.AISchemaValidationError, ValueError):
+            if attempt:
+                raise
+            request['validation_reminder'] = ('The previous response failed validation. Copy claim_id only '
+                'from sources[].data.claim.id and concept_id only from requirements[].concept_id. '
+                'Return an empty findings array if there is no supported connection.')
+
+
 def discover(run_id, application_id):
     # No transaction or row lock is held while calling the provider.
     try:
@@ -107,11 +140,7 @@ def discover(run_id, application_id):
         with db_cursor() as cur:
             cur.execute('UPDATE jobber.evidence_discovery_run SET total_sources=%s,total_batches=%s WHERE id=%s', (len(sources), len(batches), run_id))
         for batch in batches:
-            result = ai.run_json_task(task='evidence_discovery', prompt_name='discover_evidence.md',
-                user_input=json.dumps({'requirements': list(reqs.values()), 'job_specification': document,
-                                      'sources': batch, 'excluded_pairs': excluded}),
-                output_model=DiscoveryOutput, max_tokens=16000, structured=True)
-            proposals = list(validate_proposals(result.output, batch, reqs))
+            result, proposals = discover_batch(batch, reqs, document, excluded)
             by_id = {s['data']['claim']['id']: s for s in batch}
             with db_cursor() as cur:
                 cur.execute('SELECT status FROM jobber.evidence_discovery_run WHERE id=%s FOR UPDATE', (run_id,))

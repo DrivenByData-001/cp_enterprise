@@ -50,4 +50,13 @@ it('shows failure rather than claiming no evidence exists', async () => {
   vi.mocked(req).mockResolvedValue({run:{status:'failed',error:'Provider unavailable'},findings:[]})
   render(<EvidenceDiscovery applicationId="a1" onChanged={vi.fn()} />)
   expect(await screen.findByText(/Search failed: Provider unavailable/)).toBeTruthy()
+  expect(screen.getByRole('alert').textContent).toContain('does not mean your records lack suitable evidence')
+  expect(screen.getByRole('alert').textContent).toContain('Your profile has not been changed')
+})
+
+it('explains a successful empty scan without claiming a capability gap', async () => {
+  vi.mocked(req).mockResolvedValue({ run: { status: 'complete', total_sources: 308, model: 'gpt-5.4-mini' }, findings: [] })
+  render(<EvidenceDiscovery applicationId="a1" onChanged={vi.fn()} />)
+  expect(await screen.findByText(/No proposed connections were returned/)).toBeTruthy()
+  expect(screen.getByRole('status').textContent).toContain('Scanning does not change your profile')
 })
