@@ -45,6 +45,7 @@ from .application_generation import (
     CATEGORY_USER_SUPPLIED,
     ApplicationGenerationSubjectError,
     GenerationContext,
+    SourceAliasError,
     build_application_generation_context,
     compute_fingerprint_for,
     gather_application_evidence,
@@ -409,7 +410,13 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
     plausible-looking id (docs/35 §7) — and, per the hardening note, rejects
     an ungrounded or applicant-side-unsupported factual block even when
     every id it cites is individually valid."""
-    data = output.model_dump()
+    # The model only ever saw/returned short generation aliases; translate
+    # them (structured fields only) to canonical ids BEFORE any validation, so
+    # every check below — and everything persisted — works on canonical ids.
+    try:
+        data = ctx.resolve_aliases(output.model_dump())
+    except SourceAliasError as e:
+        raise ApplicationArtifactValidationError(str(e)) from e
 
     used_refs = _collect_by_key(data, "source_refs")
     unknown_refs = used_refs - ctx.known_source_refs()
@@ -545,7 +552,7 @@ def generate_artifact(application_id: str, artifact_type: str, *, guidance: str 
             model=ai_result.run.model, prompt_name=prompt_name, prompt_version=ai_result.run.prompt_version,
             guidance=effective_guidance, input_fingerprint=ctx.input_fingerprint,
             source_manifest=ctx.source_manifest(), content=content,
-            raw_output=json.loads(ai_result.output.model_dump_json()), now=now,
+            raw_output=content, now=now,
         )
         serialized = _serialize(cur, row)
     serialized["stale"] = False  # freshly generated against current evidence, by definition

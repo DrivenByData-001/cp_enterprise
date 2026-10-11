@@ -6,11 +6,12 @@ structure.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: <ref>]`. Every `source_refs` field
-you write must list only refs you were actually given, copied verbatim. Any
-`concept_id` you attach to a section must be one that actually appears among
-the ROLE-SIDE material below. An invented source_ref or concept_id will
-cause this entire response to be rejected.
+Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
+(S001, S002, ...). Every `source_refs` field you write must list only handles
+you were actually given, exactly as shown. Never write, reconstruct, or
+transform a database id or UUID. Any `concept_id` you attach to a section
+must be the handle of a requirement block among the ROLE-SIDE material below.
+A handle you were not given will cause this entire response to be rejected.
 
 Sources are grouped:
 
@@ -43,7 +44,7 @@ Sources are grouped:
   APPLICATION-ONLY USER INPUT ref alongside any role-side one — a role
   requirement or the positioning strategy alone is never enough.
 - A section's `concept_id` must normally be a **reviewed** (non-legacy) role
-  requirement's concept id. If a section instead exists specifically to
+  requirement's handle. If a section instead exists specifically to
   address a gap, uncertainty, or a legacy/unreviewed requirement, set
   `is_gap_or_caution: true` on that section — only then may its `concept_id`
   name a legacy concept, or a concept with no real evidence behind it.
@@ -79,7 +80,7 @@ after it.
   "sections": [
     {
       "heading": "...",
-      "concept_id": "a concept id from the ROLE-SIDE material above, or null",
+      "concept_id": "handle of a requirement block in the ROLE-SIDE material above, or null",
       "is_gap_or_caution": false,
       "paragraphs": [
         { "text": "...", "source_refs": ["..."] }

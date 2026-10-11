@@ -26,6 +26,22 @@ Three invariants enforced here, not left to each generator to remember:
   fingerprint mismatch on read always means the underlying evidence changed,
   never merely that a hypothetical "current" guidance differs.
 
+Canonical vs. generation-local references (the alias layer):
+
+- Canonical source refs (`profile_claim:<uuid>`, `role_requirement:<concept
+  uuid>`, ...) are database/application identifiers. They are what is
+  persisted in artifacts and `source_manifest` and returned by the API.
+- The model is NEVER shown a canonical ref and never asked to reproduce one
+  (long opaque UUIDs get silently corrupted/hybridised by LLMs). Instead each
+  generation request assigns short, deterministic, request-local aliases
+  (S001, S002, ... in source-registry order) and renders only those.
+- The model selects handles; application code resolves them
+  (`GenerationContext.resolve_aliases`) back to canonical refs — in
+  `source_refs`, and for the structural `concept_id` / `episode_id` fields
+  (which name a role_requirement / profile_episode source, so the model
+  returns that source's alias). Unknown aliases fail closed. Only canonical
+  ids ever cross the persistence/API boundary; aliases never do.
+
 Never writes anything — every read here is a SELECT, profile360 included
 (read-only per docs/11 §1 / docs/14 §5) — and never calls the AI provider
 itself; it only assembles what a caller is about to hand to `ai.run_json_task`.
@@ -73,6 +89,26 @@ CATEGORY_LABELS = {
     CATEGORY_STRATEGY: "Current positioning strategy",
     CATEGORY_APPLICATION_MATERIAL: "Current application material (not new evidence)",
 }
+
+
+class SourceAliasError(ValueError):
+    """The model returned a handle that was not issued for this generation
+    request (or one that names the wrong kind of source for its field).
+    Never guessed at, fuzzy-matched, or dropped — the caller rejects the
+    whole response."""
+
+
+def assign_source_aliases(sources: list["SourceEntry"]) -> dict[str, str]:
+    """alias -> canonical ref. Deterministic (registry order), unique per
+    request, one alias per distinct ref. Request-local: never persisted."""
+    mapping: dict[str, str] = {}
+    seen: set[str] = set()
+    for s in sources:
+        if s.ref in seen:
+            continue
+        seen.add(s.ref)
+        mapping[f"S{len(mapping) + 1:03d}"] = s.ref
+    return mapping
 
 
 class ApplicationGenerationSubjectError(ValueError):
@@ -400,7 +436,7 @@ def _mapping_sources(concept_label: str, person_side: dict) -> list[SourceEntry]
 
 
 def _episode_text(ep: dict) -> str:
-    lines = [f"episode_id={ep['id']}"]
+    lines = []
     for label, key in (
         ("Title", "title"), ("Organisation", "organisation"), ("Start", "start_date"), ("End", "end_date"),
         ("Context", "context"), ("Responsibilities", "responsibilities"), ("Autonomy", "autonomy"),
@@ -526,7 +562,7 @@ def build_source_registry(
             ref=f"profile_episode:{ep['id']}", kind="profile_episode", category=CATEGORY_CANONICAL_EVIDENCE,
             label=p360.episode_display(ep), content=(
                 '\n'.join(f'{key}={ep.get(key)}' for key in ('title', 'organisation', 'start_date', 'end_date'))
-                + f"\nepisode_id={ep['id']}\nChronology only; use selected claims for experience assertions."
+                + "\nChronology only; use selected claims for experience assertions."
                 if bundle.curated else _episode_text(ep)),
         ))
 
@@ -583,11 +619,16 @@ _INJECTION_GUARD = (
 )
 
 
-def render_prompt_text(bundle: EvidenceBundle, sources: list[SourceEntry], *, artifact_type: str, guidance: str | None) -> str:
+def render_prompt_text(
+    bundle: EvidenceBundle, sources: list[SourceEntry], *, artifact_type: str, guidance: str | None,
+    aliases: dict[str, str] | None = None,
+) -> str:
     """The full `user_input` handed to `ai.run_json_task` — every source
-    tagged with its SOURCE_REF so the model can cite it back, grouped by
+    tagged with its short generation alias (`[SOURCE_REF: S001]`, never the
+    canonical ref) so the model can cite it back, grouped by
     epistemic category so the model sees the accepted/partial/user-supplied/
     role-side/strategy boundary explicitly rather than having to infer it."""
+    alias_for_ref = {ref: alias for alias, ref in (aliases if aliases is not None else assign_source_aliases(sources)).items()}
     lines = [
         _INJECTION_GUARD, "",
         f"Role: {bundle.role.get('title') or 'Unknown'} at {bundle.role.get('organisation') or 'an unnamed organisation'}",
@@ -623,7 +664,7 @@ def render_prompt_text(bundle: EvidenceBundle, sources: list[SourceEntry], *, ar
             continue
         lines.append(f"=== {CATEGORY_LABELS[category].upper()} ===")
         for s in entries:
-            lines.append(f"[SOURCE_REF: {s.ref}]")
+            lines.append(f"[SOURCE_REF: {alias_for_ref[s.ref]}]")
             lines.append(s.content)
             lines.append("")
 
@@ -648,6 +689,49 @@ class GenerationContext:
     guidance: str | None
     input_fingerprint: str
     prompt_text: str = field(repr=False, default="")
+    alias_to_ref: dict[str, str] = field(default_factory=dict, repr=False)  # generation-local; never persisted
+
+    def resolve_aliases(self, node):
+        """Returns a copy of a model_dump()'d response with every generation
+        alias translated to its canonical id. Touches ONLY structured fields:
+        each `source_refs` entry -> canonical ref; `concept_id` -> the concept
+        id of the aliased role_requirement(_legacy) source; `episode_id` -> the
+        id of the aliased profile_episode source. Prose is never rewritten.
+        Anything that is not an alias issued for this request (including a
+        canonical-looking ref/uuid) raises SourceAliasError."""
+        kind_by_ref = {s.ref: s.kind for s in self.sources}
+
+        def lookup(value, field_name):
+            ref = self.alias_to_ref.get(value) if isinstance(value, str) else None
+            if ref is None:
+                raise SourceAliasError(f"response used unknown source alias in {field_name}: {value!r}")
+            return ref
+
+        def structural(value, field_name, kinds):
+            ref = lookup(value, field_name)
+            kind, _, ident = ref.partition(":")
+            if kind_by_ref.get(ref) not in kinds:
+                raise SourceAliasError(f"{field_name} alias {value!r} does not name a {'/'.join(sorted(kinds))} source")
+            return ident
+
+        def walk(n):
+            if isinstance(n, list):
+                return [walk(i) for i in n]
+            if not isinstance(n, dict):
+                return n
+            out = {}
+            for k, v in n.items():
+                if k == "source_refs" and isinstance(v, list):
+                    out[k] = [lookup(r, "source_refs") for r in v]
+                elif k == "concept_id" and v is not None:
+                    out[k] = structural(v, k, {"role_requirement", "role_requirement_legacy"})
+                elif k == "episode_id" and v is not None:
+                    out[k] = structural(v, k, {"profile_episode"})
+                else:
+                    out[k] = walk(v)
+            return out
+
+        return walk(node)
 
     def known_source_refs(self) -> set[str]:
         return {s.ref for s in self.sources}
@@ -707,10 +791,12 @@ def build_application_generation_context(
         bundle, artifact_type=artifact_type, guidance=guidance, active_positioning=active_positioning,
         active_application_materials=active_application_materials,
     )
-    prompt_text = render_prompt_text(bundle, sources, artifact_type=artifact_type, guidance=guidance)
+    aliases = assign_source_aliases(sources)
+    prompt_text = render_prompt_text(bundle, sources, artifact_type=artifact_type, guidance=guidance, aliases=aliases)
     return GenerationContext(
         bundle=bundle, artifact_type=artifact_type, active_positioning=active_positioning,
         sources=sources, guidance=guidance, input_fingerprint=fingerprint, prompt_text=prompt_text,
+        alias_to_ref=aliases,
     )
 
 

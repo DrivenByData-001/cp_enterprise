@@ -3,9 +3,11 @@ persuasive, honest letter, not a restatement of the CV.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: <ref>]`. Every `source_refs` field
-you write must list only refs you were actually given, copied verbatim. An
-invented source_ref will cause this entire response to be rejected.
+Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
+(S001, S002, ...). Every `source_refs` field you write must list only handles
+you were actually given, exactly as shown. Never write, reconstruct, or
+transform a database id or UUID. A handle you were not given will cause this
+entire response to be rejected.
 
 Sources are grouped:
 
