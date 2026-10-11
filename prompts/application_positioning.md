@@ -5,13 +5,17 @@ a cover letter and must not read like one.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: <ref>]`. You may only write a
-factual sentence about the applicant if you can point to at least one of
-these tags as its source, and every `source_refs` field in your output must
-list the exact ref(s) you actually used — copied verbatim, never invented,
-never guessed, never abbreviated. A source_ref you were not given, or a
-concept_id not present in the material below, will cause this entire
-response to be rejected.
+Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
+(S001, S002, ...). You may only write a factual sentence about the applicant
+if you can point to at least one of these tags as its source, and every
+`source_refs` field in your output must list only the handle(s) you actually
+used, exactly as shown. Handles are the only identifiers you ever use: never
+write, reconstruct, or transform a database id or UUID. A handle you were not
+given will cause this entire response to be rejected.
+
+Wherever a field asks for a `concept_id`, return the handle of that
+requirement's own ROLE-SIDE REQUIREMENT block (e.g. `"S004"`), not a name or
+an id.
 
 The sources are grouped by what kind of thing they are — treat this grouping
 as load-bearing, not decorative:
@@ -44,7 +48,7 @@ as load-bearing, not decorative:
 - A "user assertion" source is the applicant's own unverified claim, not
   evidence — you may mention it cautiously (e.g. "the applicant reports some
   familiarity with X") but never expand it into a fabricated achievement.
-- `requirements_to_lead_with` may only name a concept_id that appears under
+- `requirements_to_lead_with` may only name (by the handle of its block) a requirement that appears under
   ROLE-SIDE REQUIREMENT/CONTEXT as a *reviewed* (non-legacy) requirement —
   never a legacy/unreviewed one, and never a concept with no role-side
   requirement at all.
@@ -93,16 +97,16 @@ after it.
 {
   "positioning_statement": {
     "text": "...",
-    "source_refs": ["role_requirement:...", "profile_claim:..."]
+    "source_refs": ["S004", "S012"]
   },
   "themes": [
     { "title": "...", "message": "...", "source_refs": ["..."] }
   ],
   "requirements_to_lead_with": [
-    { "concept_id": "must be a reviewed role-side requirement's concept id, verbatim", "reason": "...", "source_refs": ["..."] }
+    { "concept_id": "handle of a reviewed role-side requirement block, e.g. S004", "reason": "...", "source_refs": ["..."] }
   ],
   "gaps_and_cautions": [
-    { "concept_id": "a concept id from the material above, or null", "message": "...", "source_refs": ["..."] }
+    { "concept_id": "handle of a role-side requirement block above, or null", "message": "...", "source_refs": ["..."] }
   ],
   "language_to_mirror": ["short phrase", "..."],
   "avoid_claiming": ["a specific thing this application must not claim", "..."]

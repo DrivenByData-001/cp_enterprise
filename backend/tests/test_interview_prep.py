@@ -14,6 +14,7 @@ directions.
 
 import uuid
 
+from alias_support import last_generation_context, model_view  # noqa: F401
 from app import ai, application_artifacts as artifacts, application_generation as gen, db
 from app.models import (
     ApplicationInterviewPrepGeneration,
@@ -165,7 +166,7 @@ def _fake_run_json_task(output, raise_error: Exception | None = None):
             started_at="2026-05-27T00:00:00+00:00", finished_at="2026-05-27T00:00:01+00:00",
             status="ok", input_chars=len(user_input), output_chars=10,
         )
-        return ai.AITaskResult(output=output, run=run)
+        return ai.AITaskResult(output=model_view(output), run=run)
 
     return _dispatch
 

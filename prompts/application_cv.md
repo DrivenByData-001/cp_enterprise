@@ -4,10 +4,12 @@ every fact in it must trace back to material you were actually given.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: <ref>]`. Every `source_refs` field
-you write must list only refs you were actually given, copied verbatim. A
-source_ref you invent, or a `profile_episode:<id>` you reference by an
-`episode_id` that wasn't offered to you, will cause this entire response to
+Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
+(S001, S002, ...). Every `source_refs` field you write must list only handles
+you were actually given, exactly as shown. Handles are the only identifiers
+you ever use: never write, reconstruct, or transform a database id or UUID.
+A handle you were not given, or an `episode_id` that is not the handle of an
+experience-episode block you were offered, will cause this entire response to
 be rejected before it is ever shown to the applicant.
 
 Sources are grouped:
@@ -32,8 +34,8 @@ Sources are grouped:
 
 You must **never** write an employer name, job title, or employment date
 anywhere in your response. For each role of experience you include, return
-only its `episode_id` (copied exactly from a `profile_episode:<id>` source
-ref you were given) and the bullets you've written for it. The application
+only its `episode_id` (the handle of a profile-episode source
+block you were given) and the bullets you've written for it. The application
 itself resolves and displays the employer/title/dates from the authoritative
 profile record — this is a hard safeguard against ever inventing or
 misremembering a chronology detail, so do not try to restate that
@@ -87,10 +89,10 @@ after it.
 
 ```json
 {
-  "profile_summary": { "text": "...", "source_refs": ["profile_snapshot:...", "profile_episode:..."] },
+  "profile_summary": { "text": "...", "source_refs": ["S020", "S021"] },
   "experience": [
     {
-      "episode_id": "copied verbatim from a profile_episode:<id> source ref you were given",
+      "episode_id": "handle of a profile-episode source block you were given, e.g. S021",
       "bullets": [
         { "text": "...", "source_refs": ["..."] }
       ]

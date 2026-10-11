@@ -181,6 +181,41 @@ The artifact's stored `source_manifest` is `[{ref, kind, label, category}]`
 only — never the full text handed to the model, and never a second copy of
 Profile360.
 
+## Generation aliases (the model never handles database ids)
+
+An LLM asked to reproduce a long opaque id eventually corrupts it (a production
+Positioning run returned `profile_claim:53a2b868-…-b81f-…` for a real
+`…-bc81-…`, and spliced two valid refs into a third that never existed).
+Prompt wording cannot fix that, so the contract is architectural:
+
+- **Canonical source refs** (`profile_claim:<uuid>`, `role_requirement:<uuid>`,
+  …) are database/application identifiers. They are the only form persisted
+  (`content`, `raw_output`, `source_manifest`) or returned by the API.
+- **Generation aliases** (`S001`, `S002`, … in source-registry order, one per
+  distinct ref, unique per request) are ephemeral LLM-facing handles held in
+  `GenerationContext.alias_to_ref`. `render_prompt_text` emits only
+  `[SOURCE_REF: S001]`; no UUID is rendered anywhere in the prompt.
+- **The model selects handles; application code resolves them.**
+  `GenerationContext.resolve_aliases` runs at the start of
+  `_validate_and_shape`, after Pydantic schema validation, and rewrites only
+  structured fields: each `source_refs` entry, plus `concept_id` (alias of a
+  `role_requirement`/`role_requirement_legacy` block -> concept id) and
+  `episode_id` (alias of a `profile_episode` block -> episode id), since those
+  are also model-copied opaque ids. Prose is never touched.
+- **Fail closed.** Anything that is not an alias issued for this request —
+  `S999`, `s001`, a real canonical ref, a fabricated UUID, an alias of the
+  wrong kind for `concept_id`/`episode_id` — raises `SourceAliasError`, surfaced
+  as `ApplicationArtifactValidationError` (422). No guessing, fuzzy matching or
+  dropping.
+- All validation below then runs unchanged on canonical ids
+  (`used_refs ⊆ known_source_refs()`, person-side categories, accepted-concept
+  and episode checks). Aliasing only changes what the model can say, never what
+  is accepted. Existing stored artifacts are canonical already; no migration.
+
+Career-direction discovery (`career_direction_discovery.py`, docs/37) still
+uses the older copy-the-ref pattern (and also asks the model to copy archetype/
+role ids); it is deliberately a separate follow-up.
+
 ## Source, episode, and concept validation
 
 Post-generation, `application_artifacts.py::_validate_and_shape` walks the
