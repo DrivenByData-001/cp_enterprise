@@ -1247,6 +1247,38 @@ describe('Artifact mutation → UI state reconciliation', () => {
     expect(within(card).queryByText('Not generated')).toBeNull()
   })
 
+  it('K2: an older in-flight GET for the same application cannot overwrite newer state', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const posCard = await positioningCard()
+    const cvCard = (await screen.findByRole('heading', { name: 'CV' })).closest('section') as HTMLElement
+    const posDraft = text('Positioning draft.')
+    const cvDraft = makePositioningArtifact({
+      id: 'cv-1', artifact_type: 'cv' as ArtifactType,
+      content: { profile_summary: { text: 'CV draft.', source_refs: [] }, experience: [], skills: [], omissions_or_cautions: [] },
+    })
+    // R1: positioning's refresh starts first and answers late with a stale (empty) snapshot
+    let resolveStale: (v: ApplicationArtifactsResponse) => void = () => {}
+    vi.mocked(api.getApplicationArtifacts).mockReturnValueOnce(new Promise((r) => { resolveStale = r }))
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValueOnce({ created: true, artifact: posDraft })
+    generateIn(posCard)
+    expect(await within(posCard).findByText('Positioning draft.')).toBeTruthy()
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
+
+    // R2: a later mutation + refresh returns the authoritative state
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(
+      makeArtifactsResponse({ positioning: withState(null, posDraft), cv: withState(null, cvDraft) }),
+    )
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValueOnce({ created: true, artifact: cvDraft })
+    generateIn(cvCard)
+    await waitFor(() => expect(within(cvCard).getByText('CV draft.')).toBeTruthy())
+
+    resolveStale(makeArtifactsResponse()) // stale "nothing generated" arrives last
+    await new Promise((r) => setTimeout(r, 20))
+    expect(within(posCard).getByText('Positioning draft.')).toBeTruthy()
+    expect(within(cvCard).getByText('CV draft.')).toBeTruthy()
+    expect(within(posCard).queryByText('Not generated yet.')).toBeNull()
+  })
+
   it('K: a late refresh for application A never overwrites application B', async () => {
     let resolveLateA: (v: ApplicationArtifactsResponse) => void = () => {}
     let aCalls = 0

@@ -1968,6 +1968,9 @@ export default function ApplicationWorkspace() {
   const stage = stages.some(s => s === requestedStage) ? requestedStage : 'overview'
   const visible = (name: string) => stage === 'all' || stage === name
   const currentId = useRef(id)
+  // Monotonic token for artifact state: a GET may only apply if nothing newer
+  // (another GET, or a mutation response) has superseded it since it started.
+  const artifactsSeq = useRef(0)
 
   const [detail, setDetail] = useState<ApplicationDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -2023,8 +2026,9 @@ export default function ApplicationWorkspace() {
   // already navigated away from.
   const refreshArtifacts = useCallback(async () => {
     if (!id) return
+    const seq = ++artifactsSeq.current
     const data = await api.getApplicationArtifacts(id)
-    if (currentId.current === id) setArtifactsData(data)
+    if (currentId.current === id && artifactsSeq.current === seq) setArtifactsData(data)
   }, [id])
 
   // Initial/background load: failure surfaces as `artifactsError`.
@@ -2041,6 +2045,7 @@ export default function ApplicationWorkspace() {
   // Show a successful mutation immediately (from its response), before the
   // authoritative refresh reconciles it.
   const applyArtifactChangeToState = useCallback((change: ArtifactChange) => {
+    artifactsSeq.current++ // invalidates any GET that started before this mutation result
     setArtifactsData((prev) => (prev ? applyArtifactChange(prev, change) : prev))
   }, [])
 
@@ -2081,6 +2086,7 @@ export default function ApplicationWorkspace() {
 
   useEffect(() => {
     currentId.current = id
+    artifactsSeq.current++
     setDetail(null)
     setDetailError(null)
     setEvidence(null)
