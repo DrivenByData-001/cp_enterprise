@@ -5,17 +5,21 @@ a cover letter and must not read like one.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
-(S001, S002, ...). You may only write a factual sentence about the applicant
+Every block below is tagged `[SOURCE_REF: <handle>]` with a short typed handle: the leading letter says what the block is (R = role requirement, L = legacy role requirement, C = applicant claim, P = applicant capability, E = career episode, and so on; a legend is given in the input). You may only write a factual sentence about the applicant
 if you can point to at least one of these tags as its source, and every
 `source_refs` field in your output must list only the handle(s) you actually
 used, exactly as shown. Handles are the only identifiers you ever use: never
 write, reconstruct, or transform a database id or UUID. A handle you were not
 given will cause this entire response to be rejected.
 
-Wherever a field asks for a `concept_id`, return the handle of that
-requirement's own ROLE-SIDE REQUIREMENT block (e.g. `"S004"`), not a name or
-an id.
+`concept_id` fields take a ROLE REQUIREMENT handle and nothing else:
+- In `requirements_to_lead_with`, `concept_id` MUST be an `Rnnn` handle of a
+  reviewed role requirement (e.g. `"R003"`). Never an `Lnnn` handle, and never
+  a `Cnnn`, `Pnnn`, `Ennn` or any other letter.
+- In `gaps_and_cautions`, `concept_id` is an `Rnnn` or `Lnnn` handle, or null.
+  Never a `Cnnn`, `Pnnn`, `Ennn` or any other letter.
+(`source_refs`, by contrast, may mix letters, e.g. `["R003", "C005"]`.) A
+`concept_id` that is not a role-requirement handle is rejected.
 
 The sources are grouped by what kind of thing they are — treat this grouping
 as load-bearing, not decorative:
@@ -97,16 +101,16 @@ after it.
 {
   "positioning_statement": {
     "text": "...",
-    "source_refs": ["S004", "S012"]
+    "source_refs": ["R003", "C005"]
   },
   "themes": [
     { "title": "...", "message": "...", "source_refs": ["..."] }
   ],
   "requirements_to_lead_with": [
-    { "concept_id": "handle of a reviewed role-side requirement block, e.g. S004", "reason": "...", "source_refs": ["..."] }
+    { "concept_id": "an Rnnn role-requirement handle only, e.g. R003", "reason": "...", "source_refs": ["..."] }
   ],
   "gaps_and_cautions": [
-    { "concept_id": "handle of a role-side requirement block above, or null", "message": "...", "source_refs": ["..."] }
+    { "concept_id": "an Rnnn or Lnnn role-requirement handle only, or null", "message": "...", "source_refs": ["..."] }
   ],
   "language_to_mirror": ["short phrase", "..."],
   "avoid_claiming": ["a specific thing this application must not claim", "..."]

@@ -33,8 +33,9 @@ Canonical vs. generation-local references (the alias layer):
   persisted in artifacts and `source_manifest` and returned by the API.
 - The model is NEVER shown a canonical ref and never asked to reproduce one
   (long opaque UUIDs get silently corrupted/hybridised by LLMs). Instead each
-  generation request assigns short, deterministic, request-local aliases
-  (S001, S002, ... in source-registry order) and renders only those.
+  generation request assigns short, deterministic, request-local typed aliases
+  (R001 role requirement, C001 profile claim, E001 episode, ... numbered
+  per type in source-registry order) and renders only those.
 - The model selects handles; application code resolves them
   (`GenerationContext.resolve_aliases`) back to canonical refs — in
   `source_refs`, and for the structural `concept_id` / `episode_id` fields
@@ -98,16 +99,54 @@ class SourceAliasError(ValueError):
     whole response."""
 
 
+# Typed alias namespaces: the letter tells the model what kind of object a
+# handle is, so e.g. a `concept_id` (R...) cannot plausibly be filled with a
+# claim (C...) or episode (E...) handle. Prefix is purely a prompt-facing
+# convenience; validation never trusts it — resolve_aliases re-checks the
+# real source kind of whatever the handle maps to.
+ALIAS_PREFIX_BY_KIND = {
+    "role_requirement": "R",
+    "role_requirement_legacy": "L",
+    "role_document": "D",
+    "application_package": "K",
+    "profile_claim": "C",
+    "profile_capability": "P",
+    "profile_capability_coverage": "V",
+    "profile_snapshot": "H",
+    "profile_episode": "E",
+    "user_assertion": "U",
+    "application_note": "N",
+    "application_event": "T",
+    "application_decision": "J",
+    "positioning": "G",
+    "application_material": "M",
+}
+_FALLBACK_PREFIX = "X"
+ALIAS_LABEL_BY_PREFIX = {
+    "R": "role requirement", "L": "legacy (unreviewed) role requirement", "D": "role posting text",
+    "K": "application package", "C": "applicant profile claim", "P": "applicant profile capability",
+    "V": "capability coverage", "H": "profile summary", "E": "career episode",
+    "U": "user assertion", "N": "application note", "T": "lifecycle event",
+    "J": "evidence decision", "G": "positioning strategy", "M": "application material",
+    _FALLBACK_PREFIX: "other source",
+}
+
+
 def assign_source_aliases(sources: list["SourceEntry"]) -> dict[str, str]:
-    """alias -> canonical ref. Deterministic (registry order), unique per
-    request, one alias per distinct ref. Request-local: never persisted."""
+    """alias -> canonical ref. Typed (R001 role requirement, C001 profile
+    claim, E001 episode, ...), numbered per type in registry order, so
+    deterministic and unique per request, one alias per distinct ref.
+    Request-local: never persisted."""
     mapping: dict[str, str] = {}
     seen: set[str] = set()
+    counters: dict[str, int] = {}
     for s in sources:
         if s.ref in seen:
             continue
         seen.add(s.ref)
-        mapping[f"S{len(mapping) + 1:03d}"] = s.ref
+        prefix = ALIAS_PREFIX_BY_KIND.get(s.kind, _FALLBACK_PREFIX)
+        counters[prefix] = counters.get(prefix, 0) + 1
+        mapping[f"{prefix}{counters[prefix]:03d}"] = s.ref
     return mapping
 
 
@@ -624,7 +663,7 @@ def render_prompt_text(
     aliases: dict[str, str] | None = None,
 ) -> str:
     """The full `user_input` handed to `ai.run_json_task` — every source
-    tagged with its short generation alias (`[SOURCE_REF: S001]`, never the
+    tagged with its short generation alias (`[SOURCE_REF: R001]`, never the
     canonical ref) so the model can cite it back, grouped by
     epistemic category so the model sees the accepted/partial/user-supplied/
     role-side/strategy boundary explicitly rather than having to infer it."""
@@ -650,6 +689,11 @@ def render_prompt_text(
                 if upcoming else "none currently recorded"
             )
         )
+        lines.append("")
+    prefixes = sorted({a[0] for a in alias_for_ref.values()})
+    if prefixes:
+        lines.append("SOURCE HANDLES — the letter says what a handle is: "
+                     + "; ".join(f"{p}nnn = {ALIAS_LABEL_BY_PREFIX[p]}" for p in prefixes) + ".")
         lines.append("")
     by_category: dict[str, list[SourceEntry]] = {}
     for s in sources:
