@@ -715,6 +715,7 @@ def render_prompt_text(
         lines.append(f"=== {CATEGORY_LABELS[category].upper()} ===")
         for s in entries:
             lines.append(f"[SOURCE_REF: {alias_for_ref[s.ref]}]")
+            lines.append(s.content)
             episode_alias = alias_for_ref.get(f"profile_episode:{s.episode_id}") if s.episode_id else None
             if episode_alias:
                 lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — use only under this experience entry]")
@@ -722,7 +723,6 @@ def render_prompt_text(
                 lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills only; do not assign to an employer]")
             if s.chronology_only:
                 lines.append("[CHRONOLOGY ONLY: does not substantiate achievements; cite a claim belonging to this episode]")
-            lines.append(s.content)
             lines.append("")
 
     if guidance:
