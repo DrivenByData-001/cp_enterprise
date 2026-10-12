@@ -430,9 +430,20 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
             raise ApplicationArtifactValidationError(f"response cited unknown episode_id(s): {sorted(unknown_episodes)}")
 
         _require_grounded("profile_summary", data["profile_summary"]["source_refs"], ctx, require_person_side=True)
+        sources_by_ref = {s.ref: s for s in ctx.sources}
         for entry in data.get("experience", []):
             for bullet in entry.get("bullets", []):
                 _require_grounded(f"bullet for episode {entry['episode_id']!r}", bullet["source_refs"], ctx, require_person_side=True)
+                evidence = [sources_by_ref[ref] for ref in bullet['source_refs']
+                            if sources_by_ref[ref].category in _PERSON_SIDE_CATEGORIES]
+                if any(s.episode_id != entry['episode_id'] for s in evidence):
+                    raise ApplicationArtifactValidationError(
+                        f"CV bullet for episode {entry['episode_id']} cites evidence belonging to another "
+                        "employment episode or without employment attribution")
+                if not any(not s.chronology_only for s in evidence):
+                    raise ApplicationArtifactValidationError(
+                        f"CV bullet for episode {entry['episode_id']} cites chronology only; "
+                        "an achievement needs supporting evidence from that employment episode")
         for skill in data.get("skills", []):
             _require_grounded(f"skill {skill['text']!r}", skill["source_refs"], ctx, require_person_side=True)
 

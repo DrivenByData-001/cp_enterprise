@@ -165,12 +165,15 @@ class SourceEntry:
     label: str
     category: str
     content: str  # the text actually handed to the model for this source
+    episode_id: str | None = None
+    chronology_only: bool = False
 
     def to_public(self) -> dict:
         """Wire shape for a stored/returned source_manifest — never the full
         `content` text (that's prompt input, not something a normal read
         endpoint should echo back)."""
-        return {"ref": self.ref, "kind": self.kind, "label": self.label, "category": self.category}
+        return {"ref": self.ref, "kind": self.kind, "label": self.label, "category": self.category,
+                "episode_id": self.episode_id, "chronology_only": self.chronology_only}
 
 
 # --- evidence gathering (shared across every artifact_type/guidance) --------
@@ -445,6 +448,7 @@ def _mapping_sources(concept_label: str, person_side: dict) -> list[SourceEntry]
             continue
         out.append(SourceEntry(
             ref=ref, kind=kind, label=f"{concept_label}: {m.get('display') or kind}", category=category,
+            episode_id=str(m['episode_id']) if m.get('episode_id') else None,
             content=f"Evidence for {concept_label}: {m.get('display') or '(no text)'} "
                     f"[{'accepted' if m.get('review_status') == 'accepted' else 'unreviewed mapping — partial strength only'}]",
         ))
@@ -599,6 +603,7 @@ def build_source_registry(
     for ep in bundle.episodes:
         sources.append(SourceEntry(
             ref=f"profile_episode:{ep['id']}", kind="profile_episode", category=CATEGORY_CANONICAL_EVIDENCE,
+            episode_id=str(ep['id']), chronology_only=bundle.curated,
             label=p360.episode_display(ep), content=(
                 '\n'.join(f'{key}={ep.get(key)}' for key in ('title', 'organisation', 'start_date', 'end_date'))
                 + "\nChronology only; use selected claims for experience assertions."
@@ -635,7 +640,8 @@ def _curated_requirement_sources(requirement):
     if not decision:
         return []
     sources = [SourceEntry(ref=s['ref'], kind=s['kind'], label=s['label'],
-                           content=s['content'], category=CATEGORY_CANONICAL_EVIDENCE)
+                           content=s['content'], category=CATEGORY_CANONICAL_EVIDENCE,
+                           episode_id=s.get('episode_id'))
                for s in decision['sources']]
     sources.append(SourceEntry(
         ref=f"application_decision:{requirement['concept_id']}", kind='application_decision',
@@ -710,6 +716,13 @@ def render_prompt_text(
         for s in entries:
             lines.append(f"[SOURCE_REF: {alias_for_ref[s.ref]}]")
             lines.append(s.content)
+            episode_alias = alias_for_ref.get(f"profile_episode:{s.episode_id}") if s.episode_id else None
+            if episode_alias:
+                lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — use only under this experience entry]")
+            elif s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED):
+                lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills only; do not assign to an employer]")
+            if s.chronology_only:
+                lines.append("[CHRONOLOGY ONLY: does not substantiate achievements; cite a claim belonging to this episode]")
             lines.append("")
 
     if guidance:
