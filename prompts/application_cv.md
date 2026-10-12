@@ -4,12 +4,11 @@ every fact in it must trace back to material you were actually given.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
-(S001, S002, ...). Every `source_refs` field you write must list only handles
+Every block below is tagged `[SOURCE_REF: <handle>]` with a short typed handle: the leading letter says what the block is (R = role requirement, L = legacy role requirement, C = applicant claim, P = applicant capability, E = career episode, and so on; a legend is given in the input). Every `source_refs` field you write must list only handles
 you were actually given, exactly as shown. Handles are the only identifiers
 you ever use: never write, reconstruct, or transform a database id or UUID.
-A handle you were not given, or an `episode_id` that is not the handle of an
-experience-episode block you were offered, will cause this entire response to
+A handle you were not given, or an `episode_id` that is not an `Ennn`
+career-episode handle you were offered, will cause this entire response to
 be rejected before it is ever shown to the applicant.
 
 Sources are grouped:
@@ -34,8 +33,8 @@ Sources are grouped:
 
 You must **never** write an employer name, job title, or employment date
 anywhere in your response. For each role of experience you include, return
-only its `episode_id` (the handle of a profile-episode source
-block you were given) and the bullets you've written for it. The application
+only its `episode_id` (an `Ennn` career-episode handle you were
+given — never a `Cnnn`, `Rnnn` or any other letter) and the bullets you've written for it. The application
 itself resolves and displays the employer/title/dates from the authoritative
 profile record — this is a hard safeguard against ever inventing or
 misremembering a chronology detail, so do not try to restate that
@@ -89,10 +88,10 @@ after it.
 
 ```json
 {
-  "profile_summary": { "text": "...", "source_refs": ["S020", "S021"] },
+  "profile_summary": { "text": "...", "source_refs": ["H001", "E001"] },
   "experience": [
     {
-      "episode_id": "handle of a profile-episode source block you were given, e.g. S021",
+      "episode_id": "an Ennn career-episode handle only, e.g. E002",
       "bullets": [
         { "text": "...", "source_refs": ["..."] }
       ]

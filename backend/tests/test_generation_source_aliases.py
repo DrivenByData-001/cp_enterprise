@@ -1,6 +1,6 @@
 """Generation-local source aliases (docs/35, "alias layer").
 
-The model is shown/returns short handles (S001...) — never canonical database
+The model is shown/returns short handles (R001, C001, E001...) — never canonical database
 refs/UUIDs. Application code owns alias -> canonical translation; unknown
 handles fail closed; only canonical ids are persisted or exposed.
 """
@@ -56,9 +56,9 @@ def test_prompt_shows_short_aliases_never_canonical_refs(client):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
         ctx = gen.build_application_generation_context(cur, setup["application_id"], artifact_type="positioning")
-    assert "[SOURCE_REF: S001]" in ctx.prompt_text
+    assert "[SOURCE_REF: R001]" in ctx.prompt_text
     assert re.findall(r"\[SOURCE_REF: ([^\]]+)\]", ctx.prompt_text) and all(
-        re.fullmatch(r"S\d{3}", a) for a in re.findall(r"\[SOURCE_REF: ([^\]]+)\]", ctx.prompt_text))
+        re.fullmatch(r"[A-Z]\d{3}", a) for a in re.findall(r"\[SOURCE_REF: ([^\]]+)\]", ctx.prompt_text))
     assert f"profile_claim:{setup['claim_id']}" not in ctx.prompt_text
     assert not UUID_RE.search(ctx.prompt_text)  # no UUID of any kind is model-visible
     assert len(set(ctx.alias_to_ref)) == len(ctx.alias_to_ref) == len(ctx.known_source_refs())
@@ -85,11 +85,11 @@ def test_positioning_aliases_translate_to_canonical_and_persist_canonical(client
     assert art["content"]["positioning_statement"]["source_refs"] == [req_ref, claim_ref]  # multiple, ordered
     assert art["content"]["requirements_to_lead_with"][0]["concept_id"] == setup["concept_id"]
     blob = json.dumps(art)
-    assert not re.search(r'"S\d{3}"', blob)
+    assert not re.search(r'"[A-Z]\d{3}"', blob)
     assert {m["ref"] for m in art["source_manifest"]} >= {claim_ref, req_ref}
     with db.db_cursor() as cur:  # raw_output is persisted too: must be canonical
         row = artifacts._draft_row(cur, setup["application_id"], "positioning")
-        assert not re.search(r'"S\d{3}"', json.dumps(row["raw_output"]))
+        assert not re.search(r'"[A-Z]\d{3}"', json.dumps(row["raw_output"]))
 
 
 def test_cv_cover_letter_supporting_statement_persist_canonical(client, monkeypatch):
@@ -110,7 +110,7 @@ def test_cv_cover_letter_supporting_statement_persist_canonical(client, monkeypa
         content = resp.json()["artifact"]["content"]
         refs = {r for r in re.findall(r'"((?:profile|role)_[a-z_]+:[^"]+)"', json.dumps(content))}
         assert refs and all(r in {claim_ref, req_ref, ep_ref} for r in refs), (kind, refs)
-        assert not re.search(r'"S\d{3}"', json.dumps(content))
+        assert not re.search(r'"[A-Z]\d{3}"', json.dumps(content))
         if kind == "cv":
             assert content["experience"][0]["episode_id"] == setup["episode_id"]
         if kind == "supporting_statement":
@@ -124,13 +124,13 @@ def test_unknown_alias_fails_closed(client, monkeypatch):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
     req_ref = f"role_requirement:{setup['concept_id']}"
-    _model_returns(monkeypatch, lambda c: _positioning_output(ref=_alias(c, req_ref), person_ref="S999"))
+    _model_returns(monkeypatch, lambda c: _positioning_output(ref=_alias(c, req_ref), person_ref="R999"))
     resp = _generate(client, setup)
-    assert resp.status_code == 422 and "S999" in resp.text
+    assert resp.status_code == 422 and "R999" in resp.text
     assert _no_draft(setup)
 
 
-@pytest.mark.parametrize("bad", ["S3", "s001", "S0001", " S001", "S001 ", ""])
+@pytest.mark.parametrize("bad", ["R3", "r001", "R0001", " R001", "R001 ", "S001", ""])
 def test_near_miss_aliases_are_not_fuzzy_matched(client, monkeypatch, bad):
     with db.db_cursor() as cur:
         setup = _grounded_role(cur)
@@ -255,18 +255,18 @@ def test_production_failure_model_never_handles_the_uuids():
     for u in ("53a2b868-a170-4e0a-bc81-fcd3a8e560dd", "738f8f36-a7c0-4e52-af72-01bc163373d8",
               "08561c68-6ff9-4f06-bc31-46969c09e66c"):
         assert u not in prompt
-    assert ctx.alias_to_ref == {"S001": CLAIM_A, "S002": CLAIM_B, "S003": CLAIM_C}
+    assert ctx.alias_to_ref == {"C001": CLAIM_A, "C002": CLAIM_B, "C003": CLAIM_C}
     # what the model returns is short; the *application* produces the exact canonical ids
-    out = ctx.resolve_aliases({"themes": [{"source_refs": ["S001", "S002", "S003"]}], "text": "S001 stays prose"})
+    out = ctx.resolve_aliases({"themes": [{"source_refs": ["C001", "C002", "C003"]}], "text": "C001 stays prose"})
     assert out["themes"][0]["source_refs"] == [CLAIM_A, CLAIM_B, CLAIM_C]
-    assert out["text"] == "S001 stays prose"  # prose is never rewritten
+    assert out["text"] == "C001 stays prose"  # prose is never rewritten
     # the two corrupted values from the incident can no longer be expressed/accepted
     for corrupted in ("profile_claim:53a2b868-a170-4e0a-b81f-cd3a8e560dd",
                       "profile_claim:738f8f36-6ff9-4f06-bc31-46969c09e66c", CLAIM_A):
         with pytest.raises(SourceAliasError):
             ctx.resolve_aliases({"source_refs": [corrupted]})
     with pytest.raises(SourceAliasError):
-        ctx.resolve_aliases({"a": [{"b": {"source_refs": ["S001", "S999"]}}]})  # nested, fails closed
+        ctx.resolve_aliases({"a": [{"b": {"source_refs": ["C001", "R999"]}}]})  # nested, fails closed
 
 
 def test_aliases_are_deterministic_and_unique():
@@ -275,4 +275,159 @@ def test_aliases_are_deterministic_and_unique():
     assert ctx1.alias_to_ref == ctx2.alias_to_ref
     dup = [SourceEntry(ref="a:1", kind="a", label="", category="c", content="")] * 2 + [
         SourceEntry(ref="a:2", kind="a", label="", category="c", content="")]
-    assert gen.assign_source_aliases(dup) == {"S001": "a:1", "S002": "a:2"}
+    assert gen.assign_source_aliases(dup) == {"X001": "a:1", "X002": "a:2"}
+
+
+# --- typed namespaces --------------------------------------------------------
+
+
+def _src(ref, kind):
+    return SourceEntry(ref=ref, kind=kind, label="", category=gen.CATEGORY_CANONICAL_EVIDENCE, content="")
+
+
+def test_aliases_are_typed_numbered_per_kind_and_deterministic():
+    sources = [
+        _src("role_requirement:r1", "role_requirement"), _src("profile_claim:c1", "profile_claim"),
+        _src("profile_claim:c2", "profile_claim"), _src("role_requirement:r2", "role_requirement"),
+        _src("profile_episode:e1", "profile_episode"), _src("role_requirement_legacy:l1", "role_requirement_legacy"),
+        _src("profile_capability:p1", "profile_capability"), _src("weird:1", "unmapped_kind"),
+    ]
+    expected = {
+        "R001": "role_requirement:r1", "C001": "profile_claim:c1", "C002": "profile_claim:c2",
+        "R002": "role_requirement:r2", "E001": "profile_episode:e1", "L001": "role_requirement_legacy:l1",
+        "P001": "profile_capability:p1", "X001": "weird:1",
+    }
+    assert gen.assign_source_aliases(sources) == expected
+    assert gen.assign_source_aliases(sources) == expected  # deterministic
+    assert len(set(gen.ALIAS_PREFIX_BY_KIND.values())) == len(gen.ALIAS_PREFIX_BY_KIND)  # prefixes unique
+
+
+def test_every_registry_kind_has_a_prefix(client):
+    """No SourceEntry kind the registry can emit may fall into the X bucket."""
+    import pathlib
+    src = pathlib.Path(gen.__file__).read_text() + pathlib.Path(gen.__file__).with_name("application_mode.py").read_text()
+    for kind in set(re.findall(r"kind=[\"']([a-z_]+)[\"']", src)):
+        assert kind in gen.ALIAS_PREFIX_BY_KIND, kind
+
+
+def test_rendered_positioning_prompt_makes_namespaces_obvious(client):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+        ctx = gen.build_application_generation_context(cur, setup["application_id"], artifact_type="positioning")
+    text = ctx.prompt_text
+    assert "SOURCE HANDLES" in text and "Rnnn = role requirement" in text and "Cnnn = applicant profile claim" in text
+    assert "Ennn = career episode" in text
+    tags = dict(re.findall(r"\[SOURCE_REF: ([A-Z]\d{3})\]\n(.*)", text))
+    assert any(k.startswith("R") and "Requirement:" in v for k, v in tags.items())
+    assert any(k.startswith("C") and "Evidence for" in v for k, v in tags.items())
+    assert any(k.startswith("E") for k in tags)
+    assert not UUID_RE.search(text)
+    # role-requirement and claim handles come from different namespaces
+    assert _alias(ctx, f"role_requirement:{setup['concept_id']}")[0] == "R"
+    assert _alias(ctx, f"profile_claim:{setup['claim_id']}")[0] == "C"
+    assert _alias(ctx, f"profile_episode:{setup['episode_id']}")[0] == "E"
+
+
+def test_positioning_concept_id_uses_requirement_handle_even_with_many_sources(client, monkeypatch):
+    """Production incident: concept_id picked a valid-but-wrong 'S013'. With
+    typed handles the requirement is simply the one Rnnn handle."""
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    req_ref, claim_ref = f"role_requirement:{setup['concept_id']}", f"profile_claim:{setup['claim_id']}"
+
+    def make(ctx):
+        r = _alias(ctx, req_ref)
+        assert r == "R001"
+        return _positioning_output(ref=r, person_ref=_alias(ctx, claim_ref), concept_id=r)
+
+    _model_returns(monkeypatch, make)
+    resp = _generate(client, setup)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["artifact"]["content"]["requirements_to_lead_with"][0]["concept_id"] == setup["concept_id"]
+
+
+@pytest.mark.parametrize("wrong_ref_fmt", ["profile_claim:{claim}", "profile_episode:{episode}"])
+def test_positioning_concept_id_wrong_kind_handle_is_rejected(client, monkeypatch, wrong_ref_fmt):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    req_ref, claim_ref = f"role_requirement:{setup['concept_id']}", f"profile_claim:{setup['claim_id']}"
+    wrong = wrong_ref_fmt.format(claim=setup["claim_id"], episode=setup["episode_id"])
+    _model_returns(monkeypatch, lambda c: _positioning_output(
+        ref=_alias(c, req_ref), person_ref=_alias(c, claim_ref), concept_id=_alias(c, wrong)))
+    resp = _generate(client, setup)
+    assert resp.status_code == 422 and "does not name a" in resp.text
+    assert _no_draft(setup)
+
+
+@pytest.mark.parametrize("episode_field_ref", ["role_requirement:{req}", "profile_claim:{claim}"])
+def test_cv_episode_id_wrong_kind_handle_is_rejected(client, monkeypatch, episode_field_ref):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    ep_ref = f"profile_episode:{setup['episode_id']}"
+    wrong = episode_field_ref.format(req=setup["concept_id"], claim=setup["claim_id"])
+    _model_returns(monkeypatch, lambda c: _cv_output(ref=_alias(c, ep_ref), episode_id=_alias(c, wrong)))
+    assert _generate(client, setup, "cv").status_code == 422
+    assert _no_draft(setup, "cv")
+
+
+def test_cv_episode_id_episode_handle_resolves_and_source_refs_mix_namespaces(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    ep_ref, claim_ref = f"profile_episode:{setup['episode_id']}", f"profile_claim:{setup['claim_id']}"
+    req_ref = f"role_requirement:{setup['concept_id']}"
+    seen = {}
+
+    def make(ctx):
+        seen["e"] = _alias(ctx, ep_ref)
+        out = _cv_output(ref=_alias(ctx, ep_ref), episode_id=_alias(ctx, ep_ref))
+        out.profile_summary.source_refs = [_alias(ctx, ep_ref), _alias(ctx, claim_ref), _alias(ctx, req_ref)]
+        return out
+
+    _model_returns(monkeypatch, make)
+    resp = _generate(client, setup, "cv")
+    assert resp.status_code == 200, resp.text
+    assert seen["e"] == "E001"
+    content = resp.json()["artifact"]["content"]
+    assert content["profile_summary"]["source_refs"] == [ep_ref, claim_ref, req_ref]
+    assert content["experience"][0]["episode_id"] == setup["episode_id"]
+
+
+def test_untyped_and_unknown_typed_handles_fail_closed(client, monkeypatch):
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    req_ref = f"role_requirement:{setup['concept_id']}"
+    for bad in ("R999", "C999", "E999", "S001"):
+        _model_returns(monkeypatch, lambda c, b=bad: _positioning_output(ref=_alias(c, req_ref), person_ref=b))
+        assert _generate(client, setup).status_code == 422, bad
+        assert _no_draft(setup)
+
+
+def test_legacy_requirement_handle_allowed_for_gap_concept_but_not_lead_with(client, monkeypatch):
+    from test_application_artifacts import _legacy_only_role
+    with db.db_cursor() as cur:
+        setup = _legacy_only_role(cur)
+    leg = f"role_requirement_legacy:{setup['legacy_concept_id']}"
+    ep = f"profile_episode:{setup['episode_id']}"
+
+    def gap(ctx):
+        assert _alias(ctx, leg) == "L001"
+        return _positioning_output(ref=_alias(ctx, leg), person_ref=_alias(ctx, ep), gap_concept_id=_alias(ctx, leg))
+
+    _model_returns(monkeypatch, gap)
+    assert _generate(client, setup).status_code == 200
+    _model_returns(monkeypatch, lambda c: _positioning_output(
+        ref=_alias(c, leg), person_ref=_alias(c, ep), concept_id=_alias(c, leg)))
+    resp = _generate(client, setup)
+    assert resp.status_code == 422 and "non-accepted" in resp.text
+
+
+def test_interview_prep_uses_typed_aliases_and_persists_canonical(client, monkeypatch):
+    from test_interview_prep import _interview_prep_output
+    with db.db_cursor() as cur:
+        setup = _grounded_role(cur)
+    req_ref, claim_ref = f"role_requirement:{setup['concept_id']}", f"profile_claim:{setup['claim_id']}"
+    _model_returns(monkeypatch, lambda c: _interview_prep_output(role_ref=_alias(c, req_ref), person_ref=_alias(c, claim_ref)))
+    resp = _generate(client, setup, "interview_prep")
+    assert resp.status_code == 200, resp.text
+    blob = json.dumps(resp.json()["artifact"]["content"])
+    assert req_ref in blob and claim_ref in blob and not re.search(r'"[A-Z]\d{3}"', blob)

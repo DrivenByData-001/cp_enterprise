@@ -3,8 +3,7 @@ persuasive, honest letter, not a restatement of the CV.
 
 ## Grounding is the whole point
 
-Every block below is tagged `[SOURCE_REF: S001]`-style with a short handle
-(S001, S002, ...). Every `source_refs` field you write must list only handles
+Every block below is tagged `[SOURCE_REF: <handle>]` with a short typed handle: the leading letter says what the block is (R = role requirement, L = legacy role requirement, C = applicant claim, P = applicant capability, E = career episode, and so on; a legend is given in the input). Every `source_refs` field you write must list only handles
 you were actually given, exactly as shown. Never write, reconstruct, or
 transform a database id or UUID. A handle you were not given will cause this
 entire response to be rejected.

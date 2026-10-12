@@ -191,10 +191,18 @@ Prompt wording cannot fix that, so the contract is architectural:
 - **Canonical source refs** (`profile_claim:<uuid>`, `role_requirement:<uuid>`,
   …) are database/application identifiers. They are the only form persisted
   (`content`, `raw_output`, `source_manifest`) or returned by the API.
-- **Generation aliases** (`S001`, `S002`, … in source-registry order, one per
-  distinct ref, unique per request) are ephemeral LLM-facing handles held in
+- **Generation aliases** are *typed*: the letter names the source kind
+  (`R` role requirement, `L` legacy requirement, `C` profile claim, `P`
+  capability, `E` episode, `H` profile summary, `D` posting text, `U` user
+  assertion, `N` note, `T` event, `J` evidence decision, `G` positioning,
+  `M` application material, `K` package, `V` coverage), numbered per type in
+  source-registry order (`R001`, `C001`, `C002`, `E001`, …), one per distinct
+  ref, unique per request. The prompt carries a legend of the letters in use.
+  Typing makes wrong-kind answers unlikely (a `concept_id` must be `Rnnn`,
+  an `episode_id` `Ennn`); validation never trusts the letter — it re-checks
+  the real kind of the mapped source. They are ephemeral LLM-facing handles held in
   `GenerationContext.alias_to_ref`. `render_prompt_text` emits only
-  `[SOURCE_REF: S001]`; no UUID is rendered anywhere in the prompt.
+  `[SOURCE_REF: R001]`; no UUID is rendered anywhere in the prompt.
 - **The model selects handles; application code resolves them.**
   `GenerationContext.resolve_aliases` runs at the start of
   `_validate_and_shape`, after Pydantic schema validation, and rewrites only
@@ -203,7 +211,7 @@ Prompt wording cannot fix that, so the contract is architectural:
   `episode_id` (alias of a `profile_episode` block -> episode id), since those
   are also model-copied opaque ids. Prose is never touched.
 - **Fail closed.** Anything that is not an alias issued for this request —
-  `S999`, `s001`, a real canonical ref, a fabricated UUID, an alias of the
+  `R999`, `r001`, `S001`, a real canonical ref, a fabricated UUID, an alias of the
   wrong kind for `concept_id`/`episode_id` — raises `SourceAliasError`, surfaced
   as `ApplicationArtifactValidationError` (422). No guessing, fuzzy matching or
   dropping.
