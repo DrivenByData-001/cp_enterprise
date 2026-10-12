@@ -4,6 +4,7 @@ import {
   api,
   type ApplicationArtifact,
   type ApplicationArtifactsResponse,
+  type ArtifactTypeState,
   type ApplicationDetail,
   type ApplicationEvent,
   type ApplicationEventInput,
@@ -1499,18 +1500,50 @@ function StateBadge({ artifact }: { artifact: ApplicationArtifact }) {
   return <span style={{ fontSize: 14, color: 'var(--series-1)', fontWeight: 600 }}>Draft awaiting review</span>
 }
 
+// What a successful artifact mutation tells the parent, straight from the
+// mutation response, so the parent's `artifactsData` (the single frontend
+// source of truth) can show the result before the authoritative GET returns.
+type ArtifactChange =
+  | { kind: 'draft'; artifact: ApplicationArtifact } // generate / edit -> new draft
+  | { kind: 'adopted'; artifact: ApplicationArtifact }
+  | { kind: 'discarded'; artifactType: ArtifactType; artifactId: string }
+
+function applyArtifactChange(data: ApplicationArtifactsResponse, change: ArtifactChange): ApplicationArtifactsResponse {
+  const type = change.kind === 'discarded' ? change.artifactType : change.artifact.artifact_type
+  const current = data.artifacts[type]
+  let next: ArtifactTypeState
+  if (change.kind === 'draft') next = { ...current, draft: change.artifact }
+  else if (change.kind === 'adopted') next = { ...current, active: change.artifact, draft: null }
+  else next = current.draft?.id === change.artifactId ? { ...current, draft: null } : current
+  return { ...data, artifacts: { ...data.artifacts, [type]: next } }
+}
+
+type ArtifactView = 'active' | 'draft'
+
+// Deterministic fallback: respect the requested view while that artifact
+// exists, otherwise draft, otherwise active, otherwise nothing.
+function resolveArtifactView(requested: ArtifactView, active: unknown, draft: unknown): ArtifactView | null {
+  if (requested === 'draft' && draft) return 'draft'
+  if (requested === 'active' && active) return 'active'
+  if (draft) return 'draft'
+  if (active) return 'active'
+  return null
+}
+
 function ArtifactStageCard({
   applicationId,
   artifactType,
   active,
   draft,
-  onChanged,
+  onApplyChange,
+  onRefresh,
 }: {
   applicationId: string
   artifactType: ArtifactType
   active: ApplicationArtifact | null
   draft: ApplicationArtifact | null
-  onChanged: () => void
+  onApplyChange: (change: ArtifactChange) => void
+  onRefresh: () => Promise<void>
 }) {
   const [guidance, setGuidance] = useState('')
   const [targetWords, setTargetWords] = useState('')
@@ -1518,42 +1551,75 @@ function ArtifactStageCard({
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [editDraft, setEditDraft] = useState<ArtifactContent | null>(null)
-  const [viewing, setViewing] = useState<'active' | 'draft'>(draft ? 'draft' : 'active')
+  const [requestedView, setViewing] = useState<ArtifactView>(draft ? 'draft' : 'active')
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<string | null>(null)
 
-  const shown = viewing === 'draft' && draft ? draft : active
+  const viewing = resolveArtifactView(requestedView, active, draft)
+  const shown = viewing === 'draft' ? draft : viewing === 'active' ? active : null
 
-  const runAction = async (fn: () => Promise<unknown>) => {
+  const refresh = async (successLabel: string) => {
+    try {
+      await onRefresh()
+      setRefreshWarning(null)
+    } catch {
+      // The mutation itself succeeded and is already shown; only the
+      // authoritative re-read failed, so never report a mutation failure.
+      setRefreshWarning(successLabel)
+    }
+  }
+
+  // Mutation first (failure => error, nothing shown), then update parent state
+  // from the response, then await the authoritative refresh.
+  const runMutation = async (label: string, fn: () => Promise<{ change: ArtifactChange; view: ArtifactView } | null>) => {
     setBusy(true)
     setError(null)
+    setRefreshWarning(null)
+    let result: { change: ArtifactChange; view: ArtifactView } | null
     try {
-      await fn()
-      onChanged()
+      result = await fn()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+      return
+    }
+    if (result) {
+      setViewing(result.view)
+      onApplyChange(result.change)
+    }
+    try {
+      await refresh(label)
     } finally {
       setBusy(false)
     }
   }
 
   const handleGenerate = () =>
-    runAction(async () => {
+    runMutation('Draft generated', async () => {
       const words = targetWords.trim() ? Number(targetWords) : undefined
-      await api.generateApplicationArtifact(applicationId, artifactType, {
+      const res = await api.generateApplicationArtifact(applicationId, artifactType, {
         guidance: guidance.trim() || undefined,
         target_words: words,
       })
-      setViewing('draft')
+      return { change: { kind: 'draft', artifact: res.artifact }, view: 'draft' }
     })
 
-  const handleAdopt = (artifactId: string) => runAction(async () => { await api.adoptApplicationArtifact(applicationId, artifactId); setViewing('active') })
-  const handleDiscard = (artifactId: string) => runAction(async () => { await api.discardApplicationArtifact(applicationId, artifactId); setViewing('active') })
+  const handleAdopt = (artifactId: string) =>
+    runMutation('Draft adopted', async () => {
+      const res = await api.adoptApplicationArtifact(applicationId, artifactId)
+      return { change: { kind: 'adopted', artifact: res.artifact }, view: 'active' }
+    })
+  const handleDiscard = (artifactId: string) =>
+    runMutation('Draft discarded', async () => {
+      await api.discardApplicationArtifact(applicationId, artifactId)
+      return { change: { kind: 'discarded', artifactType, artifactId }, view: 'active' }
+    })
   const handleSaveEdit = (artifactId: string) =>
-    runAction(async () => {
-      if (!editDraft) return
-      await api.editApplicationArtifact(applicationId, artifactId, editDraft)
+    runMutation('Edit saved', async () => {
+      if (!editDraft) return null
+      const res = await api.editApplicationArtifact(applicationId, artifactId, editDraft)
       setEditing(false)
-      setViewing('draft')
+      return { change: { kind: 'draft', artifact: res.artifact }, view: 'draft' }
     })
 
   const startEdit = (artifact: ApplicationArtifact) => {
@@ -1610,6 +1676,14 @@ function ArtifactStageCard({
       {!shown && <p className="muted" style={{ fontSize: 14, marginTop: 8 }}>Not generated yet.</p>}
 
       {error && <p role="alert" style={{ color: 'var(--critical)', fontSize: 14, marginTop: 8 }}>{error}</p>}
+      {refreshWarning && (
+        <p role="status" style={{ color: 'var(--warning)', fontSize: 14, marginTop: 8 }}>
+          {refreshWarning}, but the application package could not be refreshed.{' '}
+          <button type="button" disabled={busy} onClick={() => { setBusy(true); void refresh(refreshWarning).finally(() => setBusy(false)) }} style={{ fontSize: 14, padding: '3px 8px' }}>
+            Retry refresh
+          </button>
+        </p>
+      )}
 
       <div className="actions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
         {shown && !editing && (
@@ -1695,12 +1769,14 @@ function ApplicationPackageSection({
   applicationId,
   evidence,
   artifactsData,
-  onChanged,
+  onApplyChange,
+  onRefresh,
 }: {
   applicationId: string
   evidence: ApplicationEvidence | null
   artifactsData: ApplicationArtifactsResponse | null
-  onChanged: () => void
+  onApplyChange: (change: ArtifactChange) => void
+  onRefresh: () => Promise<void>
 }) {
   if (!artifactsData) return <p className="muted">Loading application package…</p>
   const { artifacts } = artifactsData
@@ -1710,19 +1786,20 @@ function ApplicationPackageSection({
         Application package
       </h2>
       <GenerationContextCard evidence={evidence} hasAdoptedPositioning={Boolean(artifacts.positioning.active)} />
-      <ArtifactStageCard applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onChanged={onChanged} />
-      <ArtifactStageCard applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onChanged={onChanged} />
+      <ArtifactStageCard applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
+      <ArtifactStageCard applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
       <h3 style={{ fontSize: 15, marginTop: 16 }}>Supporting material</h3>
       <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         Optional — generate either or both only if this application needs them.
       </p>
-      <ArtifactStageCard applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onChanged={onChanged} />
+      <ArtifactStageCard applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
       <ArtifactStageCard
         applicationId={applicationId}
         artifactType="supporting_statement"
         active={artifacts.supporting_statement.active}
         draft={artifacts.supporting_statement.draft}
-        onChanged={onChanged}
+        onApplyChange={onApplyChange}
+        onRefresh={onRefresh}
       />
     </section>
   )
@@ -1787,13 +1864,15 @@ function InterviewStage({
   status,
   events,
   artifactsData,
-  onChanged,
+  onApplyChange,
+  onRefresh,
 }: {
   applicationId: string
   status: ApplicationStatus
   events: ApplicationEvent[] | null
   artifactsData: ApplicationArtifactsResponse | null
-  onChanged: () => void
+  onApplyChange: (change: ArtifactChange) => void
+  onRefresh: () => Promise<void>
 }) {
   return (
     <section aria-labelledby="interview-stage-h" style={{ marginTop: 16 }}>
@@ -1808,7 +1887,7 @@ function InterviewStage({
           artifactType="interview_prep"
           active={artifactsData.artifacts.interview_prep.active}
           draft={artifactsData.artifacts.interview_prep.draft}
-          onChanged={onChanged}
+          onApplyChange={onApplyChange} onRefresh={onRefresh}
         />
       )}
     </section>
@@ -1940,14 +2019,30 @@ export default function ApplicationWorkspace() {
   // never generates anything itself, just reports current draft/active/stale
   // state so the workspace can render the package section without a
   // request-per-artifact-type or a request-per-source.
-  const loadArtifacts = useCallback(() => {
+  // Throws on failure; ignores results for an application the user has
+  // already navigated away from.
+  const refreshArtifacts = useCallback(async () => {
+    if (!id) return
+    const data = await api.getApplicationArtifacts(id)
+    if (currentId.current === id) setArtifactsData(data)
+  }, [id])
+
+  // Initial/background load: failure surfaces as `artifactsError`.
+  const loadArtifacts = useCallback(async () => {
     if (!id) return
     setArtifactsError(null)
-    api
-      .getApplicationArtifacts(id)
-      .then((d) => { if (currentId.current === id) setArtifactsData(d) })
-      .catch((e) => { if (currentId.current === id) setArtifactsError(e instanceof Error ? e.message : String(e)) })
-  }, [id])
+    try {
+      await refreshArtifacts()
+    } catch (e) {
+      if (currentId.current === id) setArtifactsError(e instanceof Error ? e.message : String(e))
+    }
+  }, [id, refreshArtifacts])
+
+  // Show a successful mutation immediately (from its response), before the
+  // authoritative refresh reconciles it.
+  const applyArtifactChangeToState = useCallback((change: ArtifactChange) => {
+    setArtifactsData((prev) => (prev ? applyArtifactChange(prev, change) : prev))
+  }, [])
 
   // Phase 5 (docs/36 §4/§21): one bounded lifecycle-event request, never
   // called per row and never blocking the rest of the workspace if it fails
@@ -2004,7 +2099,7 @@ export default function ApplicationWorkspace() {
   // waterfall, and generation never happens on load.
   useEffect(loadDetail, [loadDetail])
   useEffect(loadEvidence, [loadEvidence])
-  useEffect(loadArtifacts, [loadArtifacts])
+  useEffect(() => { void loadArtifacts() }, [loadArtifacts])
   useEffect(loadEvents, [loadEvents])
   useEffect(loadAlignment, [loadAlignment])
   useEffect(loadLearningState, [loadLearningState])
@@ -2272,7 +2367,7 @@ export default function ApplicationWorkspace() {
       )}
 
       <div style={{ marginTop: 16 }}>
-        <ApplicationPackageSection applicationId={application.id} evidence={evidence} artifactsData={artifactsData} onChanged={loadArtifacts} />
+        <ApplicationPackageSection applicationId={application.id} evidence={evidence} artifactsData={artifactsData} onApplyChange={applyArtifactChangeToState} onRefresh={refreshArtifacts} />
       </div>
 
       </div>
@@ -2298,7 +2393,8 @@ export default function ApplicationWorkspace() {
         status={application.status}
         events={events}
         artifactsData={artifactsData}
-        onChanged={loadArtifacts}
+        onApplyChange={applyArtifactChangeToState}
+        onRefresh={refreshArtifacts}
       />
       </div>
     </div>

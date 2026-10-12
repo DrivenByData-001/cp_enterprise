@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import ApplicationWorkspace from './ApplicationWorkspace'
 import {
   api,
@@ -1069,5 +1069,240 @@ describe('Application stage navigation', () => {
     expect((screen.getByPlaceholderText(/Describe an example/) as HTMLTextAreaElement).value).toBe('Unsaved project example')
     expect(api.getApplicationEvidence).toHaveBeenCalledTimes(1)
     expect(api.createApplicationNote).not.toHaveBeenCalled()
+  })
+})
+
+// --- Artifact state reconciliation regression (generate POST succeeded in
+// production but the UI kept showing "Not generated") --------------------
+describe('Artifact mutation → UI state reconciliation', () => {
+  const withState = (a: ApplicationArtifact | null, d: ApplicationArtifact | null, history_count = 0) => ({ active: a, draft: d, history_count })
+  const positioningCard = async () => (await screen.findByRole('heading', { name: 'Positioning' })).closest('section') as HTMLElement
+  const generateIn = (card: HTMLElement) => {
+    fireEvent.click(within(card).getByText(/(Re)?[Gg]enerate with optional guidance/))
+    fireEvent.click(within(card).getByText(/^(Generate|Regenerate)$/))
+  }
+  const text = (t: string) => makePositioningArtifact({
+    content: { ...makePositioningArtifact().content, positioning_statement: { text: t, source_refs: ['role_requirement:c1'] } },
+  })
+
+  it('A/B: POST draft shows immediately (even if the refresh is slow) and a GET follows the POST', async () => {
+    let resolveGet: (v: ApplicationArtifactsResponse) => void = () => {}
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = await positioningCard()
+    expect(within(card).getByText('Not generated yet.')).toBeTruthy()
+    expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.getApplicationArtifacts).mockReturnValue(new Promise((r) => { resolveGet = r }))
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('Fresh positioning.') })
+    generateIn(card)
+
+    // visible while the follow-up GET is still pending
+    expect(await within(card).findByText('Fresh positioning.')).toBeTruthy()
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+    expect(within(card).queryByText('Not generated yet.')).toBeNull()
+    expect(within(card).queryByText('Not generated')).toBeNull()
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
+    expect(api.getApplicationArtifacts).toHaveBeenLastCalledWith('app-1')
+    expect(within(card).getByText('Generating…')).toBeTruthy() // still awaiting refresh
+
+    resolveGet(makeArtifactsResponse({ positioning: withState(null, text('Fresh positioning.')) }))
+    await waitFor(() => expect(within(card).queryByText('Generating…')).toBeNull())
+  })
+
+  it('C: the awaited GET reconciles the UI with server state', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = await positioningCard()
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('From POST.') })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(null, text('From GET.'), 3) }))
+    generateIn(card)
+    await waitFor(() => expect(within(card).getByText('From GET.')).toBeTruthy())
+    expect(within(card).queryByText('From POST.')).toBeNull()
+  })
+
+  it('D: refresh failure after a successful POST keeps the draft, warns, and can retry', async () => {
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = await positioningCard()
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('Kept draft.') })
+    vi.mocked(api.getApplicationArtifacts).mockRejectedValue(new Error('500 boom'))
+    generateIn(card)
+
+    expect(await within(card).findByText(/Draft generated, but the application package could not be refreshed/)).toBeTruthy()
+    expect(within(card).getByText('Kept draft.')).toBeTruthy()
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+    expect(within(card).queryByText('Not generated')).toBeNull()
+    expect(within(card).queryByRole('alert')).toBeNull() // not reported as a generation failure
+    expect(api.generateApplicationArtifact).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(null, text('Kept draft.'), 1) }))
+    fireEvent.click(within(card).getByText('Retry refresh'))
+    await waitFor(() => expect(within(card).queryByText(/could not be refreshed/)).toBeNull())
+    expect(api.generateApplicationArtifact).toHaveBeenCalledTimes(1) // retry never regenerates
+    expect(within(card).getByText('Kept draft.')).toBeTruthy()
+  })
+
+  it('E: generation failure shows the error and no fake draft, existing artifact unchanged, no refresh', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(active, null) }))
+    const card = await positioningCard()
+    vi.mocked(api.generateApplicationArtifact).mockRejectedValue(new Error('503 model unavailable'))
+    generateIn(card)
+    await waitFor(() => expect(within(card).getByRole('alert').textContent).toMatch(/503 model unavailable/))
+    expect(within(card).queryByText('Draft awaiting review')).toBeNull()
+    expect(within(card).getByText('Current')).toBeTruthy()
+    expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(1)
+  })
+
+  it('F: regeneration immediately shows the replacement draft', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(null, text('Old draft.')) }))
+    const card = await positioningCard()
+    expect(within(card).getByText('Old draft.')).toBeTruthy()
+    vi.mocked(api.getApplicationArtifacts).mockReturnValue(new Promise(() => {})) // refresh never lands
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('Replacement draft.') })
+    generateIn(card)
+    expect(await within(card).findByText('Replacement draft.')).toBeTruthy()
+    expect(within(card).queryByText('Old draft.')).toBeNull()
+  })
+
+  it('regenerating with Current present moves the view to the new draft', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(active, null) }))
+    const card = await positioningCard()
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('New draft over current.') })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(active, text('New draft over current.')) }))
+    generateIn(card)
+    await waitFor(() => expect(within(card).getByText('New draft over current.')).toBeTruthy())
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+  })
+
+  it('G: Adopt switches to Current and reconciles with a GET', async () => {
+    const draft = text('To adopt.')
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(null, draft) }))
+    const card = await positioningCard()
+    const adopted = { ...draft, status: 'active' as const }
+    vi.mocked(api.adoptApplicationArtifact).mockResolvedValue({ artifact: adopted })
+    vi.mocked(api.getApplicationArtifacts).mockReturnValue(new Promise(() => {}))
+    fireEvent.click(within(card).getByText('Adopt'))
+    expect(await within(card).findByText('Current')).toBeTruthy() // from the POST response alone
+    expect(within(card).queryByText('Draft awaiting review')).toBeNull()
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
+  })
+
+  it('H: Discard (no Current) leaves nothing after the authoritative refresh', async () => {
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(null, text('Doomed.')) }))
+    const card = await positioningCard()
+    vi.mocked(api.discardApplicationArtifact).mockResolvedValue({ status: 'discarded' })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(null, null, 1) }))
+    fireEvent.click(within(card).getByText('Discard'))
+    await waitFor(() => expect(within(card).getByText('Not generated yet.')).toBeTruthy())
+    expect(within(card).queryByText('Doomed.')).toBeNull()
+    expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2)
+  })
+
+  it('I: Save edit shows the returned draft immediately and refreshes', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(active, null) }))
+    const card = await positioningCard()
+    fireEvent.click(within(card).getByText('Edit'))
+    fireEvent.change(within(card).getByDisplayValue('A strong fit for this role.'), { target: { value: 'Edited text.' } })
+    const edited = { ...text('Edited text.'), id: 'edited-1', origin: 'user_edit' as const }
+    vi.mocked(api.editApplicationArtifact).mockResolvedValue({ artifact: edited })
+    vi.mocked(api.getApplicationArtifacts).mockReturnValue(new Promise(() => {}))
+    fireEvent.click(within(card).getByText('Save edit'))
+    expect(await within(card).findByText('Edited text.')).toBeTruthy()
+    expect(within(card).getByText('Draft awaiting review')).toBeTruthy()
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
+  })
+
+  it('J: viewing falls back deterministically and respects explicit choice', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    const draft = text('The draft.')
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(active, draft) }))
+    const card = await positioningCard()
+    // both exist: explicit switching is respected
+    expect(within(card).getByText('The draft.')).toBeTruthy()
+    fireEvent.click(within(card).getByText('View current'))
+    expect(within(card).getByText('A strong fit for this role.')).toBeTruthy()
+    fireEvent.click(within(card).getByText('View draft'))
+    expect(within(card).getByText('The draft.')).toBeTruthy()
+
+    // viewing draft, draft disappears (discard) -> active
+    vi.mocked(api.discardApplicationArtifact).mockResolvedValue({ status: 'discarded' })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(active, null, 1) }))
+    fireEvent.click(within(card).getByText('Discard'))
+    await waitFor(() => expect(within(card).getByText('Current')).toBeTruthy())
+    expect(within(card).getByText('A strong fit for this role.')).toBeTruthy()
+  })
+
+  it('J: viewing Current while Current disappears and a draft exists falls back to the draft', async () => {
+    const active = makePositioningArtifact({ status: 'active', id: 'active-1' })
+    const draft = text('Surviving draft.')
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ positioning: withState(active, draft) }))
+    const card = await positioningCard()
+    fireEvent.click(within(card).getByText('View current'))
+    // regenerate keeps user on the new draft; the server now reports no active
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('Another.') })
+    vi.mocked(api.getApplicationArtifacts).mockResolvedValue(makeArtifactsResponse({ positioning: withState(null, draft) }))
+    generateIn(card)
+    await waitFor(() => expect(within(card).getByText('Surviving draft.')).toBeTruthy())
+    expect(within(card).queryByText('Not generated')).toBeNull()
+  })
+
+  it('K: a late refresh for application A never overwrites application B', async () => {
+    let resolveLateA: (v: ApplicationArtifactsResponse) => void = () => {}
+    let aCalls = 0
+    vi.mocked(api.getApplication).mockResolvedValue(makeDetail())
+    vi.mocked(api.getApplicationEvidence).mockResolvedValue(makeEvidence())
+    vi.mocked(api.listApplicationEvents).mockResolvedValue({ application_id: 'app-1', events: [] })
+    vi.mocked(api.getCareerAlignment).mockResolvedValue(noDirectionAlignment())
+    vi.mocked(api.getApplicationArtifacts).mockImplementation((appId: string) => {
+      if (appId === 'app-2') return Promise.resolve({ ...makeArtifactsResponse(), application_id: 'app-2' })
+      aCalls += 1
+      return aCalls === 1 ? Promise.resolve(makeArtifactsResponse()) : new Promise((r) => { resolveLateA = r })
+    })
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({ created: true, artifact: text('A draft.') })
+    render(
+      <MemoryRouter initialEntries={['/applications/app-1?section=all']}>
+        <Link to="/applications/app-2?section=all">go-b</Link>
+        <Routes><Route path="/applications/:id" element={<ApplicationWorkspace />} /></Routes>
+      </MemoryRouter>,
+    )
+    const card = await positioningCard()
+    generateIn(card)
+    await waitFor(() => expect(aCalls).toBe(2)) // app-1's refresh is now outstanding
+    fireEvent.click(screen.getByText('go-b'))
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledWith('app-2'))
+    const cardB = await positioningCard()
+    await waitFor(() => expect(within(cardB).getByText('Not generated yet.')).toBeTruthy())
+    resolveLateA(makeArtifactsResponse({ positioning: withState(null, text('Leaked from A.')) }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText('Leaked from A.')).toBeNull()
+    expect(within(await positioningCard()).getByText('Not generated yet.')).toBeTruthy()
+  })
+
+  it.each([
+    ['positioning', 'Positioning'],
+    ['cv', 'CV'],
+    ['cover_letter', 'Cover letter'],
+    ['supporting_statement', 'Supporting statement'],
+    ['interview_prep', 'Interview prep'],
+  ] as const)('%s: generic card shows the POST draft immediately and refreshes', async (type, heading) => {
+    const contents: Record<string, ApplicationArtifact['content']> = {
+      positioning: text('Generic positioning.').content,
+      cv: { profile_summary: { text: 'Generic CV summary.', source_refs: [] }, experience: [], skills: [], omissions_or_cautions: [] },
+      cover_letter: { salutation: 'Dear team', opening: { text: 'Generic cover opening.', source_refs: [] }, body: [], closing: { text: 'Thanks.', source_refs: [] }, sign_off: 'Regards' },
+      supporting_statement: { opening: { text: 'Generic statement opening.', source_refs: [] }, sections: [], gaps_addressed: [] },
+      interview_prep: { focus_areas: [], questions: [{ question: 'Generic question?', question_type: 'experience', source_refs: [], answer_plan: { approach: 'Plan.', evidence_points: [], cautions: [] } }], questions_to_ask: [], closing_points: [], prep_checklist: [] } as ApplicationArtifact['content'],
+    }
+    renderWorkspace(makeDetail(), makeEvidence())
+    const card = (await screen.findByRole('heading', { name: heading })).closest('section') as HTMLElement
+    vi.mocked(api.getApplicationArtifacts).mockReturnValue(new Promise(() => {}))
+    vi.mocked(api.generateApplicationArtifact).mockResolvedValue({
+      created: true, artifact: makePositioningArtifact({ id: `${type}-1`, artifact_type: type as ArtifactType, content: contents[type] }),
+    })
+    generateIn(card)
+    expect(await within(card).findByText('Draft awaiting review')).toBeTruthy()
+    expect(within(card).queryByText('Not generated yet.')).toBeNull()
+    expect(api.generateApplicationArtifact).toHaveBeenCalledWith('app-1', type, expect.anything())
+    await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
   })
 })
