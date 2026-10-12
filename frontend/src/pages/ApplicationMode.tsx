@@ -71,7 +71,15 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
     })()
     return pending.current
   }
-  useEffect(() => { register(save) })
+  useEffect(() => {
+    register(async () => {
+      if (pending.current) return pending.current
+      // Viewing an unreviewed or stale item is not an instruction to confirm it.
+      // Only explicit edits (including recovered drafts and new notes) need saving.
+      if (!dirty && (!note.trim() || noteId)) return true
+      return save()
+    })
+  })
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => { if (dirty || (note.trim() && !noteId)) { event.preventDefault(); event.returnValue = '' } }
     window.addEventListener('beforeunload', guard)
@@ -180,13 +188,13 @@ export default function ApplicationMode() {
   }
   const attention = data?.items.filter(i => !i.decision || i.stale || i.decision.disposition === 'investigate') ?? []
   return <div className="application-mode">
-    <header className="mode-header"><div><p className="eyebrow">Application Mode · {stageLabels[stage]}</p><h1>{data?.role.title ?? 'Your application'}</h1><p>{data?.role.organisation || 'Employer not recorded'}</p>{data && <p className="secondary">{stage === 'overview' ? data.application.status : stateLabels[data.stages[stage]]}</p>}</div><button disabled={busy || !data} onClick={() => go(stage, null, '/applications')}>{busy ? 'Saving…' : 'Save & exit'}</button></header>
+    <header className="mode-header"><div><p className="eyebrow">Application Mode · {stageLabels[stage]}</p><h1>{data?.role.title ?? 'Your application'}</h1><p>{data?.role.organisation || 'Employer not recorded'}</p>{data && <p className="secondary">{stage === 'overview' ? data.application.status : stateLabels[data.stages[stage]]}</p>}</div><button disabled={busy || !data} onClick={() => go(stage, null, '/applications')}>{busy ? 'Leaving…' : 'Exit'}</button></header>
     {error && <div role="alert" className="mode-notice">{error}<button onClick={() => reload().then(() => setError(null)).catch(e => setError(message(e)))}>Retry</button></div>}
     {!data && !error && <p role="status">Loading your application…</p>}
     {data && <div className="mode-layout"><aside className="mode-rail">
       <label className="mode-mobile-stages">Application stage<select disabled={busy} value={stage} onChange={e => go(e.target.value as Stage)}>{Object.entries(stageLabels).map(([value, label]) => <option key={value} value={value}>{label}{value !== 'overview' ? ` · ${stateLabels[data.stages[value as Exclude<Stage, 'overview'>]]}` : ''}</option>)}</select></label>
       <nav aria-label="Application stages">{Object.entries(stageLabels).map(([value, label]) => <button disabled={busy} aria-current={value === stage ? 'step' : undefined} key={value} onClick={() => go(value as Stage)}><span>{label}</span>{value !== 'overview' && <small>{stateLabels[data.stages[value as Exclude<Stage, 'overview'>]]}</small>}</button>)}</nav>
-      <div className="mode-exit">{Object.entries(data.downstream ?? {}).map(([kind, state]) => <p key={kind}>{({ positioning: 'Positioning', cv: 'CV', cover_letter: 'Cover letter', supporting_statement: 'Supporting statement' } as Record<string, string>)[kind] ?? kind}: {stateLabels[state]}</p>)}<p>Positioning, Documents, Review & submit, and Interviews are available in the existing workspace during migration.</p><button disabled={busy} onClick={() => go(stage, null, `/applications/${id}`)}>Save & leave mode for workspace</button></div>
+      <div className="mode-exit">{Object.entries(data.downstream ?? {}).map(([kind, state]) => <p key={kind}>{({ positioning: 'Positioning', cv: 'CV', cover_letter: 'Cover letter', supporting_statement: 'Supporting statement' } as Record<string, string>)[kind] ?? kind}: {stateLabels[state]}</p>)}<p>Positioning, Documents, Review & submit, and Interviews are available in the existing workspace during migration.</p><button disabled={busy} onClick={() => go(stage, null, `/applications/${id}`)}>Return to workspace</button></div>
     </aside>
     {stage === 'overview' && <section className="mode-editor"><h2>Prepare your application</h2><p>Work through the stages in the order that helps you. Saved progress and your resume location are separate.</p><div className="mode-task-list">{(['opportunity', 'requirements', 'evidence'] as const).map(s => <button key={s} disabled={busy} onClick={() => go(s)}><strong>{stageLabels[s]}</strong><span>{stateLabels[data.stages[s]]}{s === 'evidence' ? ` · ${attention.length} requirements need attention` : ''}</span></button>)}</div><button className="primary" disabled={busy} onClick={() => go(data.next_stage)}>Continue: {stageLabels[data.next_stage]}</button>{data.preparation.updated_at && <p className="secondary">Last opportunity/checkpoint save: {new Date(data.preparation.updated_at).toLocaleString()}</p>}</section>}
     {stage === 'opportunity' && <ApplicationOpportunity key={`${id}:${data.preparation.revision}`} id={id} data={data} register={fn => { save.current = fn }} onSaved={setData} />}
