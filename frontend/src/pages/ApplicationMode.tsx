@@ -51,7 +51,8 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
     if (pending.current) return pending.current
     if (claimReview) { setError('Close the career fact review before leaving this requirement. Its draft is kept in this browser.'); return false }
     if (busy) return false
-    if (!dirty && !item.stale && item.decision && (!note.trim() || noteId)) return true
+    // Explicit Save confirms the review even when its fields are unchanged.
+    // The registered navigation guard separately skips untouched reviews.
     setBusy(true); setError(null)
     pending.current = (async () => {
       try {

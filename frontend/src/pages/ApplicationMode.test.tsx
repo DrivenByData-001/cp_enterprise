@@ -62,6 +62,13 @@ describe('Leaving an evidence review', () => {
     await waitFor(() => expect(applicationMode.save).toHaveBeenCalledTimes(1))
   })
 
+  it('explicitly saves an existing unchanged review instead of silently returning', async () => {
+    openReview(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save evidence review' }))
+    await waitFor(() => expect(applicationMode.save).toHaveBeenCalledWith('app', 'concept', expect.objectContaining({ revision: 1, rationale: 'Existing assessment' })))
+    await waitFor(() => expect(applicationProcess.get).toHaveBeenCalledTimes(2))
+  })
+
   it('keeps genuine edits on screen when saving them fails during exit', async () => {
     openReview(true)
     vi.mocked(applicationMode.save).mockRejectedValue(new Error('Save unavailable'))
