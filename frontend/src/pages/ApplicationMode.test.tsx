@@ -62,11 +62,33 @@ describe('Leaving an evidence review', () => {
     await waitFor(() => expect(applicationMode.save).toHaveBeenCalledTimes(1))
   })
 
-  it('explicitly saves an existing unchanged review instead of silently returning', async () => {
+  it('disables saving an unchanged review and enables it when edited', async () => {
     openReview(true)
-    fireEvent.click(await screen.findByRole('button', { name: 'Save evidence review' }))
-    await waitFor(() => expect(applicationMode.save).toHaveBeenCalledWith('app', 'concept', expect.objectContaining({ revision: 1, rationale: 'Existing assessment' })))
-    await waitFor(() => expect(applicationProcess.get).toHaveBeenCalledTimes(2))
+    const button = await screen.findByRole('button', { name: 'Save evidence review' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(applicationMode.save).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('How will you address this requirement?'), { target: { value: 'Updated assessment' } })
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    await waitFor(() => expect(applicationMode.save).toHaveBeenCalledWith('app', 'concept', expect.objectContaining({ rationale: 'Updated assessment' })))
+    await waitFor(() => expect(button.disabled).toBe(true))
+  })
+
+  it('allows explicitly reconfirming a stale review', async () => {
+    openReview(true, true)
+    const button = await screen.findByRole('button', { name: 'Save evidence review' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    await waitFor(() => expect(applicationMode.save).toHaveBeenCalledTimes(1))
+  })
+
+  it('enables saving when a new career example is entered', async () => {
+    openReview(true)
+    const button = await screen.findByRole('button', { name: 'Save evidence review' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Career example'), { target: { value: 'Another example' } })
+    expect(button.disabled).toBe(false)
   })
 
   it('keeps genuine edits on screen when saving them fails during exit', async () => {

@@ -43,6 +43,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
   const [queued, setQueued] = useState<boolean>(recoveredNote.queued ?? false)
   useEffect(() => { sessionStorage.setItem(noteKey, JSON.stringify({ text: note, id: noteId, queued })) }, [noteKey, note, noteId, queued])
   const pending = useRef<Promise<boolean> | null>(null)
+  const needsSave = dirty || item.stale || !item.decision || (!!note.trim() && !noteId)
   const update = (next: EvidenceDecision) => {
     setDecision(next); setDirty(true); setSaved(false)
     sessionStorage.setItem(draftKey, JSON.stringify({ decision: next, sources, requirement_fingerprint: recovered?.requirement_fingerprint ?? item.requirement_fingerprint }))
@@ -51,8 +52,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
     if (pending.current) return pending.current
     if (claimReview) { setError('Close the career fact review before leaving this requirement. Its draft is kept in this browser.'); return false }
     if (busy) return false
-    // Explicit Save confirms the review even when its fields are unchanged.
-    // The registered navigation guard separately skips untouched reviews.
+    if (!needsSave) return true
     setBusy(true); setError(null)
     pending.current = (async () => {
       try {
@@ -124,7 +124,7 @@ function EvidenceEditor({ applicationId, item, register, reload }: { application
       <label>Your assessment<select value={decision.disposition} onChange={e => update({ ...decision, disposition: e.target.value as Disposition })}>{Object.entries(LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>How will you address this requirement?<textarea rows={4} value={decision.rationale} onChange={e => update({ ...decision, rationale: e.target.value })} placeholder="Explain your choice, any limits, or how you will address a gap." /></label>
       <p className="secondary">An acknowledged gap does not stop you applying. Citation checks do not replace your review of the facts.</p>
-      <button className="primary" onClick={save}>{busy ? 'Saving…' : 'Save evidence review'}</button>
+      <button className="primary" disabled={busy || !needsSave} onClick={save}>{busy ? 'Saving…' : 'Save evidence review'}</button>
       <span role="status">{dirty ? 'Unsaved review — recovered in this browser until saved.' : saved || item.decision ? 'Review saved' : 'Not reviewed yet'}</span>
     </fieldset>
     <button disabled={busy || !!claimReview} onClick={() => setClaimReview({})}>Add reviewed career claim</button>
