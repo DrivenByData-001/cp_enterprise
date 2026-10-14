@@ -33,6 +33,23 @@ import {
   type SupportingStatementContent,
 } from '../lib/api'
 import { AlignmentDecisionTile } from '../components/opportunity/AlignmentSection'
+import type { Disposition } from '../lib/applicationMode'
+
+const REVIEW_LABEL: Record<Disposition, string> = { covered: 'Covered', partial: 'Partial evidence', investigate: 'Needs investigation', gap: 'Gap acknowledged' }
+
+function ApplicationEvidenceReview({ item }: { item: ApplicationEvidenceItem }) {
+  const { id } = useParams()
+  if (!item.decision) return null
+  const selected = (item.sources ?? []).filter(source => item.decision!.selected_refs.includes(source.ref))
+  return <div>
+    <p><strong>{item.stale ? 'Review needs updating' : REVIEW_LABEL[item.decision.disposition]}</strong> · Saved application review</p>
+    {item.stale && <p role="status">{item.attention_reason || 'The requirement or selected evidence changed. Review before relying on this assessment.'}</p>}
+    <p style={{ whiteSpace: 'pre-wrap' }}>{item.decision.rationale}</p>
+    {selected.length > 0 && <details><summary>Selected Profile360 evidence ({selected.length})</summary><ul>{selected.map(source => <li key={source.ref}>{source.content}</li>)}</ul></details>}
+    {selected.length < item.decision.selected_refs.length && <p>Some selected evidence is no longer available.</p>}
+    <Link to={`/applications/${id}/prepare/evidence/${item.concept.id}`}>Review this assessment</Link>
+  </div>
+}
 
 // Phase 3 (docs/34 §9): a guided preparation workspace, not another
 // analytics dump. Every structural fact here is read from the existing
@@ -615,14 +632,23 @@ function PreparationChecks({ detail, evidence }: { detail: ApplicationDetail; ev
         </CheckRow>
       )}
 
-      {evidence && (
+      {evidence && evidence.items.some(item => item.decision) && (
+        <CheckRow heading="Application evidence review">
+          {evidence.items.filter(item => item.decision?.disposition === 'covered' && !item.stale).length} covered ·{' '}
+          {evidence.items.filter(item => item.decision?.disposition === 'partial' && !item.stale).length} partial ·{' '}
+          {evidence.items.filter(item => item.decision?.disposition === 'gap' && !item.stale).length} gaps acknowledged ·{' '}
+          {evidence.items.filter(item => !item.decision || item.stale || item.decision.disposition === 'investigate').length} need review.
+          <p>Saved application judgments include their supporting claims and limitations below.</p>
+        </CheckRow>
+      )}
+      {evidence && !evidence.items.some(item => item.decision) && (
         <CheckRow heading="Evidence coverage">
           {evidence.counts.evidenced} evidenced · {evidence.counts.partial} partial · {evidence.counts.user_asserted} user
           asserted · {evidence.counts.not_found} not found.
         </CheckRow>
       )}
 
-      {evidence && (
+      {evidence && !evidence.items.some(item => item.decision) && (
         <CheckRow
           heading={pluralize(evidence.blocking_gaps.length, 'required evidence gap')}
           tone={evidence.blocking_gaps.length > 0 ? 'critical' : undefined}
@@ -633,7 +659,7 @@ function PreparationChecks({ detail, evidence }: { detail: ApplicationDetail; ev
         </CheckRow>
       )}
 
-      {evidence && (
+      {evidence && !evidence.items.some(item => item.decision) && (
         <CheckRow
           heading={`${evidence.unverified_required.length} required ${evidence.unverified_required.length === 1 ? 'capability' : 'capabilities'} not fully verified`}
           tone={evidence.unverified_required.length > 0 ? 'warning' : undefined}
@@ -670,26 +696,32 @@ function EvidenceToUse({ items }: { items: ApplicationEvidenceItem[] }) {
         Evidence to use
       </h2>
       <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
-        The strongest currently accepted evidence for each requirement. An application-only example is never presented
-        as accepted Profile360 evidence.
+        Saved application reviews show the selected Profile360 claims and what they support. Where no review exists,
+        automatic profile matching is shown. Application-only notes remain separate from Profile360 evidence.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {items.map((item) => (
           <div key={item.concept.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 14 }}>{item.concept.canonical_name}</strong>
-              <span style={{ fontSize: 14, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{STATUS_LABEL[item.status]}</span>
+              {!item.decision && <span style={{ fontSize: 14, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{STATUS_LABEL[item.status]}</span>}
             </div>
             <div className="muted" style={{ fontSize: 14, marginTop: 2 }}>
               {item.role_requirement_reviewed ? 'Reviewed requirement' : 'Legacy role extraction — not human-reviewed'}
               {` · ${item.role_side.requirement_type}`}
             </div>
-            <p className="secondary" style={{ fontSize: 14, margin: '4px 0 0' }}>
+            {item.decision ? <>
+              <ApplicationEvidenceReview item={item} />
+              <details><summary>Automatic profile match (separate from the application review)</summary>
+                <p>This matcher uses profile concept links and structured ratings. Missing links or ratings do not establish an absence of experience.</p>
+                <p>{STATUS_LABEL[item.status]}: {personSideSummary(item)}</p>
+              </details>
+            </> : <p className="secondary" style={{ fontSize: 14, margin: '4px 0 0' }}>
               {personSideSummary(item)}
-            </p>
+            </p>}
             {item.notes.length > 0 && (
               <p style={{ fontSize: 14, margin: '4px 0 0', color: 'var(--series-1)' }}>
-                Application-only example added ({item.notes.length}) — does not change the status above.
+                Application-only example added ({item.notes.length}) — separate from the evidence assessment.
               </p>
             )}
           </div>
@@ -772,7 +804,11 @@ function GapsAndUncertainties({
   const notesByConcept = new Map<string, ApplicationNote[]>()
   for (const item of evidence.items) notesByConcept.set(item.concept.id, item.notes)
 
-  const hasGaps = evidence.blocking_gaps.length > 0 || evidence.unverified_required.length > 0
+  const reviewedIds = new Set(evidence.items.filter(item => item.decision).map(item => item.concept.id))
+  const reviewedGaps = evidence.items.filter(item => item.decision && (item.stale || item.decision.disposition !== 'covered'))
+  const blocking = evidence.blocking_gaps.filter(gap => !reviewedIds.has(gap.id))
+  const unverified = evidence.unverified_required.filter(gap => !reviewedIds.has(gap.id))
+  const hasGaps = reviewedGaps.length > 0 || blocking.length > 0 || unverified.length > 0
 
   return (
     <section className="card" aria-labelledby="gaps-h">
@@ -780,7 +816,10 @@ function GapsAndUncertainties({
         Gaps and uncertainties
       </h2>
       {!hasGaps && <p className="muted">No required gaps or unverified requirements right now.</p>}
-      {evidence.blocking_gaps.map((gap) => (
+      {reviewedGaps.map(item => <div key={item.concept.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+        <strong>{item.concept.canonical_name}</strong><ApplicationEvidenceReview item={item} />
+      </div>)}
+      {blocking.map((gap) => (
         <GapRow
           key={gap.id}
           concept={gap}
@@ -791,7 +830,7 @@ function GapsAndUncertainties({
           busy={busy}
         />
       ))}
-      {evidence.unverified_required.map((gap) => (
+      {unverified.map((gap) => (
         <GapRow
           key={gap.id}
           concept={gap}
