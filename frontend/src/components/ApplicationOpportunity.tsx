@@ -57,7 +57,7 @@ export default function ApplicationOpportunity({ id, data, register, onSaved }: 
         <button onClick={() => { setItems(prev => prev.filter((_, i) => i !== index)); setDirty(true) }}>Remove material</button>
       </article>)}
       <button onClick={() => { setItems(prev => [...prev, { id: crypto.randomUUID(), kind: 'cv', label: 'CV', required: true, word_limit: null, instructions: '' }]); setDirty(true) }}>Add package item</button>
-      <div className="actions"><button onClick={() => save()}>Save opportunity changes</button><button className="primary" onClick={() => save(true)}>Confirm opportunity & package</button></div>
+      <div className="actions"><button disabled={!dirty} onClick={() => save()}>Save opportunity changes</button><button className="primary" disabled={!dirty && data.stages.opportunity === 'complete'} onClick={() => save(true)}>Confirm opportunity & package</button></div>
     </fieldset><p role="status">{dirty ? 'Unsaved changes — recoverable in this browser' : notice || 'Saved opportunity details'}</p>
   </section>
 }

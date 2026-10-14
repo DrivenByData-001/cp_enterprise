@@ -1088,12 +1088,12 @@ describe('Application stage navigation', () => {
   it('keeps unsaved evidence drafts when switching between stages', async () => {
     renderWorkspace(makeDetail(), makeEvidence({ blocking_gaps: [{ id: 'c1', canonical_name: 'Python', type_code: 'tool' }] }))
     await screen.findByRole('heading', { name: 'Head of Capital' })
-    fireEvent.click(screen.getByRole('link', { name: 'Evidence' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Evidence summary' }))
     fireEvent.click(screen.getByText('Add an example for this application'))
     fireEvent.change(screen.getByPlaceholderText(/Describe an example/), { target: { value: 'Unsaved project example' } })
-    fireEvent.click(screen.getByRole('link', { name: 'Documents' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Positioning & documents' }))
     expect(screen.queryByRole('heading', { name: 'Gaps and uncertainties' })).toBeNull()
-    fireEvent.click(screen.getByRole('link', { name: 'Evidence' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Evidence summary' }))
     expect((screen.getByPlaceholderText(/Describe an example/) as HTMLTextAreaElement).value).toBe('Unsaved project example')
     expect(api.getApplicationEvidence).toHaveBeenCalledTimes(1)
     expect(api.createApplicationNote).not.toHaveBeenCalled()
@@ -1365,4 +1365,17 @@ describe('Artifact mutation → UI state reconciliation', () => {
     expect(api.generateApplicationArtifact).toHaveBeenCalledWith('app-1', type, expect.anything())
     await waitFor(() => expect(api.getApplicationArtifacts).toHaveBeenCalledTimes(2))
   })
+})
+
+it('shows actionable generation blockers and prevents a failing generation request', async () => {
+  const artifacts = makeArtifactsResponse()
+  artifacts.generation_readiness = { ready: false, blockers: [{ stage: 'requirements', label: 'Confirm the requirement set', href: '/applications/app-1/prepare/requirements' }] }
+  renderWorkspace(makeDetail(), makeEvidence(), artifacts)
+  const links = await screen.findAllByRole('link', { name: /Confirm the requirement set/ })
+  expect(links[0].getAttribute('href')).toBe('/applications/app-1/prepare/requirements')
+  const section = links[0].closest('section') as HTMLElement
+  const generate = within(section).getByRole('button', { name: 'Generate', hidden: true }) as HTMLButtonElement
+  expect(generate.disabled).toBe(true)
+  fireEvent.click(generate)
+  expect(api.generateApplicationArtifact).not.toHaveBeenCalled()
 })

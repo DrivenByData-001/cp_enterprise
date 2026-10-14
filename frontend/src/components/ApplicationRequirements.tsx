@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Concept, type ConceptType, type RequirementClaim } from '../lib/api'
-import { applicationProcess, type ProcessData, type ScopedProposal, type StageSave, type RequirementClassification } from '../lib/applicationProcess'
+import { applicationProcess, type MissingRequirement, type ProcessData, type ScopedProposal, type StageSave, type RequirementClassification } from '../lib/applicationProcess'
 import { RequirementCard, AddRequirementForm, ConceptPicker } from '../pages/RoleRequirements'
 
 function VocabularyIssue({ id, proposal, done, busy, onBusyChange }: { id: string; proposal: ScopedProposal; done: () => Promise<void>; busy: boolean; onBusyChange: (busy: boolean) => void }) {
@@ -38,6 +38,7 @@ function VocabularyIssue({ id, proposal, done, busy, onBusyChange }: { id: strin
 }
 
 export default function ApplicationRequirements({ id, data, register, reload }: { id: string; data: ProcessData; register: (save: StageSave) => void; reload: () => Promise<void> }) {
+  const [missing, setMissing] = useState<MissingRequirement[]>([])
   const [claims, setClaims] = useState<RequirementClaim[]>([])
   const [proposals, setProposals] = useState<ScopedProposal[]>([])
   const [classification, setClassification] = useState<RequirementClassification | null>(null)
@@ -50,6 +51,7 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
   const load = useCallback(async () => {
     const [requirements, vocabulary] = await Promise.all([api.listRequirements(data.role.id), applicationProcess.proposals(id)])
     setClaims(requirements.items); setProposals(vocabulary.items)
+    setMissing(vocabulary.missing_requirements ?? [])
     setClassification(vocabulary.classification ?? null)
   }, [id, data.role.id])
   useEffect(() => { load().catch(e => setError(String(e))).finally(() => setLoading(false)) }, [load])
@@ -90,8 +92,8 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
     {!loading && !claims.length && <p>No reviewed requirement set yet. Extract from the posting or add a requirement supported by its text.</p>}
     {adding ? <AddRequirementForm roleId={data.role.id} busy={busy} onBusyChange={setBusy} onAdded={claim => { setClaims(prev => [...prev, claim]); setAdding(false); void reload().catch(e => setError(String(e))) }} onCancel={() => setAdding(false)} registerSave={registerSave} /> : <button disabled={busy} onClick={() => setAdding(true)}>Add requirement</button>}
     {proposals.length > 0 && <section aria-label="Vocabulary for this role"><h3>Vocabulary needing resolution</h3>{proposals.map(p => <VocabularyIssue key={p.id} id={id} proposal={p} done={reloadAll} busy={busy} onBusyChange={setBusy} />)}</section>}
-    {data.review_summary.needs_reextraction > 0 && <p className="mode-notice">Some resolved terms need another extraction before their requirements can be reviewed.</p>}
+    {data.review_summary.needs_reextraction > 0 && <div className="mode-notice"><p>These resolved terms have no requirement record yet:</p><ul>{missing.map((term, index) => <li key={index}>“{term.surface_form}” — {term.recoverable ? 'Original extraction available for review.' : 'Source details are incomplete or out of date. Extract again or add a requirement with supporting text.'}</li>)}</ul>{missing.some(term => term.recoverable) && <button disabled={busy || loading} onClick={() => run(() => applicationProcess.recoverRequirements(id))}>Restore requirements for review</button>}<p>Restored requirements still need your acceptance before confirming this set.</p></div>}
     <p>{data.review_summary.unreviewed} requirements need review; {proposals.length} vocabulary proposals remain.</p>
-    <button className="primary" disabled={busy || loading} onClick={() => run(() => applicationProcess.confirmRequirements(id, data.requirements_fingerprint))}>Confirm requirement set</button>
+    <button className="primary" disabled={busy || loading || !data.review_summary.complete || data.stages.requirements === 'complete'} onClick={() => run(() => applicationProcess.confirmRequirements(id, data.requirements_fingerprint))}>Confirm requirement set</button>
   </section>
 }

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from .. import application_mode as mode, application_process as process
 from ..db import db_cursor, to_json_param, update_role_metadata
 from ..models import RoleMetadataUpdate
+from ..role_requirements import missing_resolved_requirements, resolve_occurrences_for_concept
 from ..vocabulary_curation import resolve_surface_form_group
 from ..requirement_scope import pending_requirement_proposals, classification_snapshots
 
@@ -130,7 +131,7 @@ def list_scoped_vocabulary(application_id: UUID):
         app = mode.application(cur, str(application_id))
         role_id = str(app['role_instance_id'])
         snapshot = classification_snapshots(cur, [role_id]).get(role_id)
-        return {'items': proposals(cur, role_id), 'classification': snapshot}
+        return {'items': proposals(cur, role_id), 'classification': snapshot, 'missing_requirements': missing_resolved_requirements(cur, role_id)}
 
 
 class VocabularyResolution(BaseModel):
@@ -163,3 +164,18 @@ def resolve_scoped_vocabulary(application_id: UUID, proposal_id: UUID, payload: 
             canonical_name=payload.canonical_name.strip() if payload.canonical_name else None,
             definition=payload.definition, concept_id=str(payload.concept_id) if payload.concept_id else None)
         return {'status': status, 'concept_id': concept}
+
+
+@router.post('/{application_id}/process/requirements/recover')
+def recover_requirements(application_id: UUID):
+    with db_cursor() as cur:
+        app = mode.application(cur, str(application_id), lock=True)
+        role_id = str(app['role_instance_id'])
+        cur.execute('SELECT id FROM jobber.role_instance WHERE id=%s FOR UPDATE', (role_id,))
+        created = 0
+        for item in missing_resolved_requirements(cur, role_id):
+            if item['recoverable']:
+                result = resolve_occurrences_for_concept(cur, [str(item['proposal_id'])],
+                    str(item['resolved_concept_id']), role_id=role_id)
+                created += result['claims_created']
+        return {'claims_created': created}

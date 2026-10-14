@@ -51,7 +51,7 @@ describe('Leaving an evidence review', () => {
   it('returns to the workspace from an untouched stale review without reconfirming it', async () => {
     openReview(true, true)
     await screen.findByRole('heading', { name: 'Analysis' })
-    fireEvent.click(screen.getByRole('button', { name: 'Return to workspace' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Application summary' }))
     await screen.findByRole('heading', { name: 'Application workspace' })
     expect(applicationMode.save).not.toHaveBeenCalled()
   })

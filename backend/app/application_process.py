@@ -40,16 +40,31 @@ def checkpoints(cur, application_id):
     return app, saved, comparison, accepted, opportunity, requirements, opportunity_current, requirements_current
 
 
-def require_current_checkpoints(cur, application_id):
-    # Existing workspace-only applications retain their previous behaviour.
+def generation_readiness(cur, application_id):
+    blockers = []
+    def block(stage, label):
+        blockers.append({'stage': stage, 'label': label,
+                         'href': f'/applications/{application_id}/prepare/{stage}'})
+    # Preserve the existing policy for applications that have not started preparation.
     if not preparation(cur, application_id)['revision']:
-        return
-    _, _, comparison, accepted, _, _, opportunity_current, requirements_current = checkpoints(cur, application_id)
-    if not opportunity_current or not requirements_current:
-        raise HTTPException(409, 'Review and confirm Opportunity and Requirements in Application Mode before generating')
+        return {'ready': True, 'blockers': []}
+    _, _, comparison, accepted, _, _, opp_ok, req_ok = checkpoints(cur, application_id)
+    if not opp_ok:
+        block('opportunity', 'Review and confirm the current opportunity and package')
+    if not req_ok:
+        block('requirements', 'Review outstanding requirements and confirm the requirement set')
     items, _ = mode.reviewed_items(cur, application_id, {**comparison, 'items': accepted})
-    if not items or any(not i['decision'] or i['stale'] or i['decision']['disposition'] == 'investigate' for i in items):
-        raise HTTPException(409, 'Complete the current evidence reviews before generating')
+    pending = [i for i in items if not i['decision'] or i['stale'] or i['decision']['disposition'] == 'investigate']
+    if pending or not items:
+        block('evidence', f'Review and save {len(pending)} outstanding evidence assessments' if pending
+              else 'Review evidence after accepting the requirements')
+    return {'ready': not blockers, 'blockers': blockers}
+
+
+def require_current_checkpoints(cur, application_id):
+    readiness = generation_readiness(cur, application_id)
+    if not readiness['ready']:
+        raise HTTPException(409, 'Before generating: ' + '; '.join(b['label'] for b in readiness['blockers']))
 
 
 def downstream_states(cur, application_id, upstream_current):
