@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import application_events as events
 from .. import application_learning as learning
+from .. import application_mode as mode
 from ..comparison_service import build_role_comparison
 from ..db import db_cursor
 from ..models import ApplicationEventInput, ApplicationEventUpdate
@@ -361,10 +362,16 @@ def get_application_evidence(application_id: UUID):
     `role_skill_observation` fallback — so a consumer can tell an accepted
     role requirement apart from unreviewed legacy extraction without
     re-deriving that distinction itself.
+
+    Saved application decisions, selected sources and staleness come from
+    the same reviewed_items loader as Application Mode. Structural matcher
+    statuses/counts remain separate; a curated selection is not a global
+    profile capability-rating change.
     """
     with db_cursor() as cur:
         application = _require_application(cur, application_id)
         comparison = build_role_comparison(cur, str(application["role_instance_id"]))
+        reviewed, _ = mode.reviewed_items(cur, str(application_id), comparison)
         notes = _notes_for_application(cur, application_id)
 
     notes_by_concept: dict[str, list[dict]] = {}
@@ -378,7 +385,7 @@ def get_application_evidence(application_id: UUID):
             "role_requirement_reviewed": item["role_side"]["requirement_source"] == "claim",
             "notes": notes_by_concept.get(item["concept"]["id"], []),
         }
-        for item in comparison["items"]
+        for item in reviewed
     ]
 
     return {

@@ -1207,6 +1207,10 @@ export type ApplicationDetail = {
 export type ApplicationEvidenceItem = ComparisonItem & {
   role_requirement_reviewed: boolean
   notes: ApplicationNote[]
+  decision?: import('./applicationMode').EvidenceDecision | null
+  sources?: import('./applicationMode').EvidenceSource[]
+  stale?: boolean
+  attention_reason?: string | null
 }
 
 export type ApplicationEvidence = {

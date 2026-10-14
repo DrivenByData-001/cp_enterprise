@@ -361,6 +361,34 @@ describe('Preparation checks', () => {
 })
 
 describe('Evidence to use', () => {
+  it.each(['covered', 'partial', 'gap', 'investigate'] as const)('shows the saved %s review despite an empty automatic match', async disposition => {
+    renderWorkspace(makeDetail(), makeEvidence({
+      blocking_gaps: [{ id: 'c1', canonical_name: 'Python', type_code: 'tool' }],
+      items: [makeItem({ status: 'not_found',
+        decision: { disposition, selected_refs: ['profile_claim:claim-1'], rationale: 'Reviewed delivery example with limits.', revision: 2 },
+        sources: [{ ref: 'profile_claim:claim-1', kind: 'profile_claim', label: 'Delivery', content: 'Led reporting delivery and handover.', source_revision: 'v1', episode_id: null }], stale: false,
+      })],
+    }))
+    const section = (await screen.findByRole('heading', { name: 'Evidence to use' })).closest('section') as HTMLElement
+    expect(within(section).getByText('Reviewed delivery example with limits.')).toBeTruthy()
+    expect(within(section).getByText('Led reporting delivery and handover.')).toBeTruthy()
+    expect(within(section).getByText('Review this assessment').closest('a')?.getAttribute('href')).toBe('/applications/app-1/prepare/evidence/c1')
+    const gaps = screen.getByRole('heading', { name: 'Gaps and uncertainties' }).closest('section') as HTMLElement
+    expect(within(gaps).queryByText(/No accepted evidence found/)).toBeNull()
+    expect(within(gaps).queryByText('Reviewed delivery example with limits.') !== null).toBe(disposition !== 'covered')
+  })
+
+  it('flags a stale covered review rather than presenting it as current coverage', async () => {
+    renderWorkspace(makeDetail(), makeEvidence({ items: [makeItem({
+      decision: { disposition: 'covered', selected_refs: ['profile_claim:missing'], rationale: 'Previously reviewed.', revision: 2 },
+      sources: [], stale: true, attention_reason: 'Selected evidence changed.',
+    })] }))
+    const section = (await screen.findByRole('heading', { name: 'Evidence to use' })).closest('section') as HTMLElement
+    expect(within(section).getByText('Review needs updating')).toBeTruthy()
+    expect(within(section).getByText('Selected evidence changed.')).toBeTruthy()
+    expect(within(section).getByText('Some selected evidence is no longer available.')).toBeTruthy()
+  })
+
   it('shows the strongest available evidence and flags legacy vs reviewed requirements', async () => {
     renderWorkspace(
       makeDetail(),
