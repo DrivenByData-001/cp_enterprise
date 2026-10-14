@@ -1571,12 +1571,14 @@ function resolveArtifactView(requested: ArtifactView, active: unknown, draft: un
 
 function ArtifactStageCard({
   applicationId,
+  readiness,
   artifactType,
   active,
   draft,
   onApplyChange,
   onRefresh,
 }: {
+  readiness?: ApplicationArtifactsResponse['generation_readiness']
   applicationId: string
   artifactType: ArtifactType
   active: ApplicationArtifact | null
@@ -1770,6 +1772,7 @@ function ArtifactStageCard({
 
       {!editing && (
         <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <div>{readiness?.blockers.map(blocker => <p key={blocker.stage}><Link to={blocker.href}>{blocker.label} →</Link></p>)}</div>
           <details>
             <summary style={{ fontSize: 14, cursor: 'pointer' }}>{active || draft ? 'Regenerate' : 'Generate'} with optional guidance</summary>
             <div style={{ marginTop: 6 }}>
@@ -1790,7 +1793,7 @@ function ArtifactStageCard({
                 onChange={(e) => setTargetWords(e.target.value)}
               />
               <div className="actions" style={{ marginTop: 6 }}>
-                <button type="button" className="primary" disabled={busy} onClick={handleGenerate} style={{ fontSize: 14, padding: '3px 8px' }}>
+                <button type="button" className="primary" disabled={busy || readiness?.ready === false} onClick={handleGenerate} style={{ fontSize: 14, padding: '3px 8px' }}>
                   {busy ? 'Generating…' : active || draft ? 'Regenerate' : 'Generate'}
                 </button>
               </div>
@@ -1825,14 +1828,14 @@ function ApplicationPackageSection({
         Application package
       </h2>
       <GenerationContextCard evidence={evidence} hasAdoptedPositioning={Boolean(artifacts.positioning.active)} />
-      <ArtifactStageCard applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
-      <ArtifactStageCard applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
+      <ArtifactStageCard readiness={artifactsData.generation_readiness} applicationId={applicationId} artifactType="positioning" active={artifacts.positioning.active} draft={artifacts.positioning.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
+      <ArtifactStageCard readiness={artifactsData.generation_readiness} applicationId={applicationId} artifactType="cv" active={artifacts.cv.active} draft={artifacts.cv.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
       <h3 style={{ fontSize: 15, marginTop: 16 }}>Supporting material</h3>
       <p className="muted" style={{ fontSize: 14, marginTop: 0 }}>
         Optional — generate either or both only if this application needs them.
       </p>
-      <ArtifactStageCard applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
-      <ArtifactStageCard
+      <ArtifactStageCard readiness={artifactsData.generation_readiness} applicationId={applicationId} artifactType="cover_letter" active={artifacts.cover_letter.active} draft={artifacts.cover_letter.draft} onApplyChange={onApplyChange} onRefresh={onRefresh} />
+      <ArtifactStageCard readiness={artifactsData.generation_readiness}
         applicationId={applicationId}
         artifactType="supporting_statement"
         active={artifacts.supporting_statement.active}
@@ -2301,7 +2304,7 @@ export default function ApplicationWorkspace() {
       <Link to={returnTo.current} className="muted" style={{ fontSize: 14 }}>
         ← Back to applications
       </Link>
-      <Link to={`/applications/${id}/prepare?resume=1`} className="button primary" style={{ marginLeft: 16 }}>Continue evidence in Application Mode</Link>
+      <Link to={`/applications/${id}/prepare?resume=1`} className="button primary" style={{ marginLeft: 16 }}>Continue application review</Link>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: 12, flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -2343,9 +2346,12 @@ export default function ApplicationWorkspace() {
       </p>
 
       <nav className="workspace-stages" aria-label="Application stages">
-        {stages.map((name, index) => <Link key={name} to={{ pathname: location.pathname, search: (() => { const p = new URLSearchParams(stageParams); p.set('section', name); return p.toString() })() }}
+        <Link to={`/applications/${id}/prepare/opportunity`}>Opportunity</Link>
+        <Link to={`/applications/${id}/prepare/requirements`}>Requirements</Link>
+        <Link to={`/applications/${id}/prepare/evidence`}>Review evidence</Link>
+        {stages.map((name) => <Link key={name} to={{ pathname: location.pathname, search: (() => { const p = new URLSearchParams(stageParams); p.set('section', name); return p.toString() })() }}
           state={{ returnTo: returnTo.current }} aria-current={stage === name ? 'page' : undefined}>
-          {name !== 'all' && <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>}{name === 'all' ? 'All sections' : name.charAt(0).toUpperCase() + name.slice(1)}
+          {name === 'all' ? 'All sections' : name === 'documents' ? 'Positioning & documents' : name === 'evidence' ? 'Evidence summary' : name.charAt(0).toUpperCase() + name.slice(1)}
         </Link>)}
       </nav>
       <p className="stage-help">{stage === 'overview' ? 'Start with your preparation checks, then gather examples in Evidence.' : stage === 'evidence' ? 'Bring together the examples and experience you want to draw on. Draft edits stay here when you switch stages.' : stage === 'documents' ? 'Prepare and review your application materials before using them.' : stage === 'interviews' ? 'Keep your interview preparation, dates and reflections together.' : 'Your complete workspace, in one view.'}</p>

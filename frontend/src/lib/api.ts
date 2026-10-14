@@ -1412,6 +1412,7 @@ export type InterviewGenerationContextSummary = GenerationContextSummary & {
 }
 
 export type ApplicationArtifactsResponse = {
+  generation_readiness?: { ready: boolean; blockers: { stage: string; label: string; href: string }[] }
   application_id: string
   artifacts: Record<ArtifactType, ArtifactTypeState>
   generation_context: GenerationContextSummary

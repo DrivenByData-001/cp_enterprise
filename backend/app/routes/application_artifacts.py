@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import application_artifacts as artifacts
 from ..application_generation import ApplicationGenerationSubjectError
+from ..application_process import generation_readiness
 from ..db import db_cursor
 from ..models import ApplicationArtifactEditRequest, ApplicationArtifactGenerateRequest
 
@@ -21,7 +22,9 @@ def read_artifacts(application_id: str):
     on load (build §13/§20)."""
     with db_cursor() as cur:
         try:
-            return artifacts.list_artifacts(cur, application_id)
+            result = artifacts.list_artifacts(cur, application_id)
+            result['generation_readiness'] = generation_readiness(cur, str(application_id))
+            return result
         except ApplicationGenerationSubjectError as e:
             raise HTTPException(404, str(e)) from e
 

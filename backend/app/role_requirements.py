@@ -363,7 +363,7 @@ def requirement_type_rank_sql(column_expr: str) -> str:
     )
 
 
-def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_concept_id: str) -> dict:
+def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_concept_id: str, *, role_id: str | None = None) -> dict:
     """Called immediately after concept_proposal rows (`proposal_ids`) resolve
     to `resolved_concept_id`. For every role that ever produced one of these
     proposals (concept_proposal_occurrence, migration 0021), exactly one of
@@ -411,11 +411,15 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
         FROM jobber.concept_proposal_occurrence o
         JOIN jobber.concept_proposal cp ON cp.id=o.concept_proposal_id
         WHERE o.concept_proposal_id = ANY(%s::uuid[])
+        {"AND o.role_instance_id = %s AND o.document_id = (SELECT document_id FROM jobber.role_instance WHERE id = %s)" if role_id else ""}
         ORDER BY o.role_instance_id, {requirement_type_rank_sql("o.requirement_type")}, o.created_at
         """,
-        (proposal_ids,),
+        (proposal_ids, role_id, role_id) if role_id else (proposal_ids,),
     )
     occurrences = filter_classified_occurrences(cur, [dict(row) for row in cur.fetchall()])
+    if role_id:
+        occurrences = [o for o in occurrences if o['requirement_type'] and o['basis'] and
+                       (o['basis'] not in ('stated', 'implied') or o['evidence_span'])]
     seen_roles = set()
     claims_created = already_covered = needs_reextraction = 0
     for occ in occurrences:
@@ -487,3 +491,16 @@ _ROLES_NEEDING_REEXTRACTION_SQL = """
             AND rc.superseded_by IS NULL
       )
 """
+
+
+def missing_resolved_requirements(cur, role_id):
+    cur.execute(_ROLES_NEEDING_REEXTRACTION_SQL.replace(
+        'SELECT o.role_instance_id, cp.resolved_concept_id, cp.surface_form',
+        'SELECT o.role_instance_id, cp.resolved_concept_id, cp.surface_form, cp.id AS proposal_id, '
+        'o.requirement_type, o.basis, o.evidence_span, o.document_id, '
+        '(SELECT document_id FROM jobber.role_instance WHERE id=o.role_instance_id) AS current_document_id'),
+        (['accepted_new', 'accepted_alias'], [role_id]))
+    rows = filter_classified_occurrences(cur, [dict(row) for row in cur.fetchall()])
+    return [{**row, 'recoverable': bool(row['requirement_type'] and row['basis'] and
+             row['document_id'] == row['current_document_id'] and
+             (row['basis'] not in ('stated', 'implied') or row['evidence_span']))} for row in rows]
