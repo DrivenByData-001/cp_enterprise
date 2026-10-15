@@ -75,11 +75,11 @@ describe('Applications index — populated', () => {
     expect(pastSection.textContent).toContain('Withdrawn Role')
   })
 
-  it('provides Open application, View opportunity and Browse opportunities', async () => {
+  it('provides Application summary, View opportunity and Browse opportunities', async () => {
     vi.mocked(api.listApplications).mockResolvedValue(listResponse([item()]))
     renderPage()
     await screen.findByText('Head of Capital')
-    const open = screen.getByText('Open application').closest('a') as HTMLAnchorElement
+    const open = screen.getByRole('link', { name: 'Application summary' }) as HTMLAnchorElement
     expect(open.getAttribute('href')).toBe('/applications/app-1')
     const view = screen.getByText('View opportunity').closest('a') as HTMLAnchorElement
     expect(view.getAttribute('href')).toBe('/roles/role-1?application=app-1')
