@@ -28,7 +28,7 @@ def test_blockers_link_to_exact_steps_and_guard_uses_same_policy():
 def test_recovery_is_scoped_and_creates_unreviewed_with_provenance():
     cur = MagicMock()
     occurrence = dict(role_instance_id='role', document_id='doc', extraction_run_id='run',
-                      requirement_type='required', basis='stated', evidence_span='source text')
+                      requirement_type='required', basis='stated', evidence_span='source text', source_text='The source text is here.')
     cur.fetchall.return_value = [occurrence]
     cur.fetchone.side_effect = [None, {'id': 'new'}]
     with patch.object(requirements, 'filter_classified_occurrences', side_effect=lambda cur, rows: rows):
@@ -43,7 +43,7 @@ def test_recovery_is_scoped_and_creates_unreviewed_with_provenance():
 
 def test_recovery_preserves_current_rejection():
     cur = MagicMock()
-    cur.fetchall.return_value = [dict(role_instance_id='role', requirement_type='required', basis='stated', evidence_span='source')]
+    cur.fetchall.return_value = [dict(role_instance_id='role', requirement_type='required', basis='stated', evidence_span='source', source_text='source')]
     cur.fetchone.return_value = {'exists': True}
     with patch.object(requirements, 'filter_classified_occurrences', side_effect=lambda cur, rows: rows):
         result = requirements.resolve_occurrences_for_concept(cur, ['p'], 'c', role_id='role')
@@ -58,3 +58,8 @@ def test_recovery_skips_incomplete_occurrences():
         result = requirements.resolve_occurrences_for_concept(cur, ['p'], 'c', role_id='role')
     assert result['claims_created'] == 0
     assert cur.execute.call_count == 1
+
+@pytest.mark.parametrize('source, expected', [('Manage multiple tasks', True), ('Manage   multiple tasks', True), ('Different posting', False), ('', False)])
+def test_recovery_requires_quote_still_in_source(source, expected):
+    row = dict(requirement_type='required', basis='stated', evidence_span='Manage multiple tasks', source_text=source)
+    assert requirements.recoverable_occurrence(row) is expected
