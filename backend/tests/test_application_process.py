@@ -180,3 +180,33 @@ def test_existing_location_proposal_does_not_interrupt_application(client, monke
                     'WHERE id=%s', (document,))
     assert len(client.get(base + '/vocabulary').json()['items']) == 1
     assert client.get(base).json()['review_summary']['unresolved_proposals'] == 1
+
+@pytest.mark.parametrize('decision', [None, 'rejected', 'corrected'])
+def test_reconciliation_restores_once_and_preserves_prior_decisions(client, decision):
+    app, _, _ = seed(client)
+    base = f'/api/applications/{app}/process'
+    role = client.get(base).json()['role']['id']
+    with db.db_cursor() as cur:
+        concept = _concept(cur, 'Task management')
+        document, _ = db.create_document(cur, kind='job_posting', content_text='Managing multiple tasks is required.', provenance_quality='original')
+        cur.execute('UPDATE jobber.role_instance SET document_id=%s WHERE id=%s', (document, role))
+        cur.execute("INSERT INTO jobber.concept_proposal(surface_form,status,resolved_concept_id) VALUES ('managing multiple tasks','accepted_alias',%s) RETURNING id", (concept,))
+        proposal = cur.fetchone()['id']
+        cur.execute("INSERT INTO jobber.concept_proposal_occurrence (concept_proposal_id,role_instance_id,document_id,basis,evidence_span,requirement_type) VALUES (%s,%s,%s,'stated','Managing multiple tasks is required.','required')", (proposal, role, document))
+        if decision:
+            cur.execute("INSERT INTO jobber.requirement_claim (role_instance_id,concept_id,requirement_type,basis,review_status) VALUES (%s,%s,'required','user_asserted',%s)", (role, concept, decision))
+        if decision == 'corrected':
+            cur.execute("UPDATE jobber.requirement_claim SET superseded_by=(SELECT id FROM jobber.requirement_claim WHERE role_instance_id=%s AND concept_id<>%s LIMIT 1) WHERE role_instance_id=%s AND concept_id=%s", (role, concept, role, concept))
+    response = client.post(base + '/requirements/reconcile')
+    assert response.status_code == 200, response.text
+    assert response.json()['claims_created'] == (0 if decision else 1)
+    assert client.post(base + '/requirements/reconcile').json()['claims_created'] == 0
+    with db.db_cursor() as cur:
+        cur.execute('SELECT review_status,evidence_span FROM jobber.requirement_claim WHERE role_instance_id=%s AND concept_id=%s', (role, concept))
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0]['review_status'] == (decision or 'unreviewed')
+    if not decision:
+        assert rows[0]['evidence_span'] == 'Managing multiple tasks is required.'
+        assert response.json()['process']['review_summary']['unreviewed'] == 1
+    assert client.get(base + '/vocabulary').json()['missing_requirements'] == []

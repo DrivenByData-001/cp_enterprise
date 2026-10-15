@@ -10,7 +10,15 @@ export type ScopedProposal = { id: string; surface_form: string; suggested_type:
 export type ClassifiedStatement = { category: 'professional_requirement' | 'eligibility_condition' | 'role_metadata' | 'irrelevant'; surface_form: string; classification_reason: string; evidence_span: string }
 export type RequirementClassification = { statements: ClassifiedStatement[]; created_at: string }
 export type MissingRequirement = { surface_form: string; recoverable: boolean }
+// Keep protocol details out of application review messages.
+export function reviewError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const body = message.replace(/^\d{3}\s*:\s*/, '')
+  try { const parsed = JSON.parse(body); if (typeof parsed.detail === 'string') return parsed.detail } catch { /* Plain-text error. */ }
+  return body
+}
 export const applicationProcess = {
+  reconcileRequirements: (id: string) => req<{ claims_created: number; process: ProcessData }>(`/applications/${id}/process/requirements/reconcile`, { method: 'POST' }),
   recoverRequirements: (id: string) => req(`/applications/${id}/process/requirements/recover`, { method: 'POST' }),
   get: (id: string) => req<ProcessData>(`/applications/${id}/process`),
   opportunity: (id: string, body: { revision: number; target_revision: string; metadata: RoleMetadataInput; deadline: string | null; package_items: PackageItem[]; confirm: boolean }) => req<ProcessData>(`/applications/${id}/process/opportunity`, { method: 'PUT', body: JSON.stringify(body) }),

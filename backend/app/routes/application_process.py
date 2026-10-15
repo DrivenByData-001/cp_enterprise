@@ -89,7 +89,18 @@ def confirm_requirements(application_id: UUID, payload: CheckpointInput):
         if payload.fingerprint != req_fp:
             raise HTTPException(409, 'Requirements changed. Reload before confirming')
         if not accepted or not comparison['review_summary']['complete']:
-            raise HTTPException(409, 'Review the requirements and resolve pending vocabulary first')
+            summary = comparison['review_summary']
+            remaining = []
+            if summary['unreviewed']:
+                remaining.append(f"Review {summary['unreviewed']} outstanding requirements")
+            if summary['unresolved_proposals']:
+                remaining.append(f"Choose meanings for {summary['unresolved_proposals']} terms")
+            if summary['needs_reextraction']:
+                terms = sorted({r['surface_form'] for r in missing_resolved_requirements(cur, str(app['role_instance_id']))})
+                remaining.append('Check source information for: ' + ', '.join(terms))
+            if not accepted:
+                remaining.append('Accept at least one requirement supported by the posting')
+            raise HTTPException(409, '. '.join(remaining))
         cur.execute('INSERT INTO jobber.application_preparation (application_id, requirements_fingerprint) VALUES (%s,%s) '
                     'ON CONFLICT (application_id) DO UPDATE SET requirements_fingerprint=EXCLUDED.requirements_fingerprint, '
                     'revision=application_preparation.revision+1, updated_at=now()', (str(application_id), req_fp))
@@ -166,6 +177,7 @@ def resolve_scoped_vocabulary(application_id: UUID, proposal_id: UUID, payload: 
         return {'status': status, 'concept_id': concept}
 
 
+@router.post('/{application_id}/process/requirements/reconcile')
 @router.post('/{application_id}/process/requirements/recover')
 def recover_requirements(application_id: UUID):
     with db_cursor() as cur:
@@ -178,4 +190,5 @@ def recover_requirements(application_id: UUID):
                 result = resolve_occurrences_for_concept(cur, [str(item['proposal_id'])],
                     str(item['resolved_concept_id']), role_id=role_id)
                 created += result['claims_created']
-        return {'claims_created': created}
+        # Return the new fingerprint with the repaired set, never auto-confirm it.
+        return {'claims_created': created, 'process': process.process_view(cur, str(application_id))}

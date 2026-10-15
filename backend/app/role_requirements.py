@@ -408,6 +408,7 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
         SELECT cp.surface_form,
                o.role_instance_id, o.document_id, o.extraction_run_id,
                o.requirement_type, o.basis, o.evidence_span
+               {", (SELECT d.content_text FROM jobber.document d WHERE d.id=o.document_id) AS source_text" if role_id else ""}
         FROM jobber.concept_proposal_occurrence o
         JOIN jobber.concept_proposal cp ON cp.id=o.concept_proposal_id
         WHERE o.concept_proposal_id = ANY(%s::uuid[])
@@ -418,8 +419,7 @@ def resolve_occurrences_for_concept(cur, proposal_ids: list[str], resolved_conce
     )
     occurrences = filter_classified_occurrences(cur, [dict(row) for row in cur.fetchall()])
     if role_id:
-        occurrences = [o for o in occurrences if o['requirement_type'] and o['basis'] and
-                       (o['basis'] not in ('stated', 'implied') or o['evidence_span'])]
+        occurrences = [o for o in occurrences if recoverable_occurrence(o)]
     seen_roles = set()
     claims_created = already_covered = needs_reextraction = 0
     for occ in occurrences:
@@ -490,6 +490,12 @@ _ROLES_NEEDING_REEXTRACTION_SQL = """
             AND rc.concept_id = cp.resolved_concept_id
             AND rc.superseded_by IS NULL
       )
+      AND NOT EXISTS (
+          SELECT 1 FROM jobber.requirement_claim veto
+          WHERE veto.role_instance_id = o.role_instance_id
+            AND veto.concept_id = cp.resolved_concept_id
+            AND veto.review_status IN ('rejected', 'corrected')
+      )
 """
 
 
@@ -498,9 +504,19 @@ def missing_resolved_requirements(cur, role_id):
         'SELECT o.role_instance_id, cp.resolved_concept_id, cp.surface_form',
         'SELECT o.role_instance_id, cp.resolved_concept_id, cp.surface_form, cp.id AS proposal_id, '
         'o.requirement_type, o.basis, o.evidence_span, o.document_id, '
-        '(SELECT document_id FROM jobber.role_instance WHERE id=o.role_instance_id) AS current_document_id'),
+        '(SELECT document_id FROM jobber.role_instance WHERE id=o.role_instance_id) AS current_document_id, '
+        '(SELECT content_text FROM jobber.document WHERE id=o.document_id) AS source_text'),
         (['accepted_new', 'accepted_alias'], [role_id]))
     rows = filter_classified_occurrences(cur, [dict(row) for row in cur.fetchall()])
-    return [{**row, 'recoverable': bool(row['requirement_type'] and row['basis'] and
-             row['document_id'] == row['current_document_id'] and
-             (row['basis'] not in ('stated', 'implied') or row['evidence_span']))} for row in rows]
+    return [{**row, 'recoverable': bool(row['document_id'] and
+             row['document_id'] == row['current_document_id'] and recoverable_occurrence(row))} for row in rows]
+
+
+def recoverable_occurrence(row):
+    if not row['requirement_type'] or not row['basis']:
+        return False
+    if row['basis'] not in ('stated', 'implied'):
+        return True
+    quote = ' '.join((row.get('evidence_span') or '').split()).casefold()
+    source = ' '.join((row.get('source_text') or '').split()).casefold()
+    return bool(quote and quote in source)
