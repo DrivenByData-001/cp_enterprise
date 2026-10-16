@@ -17,6 +17,7 @@ given will cause this entire response to be rejected.
   reviewed role requirement (e.g. `"R003"`). Never an `Lnnn` handle, and never
   a `Cnnn`, `Pnnn`, `Ennn` or any other letter.
 - In `gaps_and_cautions`, `concept_id` is an `Rnnn` or `Lnnn` handle, or null.
+  Use JSON `null` without quotes for an unlinked caution, never the string `"null"`.
   Never a `Cnnn`, `Pnnn`, `Ennn` or any other letter.
 (`source_refs`, by contrast, may mix letters, e.g. `["R003", "C005"]`.) A
 `concept_id` that is not a role-requirement handle is rejected.
@@ -110,7 +111,7 @@ after it.
     { "concept_id": "an Rnnn role-requirement handle only, e.g. R003", "reason": "...", "source_refs": ["..."] }
   ],
   "gaps_and_cautions": [
-    { "concept_id": "an Rnnn or Lnnn role-requirement handle only, or null", "message": "...", "source_refs": ["..."] }
+    { "concept_id": null, "message": "A caution not tied to a specific requirement", "source_refs": ["..."] }
   ],
   "language_to_mirror": ["short phrase", "..."],
   "avoid_claiming": ["a specific thing this application must not claim", "..."]

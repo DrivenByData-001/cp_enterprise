@@ -79,7 +79,7 @@ after it.
   "sections": [
     {
       "heading": "...",
-      "concept_id": "an Rnnn (or, for a gap section, Lnnn) role-requirement handle only, or null",
+      "concept_id": null,
       "is_gap_or_caution": false,
       "paragraphs": [
         { "text": "...", "source_refs": ["..."] }
