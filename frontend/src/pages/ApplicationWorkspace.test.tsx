@@ -678,11 +678,19 @@ describe('Application package (Phase 4, docs/35)', () => {
         profile_summary: { text: 'Experienced professional.', source_refs: [] },
         experience: [{ episode_id: 'ep-1', bullets: [{ text: 'Led delivery.', source_refs: [] }], title: 'Senior Actuary', organisation: 'PrevCo', start_date: '2020-01-01', end_date: null, episode_found: true }],
         skills: [], omissions_or_cautions: [],
+        qualifications: [{ text: 'Fellow of IFoA', source_refs: [] }],
+        review_warnings: ['PrevCo: thin coverage despite substantial career evidence; review the selection.'],
+        omitted_experience: [{ episode_id: 'old', reason: 'Early role condensed for relevance.' }],
       },
     })
     renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ cv: { active: cv, draft: null, history_count: 0 } }))
     const card = (await screen.findByRole('heading', { name: 'CV' })).closest('section') as HTMLElement
     expect(within(card).getByText(/Senior Actuary — PrevCo/)).toBeTruthy()
+    expect(within(card).getByText('Professional qualifications')).toBeTruthy()
+    expect(within(card).getByText('Fellow of IFoA')).toBeTruthy()
+    expect(within(card).getByText('Review before using this CV')).toBeTruthy()
+    expect(within(card).getByText(/thin coverage/)).toBeTruthy()
+    expect(within(card).getByText('Early role condensed for relevance.')).toBeTruthy()
   })
 
   it('application status is never changed by generation or adoption', async () => {

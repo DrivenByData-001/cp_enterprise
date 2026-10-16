@@ -258,6 +258,22 @@ def get_episode(cur, episode_id) -> dict | None:
     return get_row(cur, "episodes", episode_id)
 
 
+def cv_career_records(cur) -> tuple[list[dict], list[dict]]:
+    """Complete career input, independent of application requirement selections.
+
+    Keep evidence strength and boundary annotations; a vocabulary mapping is
+    not a prerequisite for a career fact to be available to a CV.
+    """
+    list_columns(cur, "episodes")
+    list_columns(cur, "claims")
+    cur.execute("SELECT * FROM profile360.episodes ORDER BY id")
+    episodes = [dict(row) for row in cur.fetchall()]
+    cur.execute("SELECT c.*, d.disposition AS cv_disposition FROM profile360.claims c "
+                "LEFT JOIN jobber.profile360_disposition d ON d.kind = 'claim' AND d.profile360_id = c.id "
+                "ORDER BY c.id")
+    return episodes, [dict(row) for row in cur.fetchall()]
+
+
 def get_current_snapshot(cur) -> dict | None:
     """Most-recent profile360.snapshots row by whatever recency column
     exists (see `_order_by_clause`) — the read-only replacement for the old
