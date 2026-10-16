@@ -933,7 +933,14 @@ class ApplicationCVGeneration(BaseModel):
     profile_summary: SourcedText
     experience: list[CVExperienceEntry] = []
     skills: list[CVSkillLine] = []
+    qualifications: list[SourcedText] = []
+    omitted_experience: list['CVOmission'] = []
     omissions_or_cautions: list[str] = []
+
+
+class CVOmission(BaseModel):
+    episode_id: str
+    reason: str = Field(min_length=1)
 
 
 class CoverLetterBlock(BaseModel):

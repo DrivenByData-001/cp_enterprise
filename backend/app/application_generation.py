@@ -57,6 +57,7 @@ from .application_events import list_events as _list_application_events
 from .application_events import next_scheduled_interview
 from .comparison_service import build_role_comparison
 from .db import build_role_view
+from .cv_career import employment_id
 
 # One person's whole career history is naturally bounded (never paginated) —
 # see build §4/§20: "no request per evidence item, no request per artifact
@@ -167,13 +168,16 @@ class SourceEntry:
     content: str  # the text actually handed to the model for this source
     episode_id: str | None = None
     chronology_only: bool = False
+    employment_episode_id: str | None = None
+    limitations_only: bool = False
 
     def to_public(self) -> dict:
         """Wire shape for a stored/returned source_manifest — never the full
         `content` text (that's prompt input, not something a normal read
         endpoint should echo back)."""
         return {"ref": self.ref, "kind": self.kind, "label": self.label, "category": self.category,
-                "episode_id": self.episode_id, "chronology_only": self.chronology_only}
+                "episode_id": self.episode_id, "chronology_only": self.chronology_only,
+                "employment_episode_id": self.employment_episode_id, "limitations_only": self.limitations_only}
 
 
 # --- evidence gathering (shared across every artifact_type/guidance) --------
@@ -198,6 +202,8 @@ class EvidenceBundle:
     # CV/Positioning artifact must never go stale from this field changing.
     events: list[dict] = field(default_factory=list)
     curated: bool = False
+    career_episodes: list[dict] = field(default_factory=list)
+    career_claims: list[dict] = field(default_factory=list)
 
 
 def _split_requirements(items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -265,11 +271,13 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
         episodes = [dict(ep) for eid in episode_ids if (ep := p360.get_episode(cur, eid))]
         profile_snapshot = None
     events = _list_application_events(cur, application_id)
+    career_episodes, career_claims = p360.cv_career_records(cur)
 
     return EvidenceBundle(
         application_id=application_id, role_instance_id=role_instance_id, application=application, role=role,
         comparison=comparison, accepted_requirements=accepted, legacy_requirements=legacy,
         notes=notes, profile_snapshot=profile_snapshot, episodes=episodes, events=events, curated=curated,
+        career_episodes=career_episodes, career_claims=career_claims,
     )
 
 
@@ -398,6 +406,10 @@ def compute_fingerprint_for(
     }
     if bundle.curated:
         parts['application_decisions'] = [r.get('application_decision') for r in (*bundle.accepted_requirements, *bundle.legacy_requirements)]
+    if artifact_type == 'cv':
+        parts['cv_pipeline_version'] = 2
+        parts['career_episodes'] = sorted((_row_hash(e) for e in bundle.career_episodes))
+        parts['career_claims'] = sorted((_row_hash(c) for c in bundle.career_claims))
     if 'application_preparation_context' in bundle.role:
         parts['application_preparation_context'] = bundle.role['application_preparation_context']
     if artifact_type == "interview_prep":
@@ -600,7 +612,8 @@ def build_source_registry(
             content=f"Current profile summary: {p360.snapshot_display(bundle.profile_snapshot)}",
         ))
 
-    for ep in bundle.episodes:
+    cv_episodes = getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', [])
+    for ep in (cv_episodes if artifact_type == 'cv' else bundle.episodes):
         sources.append(SourceEntry(
             ref=f"profile_episode:{ep['id']}", kind="profile_episode", category=CATEGORY_CANONICAL_EVIDENCE,
             episode_id=str(ep['id']), chronology_only=bundle.curated,
@@ -631,6 +644,29 @@ def build_source_registry(
     if artifact_type == "interview_prep":
         sources.extend(_application_material_sources(active_application_materials or {}))
         sources.extend(_event_sources(bundle.events))
+
+    if artifact_type == 'cv':
+        # Complete career sources supplement tailoring decisions, never alter them.
+        # Replace abbreviated selected claims with full text AND their limitations.
+        by_ref = {s.ref: s for s in sources}
+        for claim in bundle.career_claims:
+            ref = f"profile_claim:{claim['id']}"
+            category = CATEGORY_CANONICAL_EVIDENCE
+            if claim.get('evidence_class') == 'user_asserted':
+                category = CATEGORY_USER_SUPPLIED
+            elif claim.get('evidence_class') == 'inferred' or claim.get('confidence') not in ('high', None) or claim.get('cv_disposition') == 'needs_review':
+                category = CATEGORY_PARTIAL_EVIDENCE
+            boundary = claim.get('cv_disposition') == 'boundary'
+            metadata = {k: claim.get(k) for k in ('evidence_class', 'confidence', 'uncertainty', 'depth', 'cv_disposition')}
+            by_ref[ref] = SourceEntry(ref, 'profile_claim', p360.display_text(claim), category,
+                ("LIMITATION ONLY — do not turn this into an achievement.\n" if boundary else '')
+                + (claim.get('claim_text') or '') + '\nEvidence limits: ' + json.dumps(metadata, default=str),
+                episode_id=str(claim['episode_id']) if claim.get('episode_id') else None,
+                limitations_only=boundary)
+        sources = list(by_ref.values())
+        for source in sources:
+            if source.episode_id:
+                source.employment_episode_id = employment_id(source.episode_id, cv_episodes)
 
     return sources
 
@@ -696,6 +732,13 @@ def render_prompt_text(
             )
         )
         lines.append("")
+    if artifact_type == 'cv':
+        lines.append('CAREER COVERAGE: include each employment below, or explicitly account for it in omitted_experience. '
+                     'Project evidence belongs under its linked employment; never invent a parent or dates.')
+        for ep in (getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', [])):
+            alias = alias_for_ref.get(f"profile_episode:{ep['id']}")
+            if ep.get('episode_type') == 'employment' and alias:
+                lines.append(f"Employment to account for: {alias} — {p360.episode_display(ep)}")
     prefixes = sorted({a[0] for a in alias_for_ref.values()})
     if prefixes:
         lines.append("SOURCE HANDLES — the letter says what a handle is: "
@@ -716,11 +759,12 @@ def render_prompt_text(
         for s in entries:
             lines.append(f"[SOURCE_REF: {alias_for_ref[s.ref]}]")
             lines.append(s.content)
-            episode_alias = alias_for_ref.get(f"profile_episode:{s.episode_id}") if s.episode_id else None
+            target_episode = (s.employment_episode_id or employment_id(s.episode_id, getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', []))) if artifact_type == 'cv' else s.episode_id
+            episode_alias = alias_for_ref.get(f"profile_episode:{target_episode}") if target_episode else None
             if episode_alias:
                 lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — use only under this experience entry]")
             elif s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED):
-                lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills only; do not assign to an employer]")
+                lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills or explicit qualifications; do not assign to an employer]")
             if s.chronology_only:
                 lines.append("[CHRONOLOGY ONLY: does not substantiate achievements; cite a claim belonging to this episode]")
             lines.append("")
@@ -804,7 +848,8 @@ class GenerationContext:
         return self._category_by_ref.get(ref)
 
     def known_episode_ids(self) -> set[str]:
-        return {str(e["id"]) for e in self.bundle.episodes}
+        episodes = (getattr(self.bundle, 'career_episodes', []) or self.bundle.episodes) if self.artifact_type == 'cv' else self.bundle.episodes
+        return {str(e["id"]) for e in episodes}
 
     def known_concept_ids(self) -> set[str]:
         return {r["concept_id"] for r in (*self.bundle.accepted_requirements, *self.bundle.legacy_requirements)}

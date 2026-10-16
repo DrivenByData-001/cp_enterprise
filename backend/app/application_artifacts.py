@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from . import profile360_reader as p360
+from .cv_career import employment_id, review_warnings
 from .ai import AITaskError, run_json_task
 from .application_generation import (
     CATEGORY_CANONICAL_EVIDENCE,
@@ -224,8 +225,29 @@ def _resolve_cv_content(cur, content: dict) -> dict:
         row = p360.get_episode(cur, episode_id)
         episodes[episode_id] = dict(row) if row else None
 
-    resolved = []
+    # Follow explicit ancestry for historic drafts too; no guessed dates/parents.
+    pending = list(episodes.values())
+    while pending:
+        episode = pending.pop()
+        parent = str(episode['parent_episode_id']) if episode and episode.get('parent_episode_id') else None
+        if parent and parent not in episodes:
+            row = p360.get_episode(cur, parent)
+            episodes[parent] = dict(row) if row else None
+            pending.append(episodes[parent])
+    grouped = {}
+    warnings = list(content.get('review_warnings', []))
     for entry in experience:
+        target = employment_id(entry['episode_id'], [e for e in episodes.values() if e])
+        if target is None:
+            warnings.append('An experience entry has no valid employment link; review its placement before using this CV.')
+        target = target or entry['episode_id']
+        group = grouped.setdefault(target, {**entry, 'episode_id': target, 'bullets': []})
+        for bullet in entry.get('bullets', []):
+            if bullet not in group['bullets']:
+                group['bullets'].append(bullet)
+
+    resolved = []
+    for entry in grouped.values():
         episode = episodes.get(entry["episode_id"])
         resolved.append({
             **entry,
@@ -236,7 +258,7 @@ def _resolve_cv_content(cur, content: dict) -> dict:
             "episode_found": episode is not None,
         })
     resolved.sort(key=lambda e: _episode_sort_key(episodes.get(e["episode_id"])), reverse=True)
-    return {**content, "experience": resolved}
+    return {**content, "experience": resolved, "review_warnings": list(dict.fromkeys(warnings))}
 
 
 # --- serialization -----------------------------------------------------------
@@ -401,6 +423,10 @@ def _require_grounded(label: str, source_refs: list, ctx: GenerationContext, *, 
             f"{label} cites only role-side/strategy sources — a claim about the applicant needs at least one "
             "person-side source (accepted/partial evidence or application/user input)"
         )
+    if require_person_side:
+        cited = [s for s in ctx.sources if s.ref in source_refs and s.category in _PERSON_SIDE_CATEGORIES]
+        if cited and all(s.limitations_only for s in cited):
+            raise ApplicationArtifactValidationError(f'{label} cites limitations only; no achievement evidence')
 
 
 def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> dict:
@@ -431,21 +457,40 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
 
         _require_grounded("profile_summary", data["profile_summary"]["source_refs"], ctx, require_person_side=True)
         sources_by_ref = {s.ref: s for s in ctx.sources}
+        episodes = getattr(ctx.bundle, 'career_episodes', []) or ctx.bundle.episodes
+        included = [e['episode_id'] for e in data.get('experience', [])]
+        omitted = [e['episode_id'] for e in data.get('omitted_experience', [])]
+        required = {str(e['id']) for e in episodes if e.get('episode_type') == 'employment'}
+        if set(omitted) - required:
+            raise ApplicationArtifactValidationError('Only employment entries belong in omitted_experience')
+        if len(included) != len(set(included)) or len(omitted) != len(set(omitted)) or set(included) & set(omitted):
+            raise ApplicationArtifactValidationError('CV employment entries must be unique and cannot also be omitted')
+        missing = required - set(included) - set(omitted)
+        if missing:
+            raise ApplicationArtifactValidationError('CV must account for every employment, with an explicit reason for any omission')
         for entry in data.get("experience", []):
+            if employment_id(entry['episode_id'], episodes) != entry['episode_id']:
+                raise ApplicationArtifactValidationError('CV project must be grouped under its linked employment episode')
             for bullet in entry.get("bullets", []):
                 _require_grounded(f"bullet for episode {entry['episode_id']!r}", bullet["source_refs"], ctx, require_person_side=True)
                 evidence = [sources_by_ref[ref] for ref in bullet['source_refs']
                             if sources_by_ref[ref].category in _PERSON_SIDE_CATEGORIES]
-                if any(s.episode_id != entry['episode_id'] for s in evidence):
+                if any(not s.episode_id or employment_id(s.episode_id, episodes) != entry['episode_id'] for s in evidence):
                     raise ApplicationArtifactValidationError(
                         f"CV bullet for episode {entry['episode_id']} cites evidence belonging to another "
                         "employment episode or without employment attribution")
-                if not any(not s.chronology_only for s in evidence):
+                if not any(not s.chronology_only and not s.limitations_only for s in evidence):
                     raise ApplicationArtifactValidationError(
                         f"CV bullet for episode {entry['episode_id']} cites chronology only; "
                         "an achievement needs supporting evidence from that employment episode")
         for skill in data.get("skills", []):
             _require_grounded(f"skill {skill['text']!r}", skill["source_refs"], ctx, require_person_side=True)
+        for qualification in data.get('qualifications', []):
+            _require_grounded('qualification', qualification['source_refs'], ctx, require_person_side=True)
+            if not any(sources_by_ref[r].kind == 'profile_claim' and not sources_by_ref[r].limitations_only
+                       for r in qualification['source_refs']):
+                raise ApplicationArtifactValidationError('Qualification needs an explicit career claim, not chronology or strategy')
+        data['review_warnings'] = review_warnings(data, episodes, getattr(ctx.bundle, 'career_claims', []))
 
     if artifact_type == "positioning":
         lead_ids = {r["concept_id"] for r in data.get("requirements_to_lead_with", [])}
@@ -602,6 +647,11 @@ def edit_artifact(application_id: str, artifact_id: str, content: dict) -> dict:
         except Exception as e:
             raise ApplicationArtifactValidationError(f"edited content does not match {artifact_type} shape: {e}") from e
 
+        edited_content = validated.model_dump()
+        if artifact_type == 'cv':
+            episodes, claims = p360.cv_career_records(cur)
+            edited_content['review_warnings'] = review_warnings(edited_content, episodes, claims)
+
         now = datetime.now(timezone.utc)
         cur.execute(
             "UPDATE jobber.application_artifact SET status = 'superseded', superseded_at = %s, updated_at = %s "
@@ -612,7 +662,7 @@ def edit_artifact(application_id: str, artifact_id: str, content: dict) -> dict:
             cur, application_id=application_id, artifact_type=artifact_type, status="draft", origin="user_edit",
             model=None, prompt_name=None, prompt_version=None, guidance=source_row["guidance"],
             input_fingerprint=source_row["input_fingerprint"], source_manifest=source_row["source_manifest"],
-            content=validated.model_dump(), raw_output=None, now=now,
+            content=edited_content, raw_output=None, now=now,
         )
         serialized = _serialize(cur, row)
         serialized["stale"] = compute_staleness(cur, application_id, row)

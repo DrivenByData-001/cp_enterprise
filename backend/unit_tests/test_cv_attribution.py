@@ -66,7 +66,7 @@ def test_curated_claim_episode_survives_into_prompt_and_manifest():
         application_decision=dict(disposition='partial', rationale='Internal presentation.', sources=[
             dict(ref='claim:metlife',kind='profile_claim',label='Presentation',content='Vibe Coding',episode_id='metlife')
         ])))
-    bundle = SimpleNamespace(role={'title':'Actuary','organisation':'Target'})
+    bundle = SimpleNamespace(role={'title':'Actuary','organisation':'Target'}, episodes=[{'id': 'metlife'}])
     sources.append(SourceEntry('profile_episode:metlife', 'profile_episode', 'MetLife', CATEGORY_CANONICAL_EVIDENCE,
                                'Chronology only', episode_id='metlife', chronology_only=True))
     prompt = render_prompt_text(bundle, sources, artifact_type='cv', guidance=None)

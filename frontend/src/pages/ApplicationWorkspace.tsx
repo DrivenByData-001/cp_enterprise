@@ -921,6 +921,7 @@ function renderArtifactMarkdown(artifactType: ArtifactType, content: ArtifactCon
         lines.push('')
       })
     }
+    if (c.qualifications?.length) lines.push('## Professional qualifications', '', c.qualifications.map((q) => `- ${q.text}`).join('\n'), '')
     if (c.skills.length) lines.push('## Skills', '', c.skills.map((s) => `- ${s.text}`).join('\n'), '')
     if (c.omissions_or_cautions.length) lines.push('## Notes', '', c.omissions_or_cautions.map((l) => `- ${l}`).join('\n'), '')
   } else if (artifactType === 'cover_letter') {
@@ -1057,6 +1058,22 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
     return (
       <div>
         <SourcedBlock block={c.profile_summary} manifest={manifest} />
+        {!!c.review_warnings?.length && (
+          <div role="status" style={{ color: 'var(--warning)' }}>
+            <strong>Review before using this CV</strong>
+            <ul>{c.review_warnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul>
+          </div>
+        )}
+        {!!c.omitted_experience?.length && (
+          <details><summary>Deliberately omitted employment</summary>
+            <ul>{c.omitted_experience.map((omission) => <li key={omission.episode_id}>{omission.reason}</li>)}</ul>
+          </details>
+        )}
+        {!!c.qualifications?.length && (
+          <div><strong>Professional qualifications</strong>
+            {c.qualifications.map((q, i) => <SourcedBlock key={i} block={q} manifest={manifest} />)}
+          </div>
+        )}
         {c.experience.map((e, i) => (
           <div key={i} style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <strong style={{ fontSize: 14 }}>
@@ -1308,6 +1325,11 @@ function ArtifactEditor({
               />
             ))}
           </div>
+        ))}
+        {(c.qualifications ?? []).map((q, i) => (
+          <label key={i} style={{ display: 'block' }}>Professional qualification
+            <input value={q.text} onChange={(e) => onChange({ ...c, qualifications: (c.qualifications ?? []).map((x, j) => j === i ? { ...x, text: e.target.value } : x) })} />
+          </label>
         ))}
         {c.skills.map((s, i) => (
           <input

@@ -1319,6 +1319,9 @@ export type CVExperienceEntry = {
 }
 
 export type CVContent = {
+  qualifications?: SourcedText[]
+  omitted_experience?: { episode_id: string; reason: string }[]
+  review_warnings?: string[]
   profile_summary: SourcedText
   experience: CVExperienceEntry[]
   skills: SourcedText[]
