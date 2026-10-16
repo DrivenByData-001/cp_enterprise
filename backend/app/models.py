@@ -885,8 +885,21 @@ class PositioningRequirementToLead(BaseModel):
     source_refs: list[str] = []
 
 
-class PositioningGapOrCaution(BaseModel):
+class OptionalGenerationConcept(BaseModel):
+    """Tolerate a model spelling JSON null as text only in nullable links.
+
+    Required requirement IDs and source references remain strict. Unknown
+    non-null handles still reach the source registry's fail-closed validator.
+    """
     concept_id: Optional[str] = None
+
+    @field_validator('concept_id', mode='before')
+    @classmethod
+    def normalize_null_concept(cls, value):
+        return None if isinstance(value, str) and value.strip().lower() == 'null' else value
+
+
+class PositioningGapOrCaution(OptionalGenerationConcept):
     message: str
     source_refs: list[str] = []
 
@@ -956,9 +969,8 @@ class ApplicationCoverLetterGeneration(BaseModel):
     sign_off: str = "Yours sincerely,"
 
 
-class SupportingStatementSection(BaseModel):
+class SupportingStatementSection(OptionalGenerationConcept):
     heading: str
-    concept_id: Optional[str] = None
     # Marks a section that exists to address a gap/uncertainty rather than to
     # lead with a met requirement. A gap section's concept_id may name any
     # concept the applicant was shown (including a legacy/unreviewed one, or
