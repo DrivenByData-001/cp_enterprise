@@ -45,9 +45,10 @@ verified project-to-employment links. Put its achievement only
 under that exact episode_id. Never pair a claim from one episode with a
 different episode's chronology reference: both refs may be valid but the
 combination is false. Each experience bullet must cite substantive evidence
-belonging to that same episode. A CHRONOLOGY ONLY source cannot substantiate
+belonging to that resolved employment (including its explicitly linked projects).
+A CHRONOLOGY ONLY or LIMITATION ONLY source cannot substantiate
 an achievement. Sources with NO EMPLOYMENT ATTRIBUTION may support summary
-or skills only, even if their text mentions several employers; never guess
+or skills, or qualifications when explicitly supported, even if their text mentions several employers; never guess
 which employment entry owns them. Omit an experience bullet if no eligible
 source exists. Do not redistribute bullets to balance the number per role.
 

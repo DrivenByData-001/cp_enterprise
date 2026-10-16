@@ -764,7 +764,7 @@ def render_prompt_text(
             if episode_alias:
                 lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — use only under this experience entry]")
             elif s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED):
-                lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills only; do not assign to an employer]")
+                lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills or explicit qualifications; do not assign to an employer]")
             if s.chronology_only:
                 lines.append("[CHRONOLOGY ONLY: does not substantiate achievements; cite a claim belonging to this episode]")
             lines.append("")

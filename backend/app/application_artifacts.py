@@ -461,6 +461,8 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
         included = [e['episode_id'] for e in data.get('experience', [])]
         omitted = [e['episode_id'] for e in data.get('omitted_experience', [])]
         required = {str(e['id']) for e in episodes if e.get('episode_type') == 'employment'}
+        if set(omitted) - required:
+            raise ApplicationArtifactValidationError('Only employment entries belong in omitted_experience')
         if len(included) != len(set(included)) or len(omitted) != len(set(omitted)) or set(included) & set(omitted):
             raise ApplicationArtifactValidationError('CV employment entries must be unique and cannot also be omitted')
         missing = required - set(included) - set(omitted)
