@@ -1,5 +1,6 @@
 from dataclasses import replace
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from app.application_generation import (EvidenceBundle, GenerationContext, build
     compute_fingerprint_for, render_prompt_text, assign_source_aliases)
 from app.cv_career import employment_id, review_warnings
 from app.models import ApplicationCVGeneration
+from app import application_artifacts as artifacts
 
 
 def bundle():
@@ -54,6 +56,8 @@ def test_curated_cv_includes_unselected_employment_claims_with_limits():
     prompt = render_prompt_text(ctx.bundle, ctx.sources, artifact_type='cv', guidance=None)
     assert 'Employment to account for:' in prompt
     assert 'SCOR' in prompt
+    aliases = {ref: alias for alias, ref in ctx.alias_to_ref.items()}
+    assert f"Achievement sources allowed for {aliases['profile_episode:scor']}: {aliases['profile_claim:migration']}" in prompt
     assert len(ctx.source_manifest()) == len({s.ref for s in ctx.sources})
 
 
@@ -107,6 +111,44 @@ def test_duplicate_employment_rejected():
     data['experience'].append(data['experience'][0])
     with pytest.raises(ApplicationArtifactValidationError, match='must be unique'):
         _validate_and_shape('cv', ApplicationCVGeneration(**data), ctx)
+
+
+def test_attribution_failure_gets_one_revalidated_correction_attempt():
+    ctx = context()
+    good = ApplicationCVGeneration(**output(ctx))
+    bad = good.model_copy(deep=True)
+    bad.experience[1].bullets = bad.experience[0].bullets
+    with patch.object(artifacts, 'run_json_task', side_effect=[SimpleNamespace(output=bad), SimpleNamespace(output=good)]) as ai:
+        _, result = artifacts._generate_validated('cv', ctx)
+    assert ai.call_count == 2
+    assert 'APPLICATION VALIDATION FEEDBACK' in ai.call_args.kwargs['user_input']
+    assert 'Do not merely remove a citation' in ai.call_args.kwargs['user_input']
+    assert result['experience'][1]['bullets'][0]['source_refs'] == ['profile_claim:migration']
+
+
+def test_repeated_attribution_failure_preserves_previous_draft_without_writes():
+    ctx = context()
+    bad = ApplicationCVGeneration(**output(ctx))
+    bad.experience[1].bullets = bad.experience[0].bullets
+    with patch.object(artifacts, 'db_cursor') as db, \
+         patch.object(artifacts, 'build_application_generation_context', return_value=ctx), \
+         patch.object(artifacts, 'run_json_task', return_value=SimpleNamespace(output=bad)) as ai, \
+         patch.object(artifacts, '_insert') as insert:
+        with pytest.raises(ApplicationArtifactValidationError, match='SCOR.*employment episode'):
+            artifacts.generate_artifact('app', 'cv')
+    assert ai.call_count == 2
+    assert db.call_count == 1  # context read only, never the persistence transaction
+    insert.assert_not_called()
+
+
+def test_unknown_sources_are_not_repaired_or_silently_removed():
+    ctx = context()
+    bad = ApplicationCVGeneration(**output(ctx))
+    bad.experience[0].bullets[0].source_refs = ['C999']
+    with patch.object(artifacts, 'run_json_task', return_value=SimpleNamespace(output=bad)) as ai:
+        with pytest.raises(ApplicationArtifactValidationError, match='unknown source alias'):
+            artifacts._generate_validated('cv', ctx)
+    assert ai.call_count == 1
 
 
 @pytest.mark.parametrize('episodes', [

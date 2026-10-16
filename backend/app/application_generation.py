@@ -739,6 +739,13 @@ def render_prompt_text(
             alias = alias_for_ref.get(f"profile_episode:{ep['id']}")
             if ep.get('episode_type') == 'employment' and alias:
                 lines.append(f"Employment to account for: {alias} — {p360.episode_display(ep)}")
+                allowed = [alias_for_ref[s.ref] for s in sources
+                           if s.episode_id and employment_id(s.episode_id, bundle.career_episodes or bundle.episodes) == str(ep['id'])
+                           and not s.chronology_only and not s.limitations_only
+                           and s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED)]
+                lines.append(f"Achievement sources allowed for {alias}: {', '.join(allowed) or 'none; chronology only'}. "
+                             "Every person-side citation in its bullets must belong to this employment. "
+                             "General skills/qualifications and other employers' claims cannot be supporting citations here.")
     prefixes = sorted({a[0] for a in alias_for_ref.values()})
     if prefixes:
         lines.append("SOURCE HANDLES — the letter says what a handle is: "
