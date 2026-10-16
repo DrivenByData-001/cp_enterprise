@@ -16,6 +16,12 @@ The model must account for every employment: include it (chronology only is allo
 when evidence is sparse) or supply a structured omission reason. Duplicate entries,
 silent omissions and achievements placed under unrelated employers are rejected.
 Project claims can support their verified employment ancestor, not arbitrary roles.
+The prompt lists permitted achievement sources for each employment. If a bullet
+cites another employer or an unattributed source, generation gets one automatic
+correction attempt with the offending bullet index and source handles. The entire
+corrected CV is validated against the unchanged registry. A second failure leaves
+the existing draft untouched and names the employer in the error, rather than
+showing an episode UUID. No code strips citations or moves claims to bypass checks.
 Stored older CVs are grouped by the same ancestry on read without rewriting their
 original content or provenance. Chronological sorting uses the employment dates.
 
