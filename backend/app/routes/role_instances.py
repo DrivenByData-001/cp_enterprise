@@ -1,4 +1,5 @@
 import io
+from datetime import date
 import uuid
 from typing import Optional
 
@@ -35,6 +36,7 @@ class RawIngest(BaseModel):
     source_url: str | None = None
     source: str | None = None
     posting_date: str | None = None
+    application_closing_date: date | None = None
 
 
 class DuplicateCheckRequest(BaseModel):
@@ -98,6 +100,7 @@ def _ingest_raw(payload: RawIngest) -> dict:
                 "location": payload.location,
                 "country": payload.country,
                 "posting_date": payload.posting_date,
+                "application_closing_date": payload.application_closing_date,
             },
             skills=[],
         )
@@ -152,13 +155,14 @@ async def ingest_pdf(
     location: str | None = None,
     country: str | None = None,
     posting_date: str | None = None,
+    application_closing_date: date | None = None,
     source_url: str | None = None,
 ):
     text = await _extract_pdf_text(file)
     return _ingest_raw(
         RawIngest(
             text=text, kind=kind, title=title, organisation=organisation, location=location,
-            country=country, posting_date=posting_date, source_url=source_url, source="pdf",
+            country=country, posting_date=posting_date, application_closing_date=application_closing_date, source_url=source_url, source="pdf",
         )
     )
 

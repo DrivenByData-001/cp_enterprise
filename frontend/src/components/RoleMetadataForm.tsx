@@ -57,8 +57,14 @@ export default function RoleMetadataForm({
           onChange={(e) => set('posting_date', e.target.value || null)}
         />
         <span className="muted" style={{ fontSize: 11 }}>
-          Leave blank if unknown — never the capture/upload date.
+          Leave blank to use the original role entry date for the application period.
         </span>
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+        Application closing date
+        <input type="date" value={value.application_closing_date ?? ''} disabled={disabled}
+          onChange={e => set('application_closing_date', e.target.value || null)} />
+        <span className="muted" style={{ fontSize: 11 }}>Leave blank for four calendar months after the posting date. Applications stay open through the closing day.</span>
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
         Employment type

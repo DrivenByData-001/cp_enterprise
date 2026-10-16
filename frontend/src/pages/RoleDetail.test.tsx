@@ -270,6 +270,13 @@ function renderPosting(
 }
 
 describe('Opportunity Decision Workspace — posting', () => {
+  it('blocks the apply action for a historic role', async () => {
+    renderPosting({ ...basePosting, can_apply: false, application_period: 'historic', effective_closing_date: '2026-06-01' })
+    const button = await screen.findByRole('button', { name: 'Applications closed' })
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(button)
+    expect(api.createOrReopenApplication).not.toHaveBeenCalled()
+  })
   it('renders the decision summary with requirements, evidence, economics and career-direction tiles', async () => {
     renderPosting()
     expect(await screen.findByRole('heading', { name: 'Decision summary' })).toBeTruthy()

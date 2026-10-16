@@ -335,7 +335,7 @@ _TARGET_BASIS_MAP = {"target_real": "real_role", "target_imagined": "imagined"}
 _ROLE_INSTANCE_COLUMNS = {
     "instance_type", "target_basis", "document_id", "archetype_concept_id",
     "title", "organisation", "location", "country", "remote_type", "employment_type",
-    "seniority_level", "posting_date", "salary_min", "salary_max",
+    "seniority_level", "posting_date", "application_closing_date", "salary_min", "salary_max",
     "salary_estimate_min", "salary_estimate_max", "currency",
     "description", "requirements", "responsibilities", "summary", "career_track",
     "legacy_scores", "legacy_analysis", "extraction_status", "extraction_notes", "status",
@@ -410,6 +410,9 @@ def flatten_role_instance(role: dict) -> dict:
     role = dict(role)
     role["id"] = str(role["id"])
     role["node_type"] = instance_type_to_app_kind(role["instance_type"], role.get("target_basis"))
+    if role["instance_type"] == "observed_posting":
+        from .role_period import application_period
+        role.update(application_period(role))
     for jsonb_col in ("legacy_scores", "legacy_analysis"):
         nested = role.pop(jsonb_col, None) or {}
         for k, v in nested.items():
@@ -644,7 +647,7 @@ def build_role_view(cur, role_id: str) -> dict | None:
 
 _ROLE_METADATA_COLUMNS = {
     "title", "organisation", "location", "country", "remote_type",
-    "employment_type", "seniority_level", "posting_date",
+    "employment_type", "seniority_level", "posting_date", "application_closing_date",
 }
 
 

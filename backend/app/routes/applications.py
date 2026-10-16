@@ -25,6 +25,7 @@ from .. import application_learning as learning
 from .. import application_mode as mode
 from ..comparison_service import build_role_comparison
 from ..db import db_cursor
+from ..role_period import application_period
 from ..models import ApplicationEventInput, ApplicationEventUpdate
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
@@ -93,12 +94,20 @@ def create_or_reopen_application(payload: ApplicationCreateInput):
     converge on the same single active row)."""
     role_id = str(payload.role_instance_id)
     with db_cursor() as cur:
-        cur.execute("SELECT instance_type FROM jobber.role_instance WHERE id = %s", (role_id,))
+        cur.execute("SELECT * FROM jobber.role_instance WHERE id = %s FOR UPDATE", (role_id,))
         role = cur.fetchone()
         if not role:
             raise HTTPException(404, "role not found")
         if role["instance_type"] != "observed_posting":
             raise HTTPException(400, "Only an observed opportunity can become an application — targets cannot be applied to.")
+
+        # Existing work remains accessible after a deadline; only new applications are gated.
+        cur.execute(f"SELECT * FROM jobber.application WHERE role_instance_id = %s AND status IN {_ACTIVE_STATUS_SQL}", (role_id,))
+        existing = cur.fetchone()
+        if existing:
+            return {**existing, "created": False}
+        if not application_period(role)["can_apply"]:
+            raise HTTPException(409, "This role is historic: its application period has closed.")
 
         cur.execute(
             f"""
@@ -246,6 +255,11 @@ def update_application_status(application_id: UUID, payload: ApplicationStatusUp
     which the migration's partial unique index — not this code — is what
     actually prevents."""
     with db_cursor() as cur:
+        application = _require_application(cur, application_id)
+        if application['status'] not in ACTIVE_STATUSES and payload.status in ACTIVE_STATUSES:
+            cur.execute('SELECT * FROM jobber.role_instance WHERE id = %s FOR UPDATE', (application['role_instance_id'],))
+            if not application_period(cur.fetchone())['can_apply']:
+                raise HTTPException(409, 'This role is historic: its application period has closed.')
         try:
             cur.execute(
                 "UPDATE jobber.application SET status = %s, updated_at = now() WHERE id = %s RETURNING *",

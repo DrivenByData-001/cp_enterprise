@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import ArchetypeSkillsRadar from '../components/ArchetypeSkillsRadar'
 import { api, type CapabilityCoverage, type ComparisonStatus } from '../lib/api'
 
 const STATUS_LABEL: Record<ComparisonStatus, string> = {
@@ -118,6 +119,7 @@ export default function CapabilityCoveragePage() {
         never "you lack this". Every status traces back to profile360. A diagnostic view, not a general career score.
       </p>
 
+      <ArchetypeSkillsRadar />
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
       {loading && <p className="muted">Loading…</p>}
 

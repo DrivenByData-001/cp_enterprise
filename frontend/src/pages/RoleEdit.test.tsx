@@ -135,7 +135,7 @@ describe('RoleEdit — legacy role with real raw_json', () => {
     renderAt('/roles/role-1/edit')
     await waitFor(() => expect(screen.getByText(/paste the complete object/i)).toBeTruthy())
 
-    fireEvent.click(screen.getByText('Save changes'))
+    fireEvent.click(screen.getByText('Save JSON changes'))
     await waitFor(() => expect(api.updateRole).toHaveBeenCalledWith('role-1', raw))
     expect(api.updateRoleMetadata).not.toHaveBeenCalled()
   })

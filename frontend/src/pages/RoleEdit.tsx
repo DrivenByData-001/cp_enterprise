@@ -313,6 +313,7 @@ function metadataFromRole(role: Role): RoleMetadataInput {
     employment_type: role.employment_type,
     seniority_level: role.seniority_level,
     posting_date: role.posting_date,
+    application_closing_date: role.application_closing_date,
   }
 }
 
@@ -349,10 +350,7 @@ function SourceAwareMetadataEditor({ role }: { role: Role }) {
     <div className="card" style={{ marginTop: 16 }}>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Metadata</h3>
       <p className="secondary" style={{ marginTop: 0, fontSize: 13 }}>
-        This role was captured as an immutable source document rather than a full AI extraction, so there is no JSON
-        to overwrite here — correct the fields below directly. This never modifies the captured source text; re-running
-        requirement extraction against it stays a separate action on the{' '}
-        <Link to={workflow.link(`/role-instances/${role.id}/requirements`)}>Requirements</Link> page.
+        Edit role details and the application period. The original source document is preserved.
       </p>
       {role.url && (
         <p className="muted" style={{ fontSize: 12 }}>
@@ -425,7 +423,7 @@ function LegacyJsonEditor({ role }: { role: Role }) {
         />
         <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
           <button className="primary" onClick={submit} disabled={busy || !text.trim()}>
-            {busy ? 'Saving…' : 'Save changes'}
+            {busy ? 'Saving…' : 'Save JSON changes'}
           </button>
           <button onClick={() => navigate(isTarget ? `/targets/${role.id}` : workflow.link(`/roles/${role.id}`))} disabled={busy}>
             Cancel
@@ -506,7 +504,7 @@ export default function RoleEdit() {
       {isTarget && <SavedTargetEditor role={role} />}
       {hasRawJson && !isTarget && <LegacyJsonEditor role={role} />}
 
-      {!hasRawJson && !isTarget && <SourceAwareMetadataEditor role={role} />}
+      {!isTarget && <SourceAwareMetadataEditor role={role} />}
 
       {!isTarget && <ManualCompensationSection roleId={role.id} />}
 
