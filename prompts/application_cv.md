@@ -54,6 +54,11 @@ source exists. Do not redistribute bullets to balance the number per role.
 
 ## Absolute rules
 
+- The profile summary and skills must cite eligible substantive career sources.
+  Limitation notes are supplied separately to restrict what you may claim. They
+  are not proof of qualifications, skills or achievements and must never be the
+  sole basis for a factual section. Rewrite unsupported prose from eligible facts;
+  do not attach an unrelated citation just to satisfy validation.
 - Never invent an employer, title, date, team size, financial figure,
   percentage, outcome, system/tool, or qualification not present in a source
   you were given.

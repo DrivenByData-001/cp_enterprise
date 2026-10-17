@@ -733,6 +733,11 @@ def render_prompt_text(
         )
         lines.append("")
     if artifact_type == 'cv':
+        eligible = [alias_for_ref[s.ref] for s in sources
+                    if s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED)
+                    and not s.limitations_only and not s.chronology_only]
+        lines.append('Eligible evidence handles for profile_summary and skills: ' + ', '.join(eligible)
+                     + '. Select only sources whose text supports the claim. Limitation notes are constraints, not achievement evidence.')
         lines.append('CAREER COVERAGE: include each employment below, or explicitly account for it in omitted_experience. '
                      'Project evidence belongs under its linked employment; never invent a parent or dates.')
         for ep in (getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', [])):
@@ -753,6 +758,8 @@ def render_prompt_text(
         lines.append("")
     by_category: dict[str, list[SourceEntry]] = {}
     for s in sources:
+        if artifact_type == 'cv' and s.limitations_only:
+            continue  # Render separately as constraints, never among achievement sources.
         by_category.setdefault(s.category, []).append(s)
 
     for category in (
@@ -775,6 +782,14 @@ def render_prompt_text(
             if s.chronology_only:
                 lines.append("[CHRONOLOGY ONLY: does not substantiate achievements; cite a claim belonging to this episode]")
             lines.append("")
+
+    if artifact_type == 'cv':
+        limitations = [s for s in sources if s.limitations_only]
+        if limitations:
+            lines.append('=== LIMITATIONS — CONSTRAINTS ONLY, NOT CITABLE ACHIEVEMENT EVIDENCE ===')
+            for s in limitations:
+                lines.append(s.content)
+                lines.append('')
 
     if guidance:
         lines.append("=== USER GENERATION GUIDANCE (a writing instruction — tone/emphasis/length; NEVER evidence, ")

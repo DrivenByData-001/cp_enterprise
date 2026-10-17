@@ -22,6 +22,10 @@ correction attempt with the offending bullet index and source handles. The entir
 corrected CV is validated against the unchanged registry. A second failure leaves
 the existing draft untouched and names the employer in the error, rather than
 showing an episode UUID. No code strips citations or moves claims to bypass checks.
+Limitation notes are rendered separately as non-citable constraints, not among
+positive career sources. Summary/skills receive an explicit eligible-source list.
+The same single correction budget also covers limitation-only, missing-citation
+and role/strategy-only grounding failures; a repair still undergoes full validation.
 Stored older CVs are grouped by the same ancestry on read without rewriting their
 original content or provenance. Chronological sorting uses the employment dates.
 

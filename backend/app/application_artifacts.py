@@ -107,12 +107,16 @@ class ApplicationArtifactValidationError(ValueError):
     schema-valid response; nothing is ever persisted once this fires."""
 
 
-class CVAttributionValidationError(ApplicationArtifactValidationError):
-    """A correctable model attribution mistake, never permission to move claims."""
+class CVGroundingValidationError(ApplicationArtifactValidationError):
+    """Correctable model grounding mistake; the original evidence stays fixed."""
 
     def __init__(self, message: str, repair_instruction: str):
         super().__init__(message)
         self.repair_instruction = repair_instruction
+
+
+class CVAttributionValidationError(CVGroundingValidationError):
+    """An employment attribution mistake, never permission to move claims."""
 
 
 class ApplicationArtifactGenerationError(RuntimeError):
@@ -425,8 +429,14 @@ def _require_grounded(label: str, source_refs: list, ctx: GenerationContext, *, 
     role-side/strategy sources for something asserted *about the applicant*
     is rejected."""
     if not source_refs:
+        if ctx.artifact_type == 'cv':
+            raise CVGroundingValidationError('The CV generator returned an unsupported section. Any previous draft has been preserved.',
+                f'{label} has no citations. Rewrite it from eligible evidence and cite the supporting source handles. Never invent evidence.')
         raise ApplicationArtifactValidationError(f"{label} has no source_refs — every generated factual block must cite at least one source")
     if require_person_side and not ({ctx.category_for_ref(ref) for ref in source_refs} & _PERSON_SIDE_CATEGORIES):
+        if ctx.artifact_type == 'cv':
+            raise CVGroundingValidationError('The CV generator cited only role-side/strategy sources. Any previous draft has been preserved.',
+                f'{label} cites only role-side/strategy sources. Rewrite using substantive person-side evidence. Requirements and strategy are not proof of achievements.')
         raise ApplicationArtifactValidationError(
             f"{label} cites only role-side/strategy sources — a claim about the applicant needs at least one "
             "person-side source (accepted/partial evidence or application/user input)"
@@ -434,6 +444,10 @@ def _require_grounded(label: str, source_refs: list, ctx: GenerationContext, *, 
     if require_person_side:
         cited = [s for s in ctx.sources if s.ref in source_refs and s.category in _PERSON_SIDE_CATEGORIES]
         if cited and all(s.limitations_only for s in cited):
+            if ctx.artifact_type == 'cv':
+                raise CVGroundingValidationError('The CV generator cited limitations only, rather than career evidence. Any previous draft has been preserved.',
+                    f'{label} cites limitations only. Rewrite this section using eligible career evidence. '
+                    'Limitation notes constrain wording but cannot establish achievements. Do not simply replace citations while retaining unsupported prose.')
             raise ApplicationArtifactValidationError(f'{label} cites limitations only; no achievement evidence')
 
 
@@ -585,7 +599,7 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
 
 
 def _generate_validated(artifact_type: str, ctx: GenerationContext):
-    """At most one attribution repair, with the same evidence and full validation.
+    """At most one grounding repair, with the same evidence and full validation.
 
     All attempts run before the persistence transaction. No source is dropped,
     retagged or moved automatically to make a bad response pass.
@@ -599,7 +613,7 @@ def _generate_validated(artifact_type: str, ctx: GenerationContext):
             raise ApplicationArtifactGenerationError(str(e), error_type=type(e).__name__) from e
         try:
             return result, _validate_and_shape(artifact_type, result.output, ctx)
-        except CVAttributionValidationError as e:
+        except CVGroundingValidationError as e:
             if artifact_type != 'cv' or attempt:
                 raise
             prompt = (ctx.prompt_text + '\n\nAPPLICATION VALIDATION FEEDBACK:\n' + e.repair_instruction
