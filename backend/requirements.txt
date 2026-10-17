@@ -13,3 +13,4 @@ psycopg_pool
 pypdf
 itsdangerous
 bcrypt
+tzdata

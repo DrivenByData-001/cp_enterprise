@@ -501,7 +501,8 @@ export default function RoleDetail() {
               on the right; it is never shown this small/secondary for them. */}
           {!isTarget && (
             <div className="muted" style={{ fontSize: 14, marginTop: 4 }}>
-              {role.posting_date ? `Posted ${role.posting_date}` : 'Posting date unknown'}
+              {`Posted ${role.effective_posting_date || role.posting_date || 'unknown'}${role.posting_date_assumed ? ' (role entry date)' : ''}`}
+              {role.effective_closing_date && ` · ${role.application_period === 'historic' ? 'Historic · closed' : 'Live · closes'} ${role.effective_closing_date}${role.closing_date_assumed ? ' (assumed)' : ''}`}
               {role.captured_at ? ` · captured ${role.captured_at.slice(0, 10)}` : ''}
               {role.similarity !== null ? ` · ${Math.round(role.similarity! * 100)}% similarity to profile` : ''}
             </div>
@@ -781,8 +782,8 @@ export default function RoleDetail() {
         )}
         <div className="actions">
           {!isTarget && !workflow.applicationId && (
-            <button type="button" className="button primary" disabled={applying} onClick={handleApply}>
-              {applying ? 'Opening application…' : 'I want to apply'}
+            <button type="button" className="button primary" disabled={applying || role.can_apply === false} onClick={handleApply}>
+              {role.can_apply === false ? 'Applications closed' : applying ? 'Opening application…' : 'I want to apply'}
             </button>
           )}
           <WorkflowLink to={`/role-instances/${role.id}/requirements`} className="button">

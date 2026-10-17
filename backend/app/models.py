@@ -29,6 +29,7 @@ class Job(BaseModel):
     country: Optional[str] = None
     remote_type: Optional[str] = None
     posting_date: Optional[str] = None
+    application_closing_date: Optional[_date] = None
     employment_type: Optional[str] = None
     seniority_level: Optional[str] = None
     salary_min: Optional[float] = None
@@ -291,6 +292,7 @@ class RoleMetadataUpdate(BaseModel):
     employment_type: Optional[str] = None
     seniority_level: Optional[str] = None
     posting_date: Optional[str] = None
+    application_closing_date: Optional[_date] = None
 
 
 class RoleMetadataProposal(BaseModel):

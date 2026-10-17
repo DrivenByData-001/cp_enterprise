@@ -6,6 +6,7 @@ from ..db import build_role_view, db_cursor, delete_role_instance, flatten_role_
 from ..document_processing import role_extraction_quality, role_extraction_quality_bulk
 from ..embeddings import cosine_similarity, ensure_profile_embedding, get_embedding, get_embeddings
 from ..models import JobPostingImport
+from ..role_period import END_DATE_SQL, TODAY_SQL
 from ..role_requirements import REQUIREMENT_EVIDENCE_SQL
 from ..stepping_stones import path_to_target as _path_to_target
 from .import_routes import posting_columns
@@ -31,7 +32,7 @@ def list_roles(
     concept_id: str | None = None,
     min_similarity: float | None = None,
     sort: str | None = Query(None, pattern="^(similarity|posting_date|captured_at|title|relevance)$"),
-    period: str = Query("current", pattern="^(current|recent|all|unknown_date)$"),
+    period: str = Query("current", pattern="^(current|live|historic|recent|all|unknown_date)$"),
     year: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -42,7 +43,7 @@ def list_roles(
     into the browser" must not be required). Temporal precedence: an
     explicit `year` or `date_from`/`date_to` always wins; otherwise `period`
     decides ('current' — the default, the everyday operational view — or
-    'recent'/'all'/'unknown_date'). Pagination is applied last, after
+    'live'/'historic'/'recent'/'all'/'unknown_date'). Pagination is applied last, after
     similarity is computed and the full matching set is sorted — see the
     comment above the slice below for why that's still "server-side"
     pagination in the sense that matters (the browser never receives
@@ -89,20 +90,10 @@ def list_roles(
                 filters += " AND ri.posting_date <= %s"
                 params.append(date_to)
             applied_period = "range"
-        elif period == "current":
-            # The default, everyday operational view (Save-checkpoint /
-            # Current-roles brief §6.1): a role counts as "current" when its
-            # own posting year is this calendar year, or — only when no
-            # posting date was ever captured for it — its linked source
-            # document was itself captured this calendar year. This decides
-            # *inclusion* only; it never substitutes captured_at into
-            # posting_date, and a dated-but-old role is never pulled in just
-            # because it happens to have been recaptured recently.
-            filters += (
-                " AND (EXTRACT(YEAR FROM ri.posting_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
-                " OR (ri.posting_date IS NULL AND EXTRACT(YEAR FROM d.captured_at) = EXTRACT(YEAR FROM CURRENT_DATE)))"
-            )
-            applied_period = "current"
+        elif period in ("current", "live", "historic"):
+            operator = '<' if period == 'historic' else '>='
+            filters += f" AND {END_DATE_SQL} {operator} {TODAY_SQL}"
+            applied_period = period
         elif period == "unknown_date":
             # A named, explicit filter for "posting date was never captured"
             # (docs: source-aware ingest cleanup, problem #8) — distinct from
@@ -145,7 +136,7 @@ def list_roles(
     # captured first, not similarity — a role the user just saved must show
     # up immediately near the top rather than wherever it happens to rank
     # against the profile.
-    effective_sort = sort or ('relevance' if search_terms else "captured_at" if applied_period == "current" else "similarity")
+    effective_sort = sort or ('relevance' if search_terms else "captured_at" if applied_period in ("current", "live") else "similarity")
 
     if effective_sort == 'relevance':
         def search_score(row):

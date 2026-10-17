@@ -60,11 +60,7 @@ def _role_with_document(cur, title, posting_date=None, captured_at=None, career_
 
 
 def test_default_period_is_current_and_includes_undated_recently_captured_roles(client):
-    """Brief §6.1/§13: current-year posting date is included; a prior-year
-    posting date is excluded even from the default view; an undated role is
-    included only when its own source document was captured this calendar
-    year, never merely because it has no posting date at all (that's
-    'recent'/'unknown_date's job, not Current's)."""
+    """Live periods use source posting date or original role entry date."""
     today = date.today()
     last_year = today.year - 1
 
@@ -77,6 +73,7 @@ def test_default_period_is_current_and_includes_undated_recently_captured_roles(
         stale_undated = _role_with_document(
             cur, "Old capture undated role", posting_date=None, captured_at=datetime(last_year, 6, 15, tzinfo=timezone.utc),
         )
+        cur.execute("UPDATE jobber.role_instance SET created_at = %s WHERE id = %s", (datetime(last_year, 6, 15, tzinfo=timezone.utc), stale_undated))
 
     body = client.get("/api/roles").json()
     ids = {r["id"] for r in body["items"]}

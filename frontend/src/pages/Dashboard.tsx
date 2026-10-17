@@ -63,7 +63,7 @@ export default function Dashboard() {
   const facetType = params.get('facet') ?? ''
   const conceptId = facetType ? params.get('concept') ?? '' : ''
   const periodValue = params.get('period') ?? 'current'
-  const period = ['current', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
+  const period = periodValue === 'live' ? 'current' : ['current', 'historic', 'recent', 'all', 'year', 'unknown_date'].includes(periodValue) ? periodValue : 'current'
   // Current's own default sort is newest/recently-captured first, not
   // similarity (brief §6.3): sending `sort=captured_at` explicitly here is
   // exactly the same request the server would resolve to on its own if
@@ -108,7 +108,7 @@ export default function Dashboard() {
     api.listRoles({
       q: query || undefined,
       career_track: track || undefined, concept_id: conceptId || undefined, sort,
-      period: period === 'year' ? 'all' : period as 'current' | 'all' | 'recent' | 'unknown_date',
+      period: period === 'year' ? 'all' : period as 'current' | 'live' | 'historic' | 'all' | 'recent' | 'unknown_date',
       year: period === 'year' && year !== '' ? year : undefined,
       limit: PAGE_SIZE, offset,
     }).then((res) => {
@@ -194,7 +194,8 @@ export default function Dashboard() {
           Showing:
         </span>
         <select aria-label="Posting period" value={period} onChange={(e) => update('period', e.target.value)}>
-          <option value="current">Current roles</option>
+          <option value="current">Live roles</option>
+          <option value="historic">Historic roles</option>
           <option value="recent">Recent (last few years)</option>
           <option value="all">All years{yearRange ? ` (${yearRange.min}–${yearRange.max})` : ''}</option>
           <option value="year">A specific posting year…</option>
@@ -217,7 +218,7 @@ export default function Dashboard() {
         )}
         {period === 'current' && (
           <span className="muted" style={{ fontSize: 14 }}>
-            Roles posted this calendar year, plus newly captured roles whose posting date is not known.
+            Open for applications. Closing dates default to four months after posting, or role entry if posting is unknown.
           </span>
         )}
         {(period === 'all' || period === 'year') && (
@@ -227,7 +228,7 @@ export default function Dashboard() {
         )}
         {period === 'unknown_date' && (
           <span className="muted" style={{ fontSize: 14 }}>
-            Roles with no known posting date — never assumed to be the date they were captured.
+            Roles with no source posting date. Application periods use the original role entry date.
           </span>
         )}
       </div>
@@ -265,7 +266,9 @@ export default function Dashboard() {
                 <div className="secondary" style={{ fontSize: 14 }}>
                   {r.organisation?.trim() || 'Employer not recorded'}
                   {r.location ? ` · ${r.location}` : ''}
-                  {r.posting_date ? ` · ${r.posting_date}` : ''}
+                  {r.effective_posting_date || r.posting_date ? ` · ${r.effective_posting_date || r.posting_date}` : ''}
+                  {r.application_period ? ` · ${r.application_period === 'live' ? 'Live' : 'Historic'}` : ''}
+                  {r.effective_closing_date ? ` · closes ${r.effective_closing_date}${r.closing_date_assumed ? ' (assumed)' : ''}` : ''}
                 </div>
               </div>
             </div>

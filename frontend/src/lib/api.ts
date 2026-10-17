@@ -94,6 +94,13 @@ export type Role = {
   remote_type: string | null
   employment_type: string | null
   posting_date: string | null
+  application_closing_date?: string | null
+  effective_posting_date?: string | null
+  effective_closing_date?: string | null
+  posting_date_assumed?: boolean
+  closing_date_assumed?: boolean
+  application_period?: 'live' | 'historic'
+  can_apply?: boolean
   captured_at: string | null
   career_track: string | null
   seniority_level: string | null
@@ -219,7 +226,7 @@ export type RoleListResponse = {
   total: number
   limit: number
   offset: number
-  period: 'current' | 'recent' | 'all' | 'year' | 'range' | 'unknown_date'
+  period: 'current' | 'live' | 'historic' | 'recent' | 'all' | 'year' | 'range' | 'unknown_date'
   year_range: YearRange
 }
 
@@ -841,6 +848,7 @@ export type RoleMetadataInput = {
   employment_type?: string | null
   seniority_level?: string | null
   posting_date?: string | null
+  application_closing_date?: string | null
 }
 
 export type RoleMetadataProposal = RoleMetadataInput
@@ -3508,7 +3516,7 @@ export const api = {
       concept_id?: string
       min_similarity?: number
       sort?: string
-      period?: 'current' | 'recent' | 'all' | 'unknown_date'
+      period?: 'current' | 'live' | 'historic' | 'recent' | 'all' | 'unknown_date'
       year?: number
       date_from?: string
       date_to?: string
@@ -4003,6 +4011,8 @@ export const api = {
   // --- Phase 4: role archetypes -----------------------------------------------
   listArchetypeTitleGroups: () => req<TitleGroup[]>('/archetypes/title-groups'),
   listArchetypes: (status = 'active') => req<Archetype[]>(`/archetypes?status=${encodeURIComponent(status)}`),
+  getArchetypeSkillProfile: (id: string) => req<ArchetypeSkillProfile>(`/archetypes/${id}/skill-profile`),
+  saveArchetypeSkillProfile: (id: string, concept_ids: string[]) => req<ArchetypeSkillProfile>(`/archetypes/${id}/skill-profile`, { method: 'PUT', body: JSON.stringify({ concept_ids }) }),
   getArchetype: (id: string) => req<ArchetypeDetail>(`/archetypes/${id}`),
   createArchetype: (payload: ArchetypeCreateInput) =>
     req<{ id: string; status: string; assigned_count: number }>('/archetypes', { method: 'POST', body: JSON.stringify(payload) }),
@@ -4191,3 +4201,6 @@ export const api = {
   promoteApplicationEvent: (id: string, eventId: string) =>
     req<PromoteResult>(`/applications/${id}/events/${eventId}/promote`, { method: 'POST' }),
 }
+
+export type ArchetypeSkillAxis = { id: string; canonical_name: string; type_code: string; role_count: number; status: ComparisonStatus | 'unconfigured'; coverage: number | null; target: number }
+export type ArchetypeSkillProfile = { archetype_id: string; source: 'saved' | 'suggested'; axes: ArchetypeSkillAxis[]; candidates: { id: string; canonical_name: string; type_code: string; role_count: number }[]; sample_role_count: number; unavailable_skill_ids: string[] }

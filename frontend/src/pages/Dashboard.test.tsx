@@ -34,7 +34,7 @@ describe('Dashboard — posting-year filter', () => {
     )
     await waitFor(() => expect(api.listRoles).toHaveBeenCalled())
 
-    fireEvent.change(screen.getByDisplayValue('Current roles'), { target: { value: 'year' } })
+    fireEvent.change(screen.getByDisplayValue('Live roles'), { target: { value: 'year' } })
     expect(screen.getByText('Posting year:')).toBeTruthy()
   })
 
@@ -47,12 +47,12 @@ describe('Dashboard — posting-year filter', () => {
     )
     await waitFor(() => expect(api.listRoles).toHaveBeenCalled())
 
-    fireEvent.change(screen.getByDisplayValue('Current roles'), { target: { value: 'unknown_date' } })
+    fireEvent.change(screen.getByDisplayValue('Live roles'), { target: { value: 'unknown_date' } })
 
     await waitFor(() =>
       expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'unknown_date' })),
     )
-    expect(screen.getByText(/never assumed to be the date they were captured/)).toBeTruthy()
+    expect(screen.getByText(/Application periods use the original role entry date/)).toBeTruthy()
   })
 })
 
@@ -71,9 +71,9 @@ describe('Dashboard — Current roles default', () => {
     await waitFor(() =>
       expect(api.listRoles).toHaveBeenCalledWith(expect.objectContaining({ period: 'current', sort: 'captured_at' })),
     )
-    expect(screen.getByDisplayValue('Current roles')).toBeTruthy()
+    expect(screen.getByDisplayValue('Live roles')).toBeTruthy()
     expect(screen.getByDisplayValue('Sort: captured')).toBeTruthy()
-    expect(screen.getByText(/Roles posted this calendar year/)).toBeTruthy()
+    expect(screen.getByText(/Open for applications/)).toBeTruthy()
   })
 
   it('retains similarity as an explicit, user-selectable sort under Current', async () => {

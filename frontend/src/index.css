@@ -423,3 +423,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 :root[data-theme='dark'] { --page: #14201b; --surface-1: #1b2b23; --text-primary: #f2f3e9; --text-secondary: #ced8cd; --text-muted: #afbcad; --border: #3a4c40; --gridline: #3a4c40; --accent: #286b51; --accent-soft: #304b3c; --hero: #253e30; --good: #91d5a3; --warning: #ffd482; --critical: #ffafb4; --sidebar: #192820; }
 :root[data-theme='dark'] .nav a.active, :root[data-theme='dark'] .career-home .home-focus-grid .primary { color: var(--text-primary); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+.archetype-skills-table { width: 100%; min-width: 600px; border-collapse: collapse; margin: 12px 0 20px; }
+.archetype-skills-table caption { text-align: left; padding-bottom: 12px; }
+.archetype-skills-table th, .archetype-skills-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border, #ddd); }

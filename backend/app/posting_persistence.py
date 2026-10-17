@@ -60,6 +60,7 @@ def posting_role_columns(payload: JobPostingImport, document_id: str | None) -> 
         "employment_type": job.employment_type,
         "seniority_level": job.seniority_level,
         "posting_date": job.posting_date,
+        "application_closing_date": job.application_closing_date,
         "salary_min": job.salary_min,
         "salary_max": job.salary_max,
         "salary_estimate_min": analysis.salary_estimate_min,

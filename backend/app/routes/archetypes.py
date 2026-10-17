@@ -13,14 +13,48 @@ action — there is no AI-driven auto-creation/auto-assignment path.
 """
 
 import re
+from uuid import UUID
+from pydantic import BaseModel, Field, field_validator
+from psycopg.types.json import Jsonb
 
 import psycopg
 from fastapi import APIRouter, HTTPException
 
 from ..db import db_cursor
 from ..models import ArchetypeAssign, ArchetypeCreate, ArchetypeUpdate
+from ..archetype_skills import SKILL_TYPES, skill_profile
 
 router = APIRouter(prefix="/api/archetypes", tags=["archetypes"])
+
+
+class ArchetypeSkillsInput(BaseModel):
+    concept_ids: list[UUID] = Field(min_length=3, max_length=8)
+
+    @field_validator('concept_ids')
+    @classmethod
+    def distinct_skills(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError('Choose distinct skills')
+        return value
+
+
+@router.get('/{archetype_id}/skill-profile')
+def get_skill_profile(archetype_id: UUID):
+    with db_cursor() as cur:
+        _get_archetype_or_404(cur, str(archetype_id))
+        return skill_profile(cur, str(archetype_id))
+
+
+@router.put('/{archetype_id}/skill-profile')
+def save_skill_profile(archetype_id: UUID, payload: ArchetypeSkillsInput):
+    ids = [str(value) for value in payload.concept_ids]
+    with db_cursor() as cur:
+        _get_archetype_or_404(cur, str(archetype_id), require_active=True)
+        cur.execute("SELECT id FROM jobber.concept WHERE id = ANY(%s::uuid[]) AND status = 'active' AND type_code = ANY(%s)", (ids, list(SKILL_TYPES)))
+        if len(cur.fetchall()) != len(ids):
+            raise HTTPException(400, 'Choose active skills or capabilities for the target skillset')
+        cur.execute('UPDATE jobber.role_archetype_detail SET target_skill_ids = %s WHERE concept_id = %s', (Jsonb(ids), str(archetype_id)))
+        return skill_profile(cur, str(archetype_id))
 
 
 def _normalize_title(title: str | None) -> str:
