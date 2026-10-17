@@ -151,6 +151,53 @@ def test_unknown_sources_are_not_repaired_or_silently_removed():
     assert ai.call_count == 1
 
 
+def limitation_context():
+    b = bundle()
+    b.career_claims.append(dict(id='limit', claim_text='No final valuation sign-off authority',
+                               evidence_class='stated', cv_disposition='boundary'))
+    return context(b)
+
+
+def test_limitations_render_as_constraints_without_citable_source_handle():
+    ctx = limitation_context()
+    prompt = render_prompt_text(ctx.bundle, ctx.sources, artifact_type='cv', guidance=None)
+    alias = next(a for a, ref in ctx.alias_to_ref.items() if ref == 'profile_claim:limit')
+    assert f'[SOURCE_REF: {alias}]' not in prompt
+    assert 'No final valuation sign-off authority' in prompt
+    assert 'LIMITATIONS — CONSTRAINTS ONLY' in prompt
+    eligible = next(line for line in prompt.splitlines() if line.startswith('Eligible evidence handles'))
+    assert alias not in eligible
+
+
+@pytest.mark.parametrize('refs_kind', ['limitation', 'empty'])
+def test_summary_grounding_failure_is_repaired_and_revalidated(refs_kind):
+    ctx = limitation_context()
+    good = ApplicationCVGeneration(**output(ctx))
+    bad = good.model_copy(deep=True)
+    alias = next(a for a, ref in ctx.alias_to_ref.items() if ref == 'profile_claim:limit')
+    bad.profile_summary.source_refs = [alias] if refs_kind == 'limitation' else []
+    with patch.object(artifacts, 'run_json_task', side_effect=[SimpleNamespace(output=bad), SimpleNamespace(output=good)]) as ai:
+        _, result = artifacts._generate_validated('cv', ctx)
+    assert ai.call_count == 2
+    assert 'profile_summary' in ai.call_args.kwargs['user_input']
+    assert result['profile_summary']['source_refs'] == ['profile_claim:fellow']
+
+
+def test_repeated_limitation_only_summary_never_writes():
+    ctx = limitation_context()
+    bad = ApplicationCVGeneration(**output(ctx))
+    bad.profile_summary.source_refs = [next(a for a, ref in ctx.alias_to_ref.items() if ref == 'profile_claim:limit')]
+    with patch.object(artifacts, 'db_cursor') as db, \
+         patch.object(artifacts, 'build_application_generation_context', return_value=ctx), \
+         patch.object(artifacts, 'run_json_task', return_value=SimpleNamespace(output=bad)) as ai, \
+         patch.object(artifacts, '_insert') as insert:
+        with pytest.raises(ApplicationArtifactValidationError, match='limitations only'):
+            artifacts.generate_artifact('app', 'cv')
+    assert ai.call_count == 2
+    assert db.call_count == 1
+    insert.assert_not_called()
+
+
 @pytest.mark.parametrize('episodes', [
     [dict(id='p', episode_type='project')],
     [dict(id='p', parent_episode_id='missing')],
