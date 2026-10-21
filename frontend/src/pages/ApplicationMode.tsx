@@ -188,7 +188,7 @@ export default function ApplicationMode() {
     } catch (e) { setError(message(e)) } finally { setBusy(false) }
   }
   const attention = data?.items.filter(i => !i.decision || i.stale || i.decision.disposition === 'investigate') ?? []
-  const unconfigured = data?.items.filter(i => i.person_side.coverage?.trace.status_reason.code === 'assessment_unconfigured') ?? []
+  const unconfigured = data?.items.filter(i => i.person_side?.coverage?.trace.status_reason.code === 'assessment_unconfigured') ?? []
   return <div className="application-mode">
     <header className="mode-header"><div><p className="eyebrow">Application · {stageLabels[stage]}</p><h1>{data?.role.title ?? 'Your application'}</h1>{data && <p>{data.role.organisation || 'Employer not recorded'}</p>}{data && <p className="secondary">{stage === 'overview' ? data.application.status : stateLabels[data.stages[stage]]}</p>}</div><button disabled={busy || !data} onClick={() => go(stage, null, '/applications')}>{busy ? 'Leaving…' : 'Exit'}</button></header>
     {error && <div role="alert" className="mode-notice">{error}<button onClick={() => reload().then(() => setError(null)).catch(e => setError(message(e)))}>Retry</button></div>}
