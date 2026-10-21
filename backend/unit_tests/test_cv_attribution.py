@@ -36,7 +36,8 @@ def cv(refs, episode='metlife'):
     aliases = {ref: alias for alias, ref in context().alias_to_ref.items()}
     return ApplicationCVGeneration(
         profile_summary=SourcedText(text='Qualified actuary.', source_refs=[aliases['claim:qualification']]),
-        experience=[CVExperienceEntry(episode_id=aliases['profile_episode:' + episode], bullets=[CVExperienceBullet(text='Work.', source_refs=[aliases[r] for r in refs])])],
+        experience=[CVExperienceEntry(episode_id=aliases['profile_episode:' + episode], bullets=[CVExperienceBullet(text='Work.', source_refs=[aliases[r] for r in refs])]),
+                    CVExperienceEntry(episode_id=aliases['profile_episode:' + ('scor' if episode == 'metlife' else 'metlife')], bullets=[])],
         skills=[], omissions_or_cautions=[])
 
 

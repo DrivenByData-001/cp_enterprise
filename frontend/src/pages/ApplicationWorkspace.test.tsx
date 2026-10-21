@@ -63,6 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 const baseApplication: Application = {
@@ -702,6 +703,34 @@ describe('Application package (Phase 4, docs/35)', () => {
     await waitFor(() => expect(api.adoptApplicationArtifact).toHaveBeenCalled())
     expect(api.updateApplicationStatus).not.toHaveBeenCalled()
     expect((screen.getByLabelText('Application status') as HTMLSelectElement).value).toBe('preparing')
+  })
+
+  it('keeps chronology-only roles in display and export and allows a manual achievement', async () => {
+    const cv = makePositioningArtifact({
+      id: 'cv-empty', artifact_type: 'cv', status: 'active',
+      content: {
+        profile_summary: { text: 'Reporting experience.', source_refs: [] },
+        experience: [{ episode_id: 'early', bullets: [], title: 'Analyst', organisation: 'EarlyCo', start_date: '2010-01-01', end_date: '2014-12-31', episode_found: true }],
+        skills: [], qualifications: [], omitted_experience: [], omissions_or_cautions: [], review_warnings: [],
+      },
+    })
+    const copy = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { clipboard: { writeText: copy } }))
+    renderWorkspace(makeDetail(), makeEvidence(), makeArtifactsResponse({ cv: { active: cv, draft: null, history_count: 0 } }))
+    const card = (await screen.findByRole('heading', { name: 'CV' })).closest('section') as HTMLElement
+    expect(within(card).getByText(/Chronology only/)).toBeTruthy()
+    fireEvent.click(within(card).getByText('Copy as Markdown'))
+    await waitFor(() => expect(copy).toHaveBeenCalled())
+    expect(copy.mock.calls[0][0]).toContain('Analyst — EarlyCo')
+    expect(copy.mock.calls[0][0]).not.toContain('Chronology only')
+    fireEvent.click(within(card).getByText('Edit'))
+    fireEvent.click(within(card).getByText('Add achievement for EarlyCo'))
+    fireEvent.change(within(card).getByLabelText('Achievement 1 for Analyst at EarlyCo'), { target: { value: 'Human-supplied contribution.' } })
+    vi.mocked(api.editApplicationArtifact).mockResolvedValue({ artifact: { ...cv, origin: 'user_edit', status: 'draft' } })
+    fireEvent.click(within(card).getByText('Save edit'))
+    await waitFor(() => expect(api.editApplicationArtifact).toHaveBeenCalledWith('app-1', 'cv-empty', expect.objectContaining({
+      experience: [expect.objectContaining({ episode_id: 'early', bullets: [{ text: 'Human-supplied contribution.', source_refs: [] }] })],
+    })))
   })
 })
 

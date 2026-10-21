@@ -3,7 +3,7 @@ from datetime import date as _date
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from uuid import UUID
 
 
@@ -929,11 +929,8 @@ class CVExperienceBullet(BaseModel):
 
 
 class CVExperienceEntry(BaseModel):
-    """The model returns only `episode_id` — never employer/title/dates
-    (docs/35 §10 chronology safeguard). The backend resolves and renders
-    title/organisation/start/end date from the authoritative Profile360
-    episode row; a response naming an episode_id outside the context's own
-    episode set is rejected before persistence."""
+    """App-composed/editable employment entry. Metadata is resolved from
+    Profile360 on read; the AI writing schema contains no such entries."""
 
     episode_id: str
     bullets: list[CVExperienceBullet] = []
@@ -945,6 +942,7 @@ class CVSkillLine(BaseModel):
 
 
 class ApplicationCVGeneration(BaseModel):
+    """Persisted/editable CV document. Employment structure is application-owned."""
     profile_summary: SourcedText
     experience: list[CVExperienceEntry] = []
     skills: list[CVSkillLine] = []
@@ -956,6 +954,23 @@ class ApplicationCVGeneration(BaseModel):
 class CVOmission(BaseModel):
     episode_id: str
     reason: str = Field(min_length=1)
+
+
+class CVWrittenBlock(BaseModel):
+    """The writer supplies prose and evidence, never chronology or placement."""
+    model_config = ConfigDict(extra='forbid')
+    text: str = Field(min_length=1)
+    source_refs: list[str]
+
+
+class CVWritingGeneration(BaseModel):
+    """AI-only payload, deliberately distinct from the editable CV document."""
+    model_config = ConfigDict(extra='forbid')
+    profile_summary: CVWrittenBlock
+    experience_bullets: list[CVWrittenBlock] = Field(default_factory=list)
+    skills: list[CVWrittenBlock] = Field(default_factory=list)
+    qualifications: list[CVWrittenBlock] = Field(default_factory=list)
+    omissions_or_cautions: list[str] = Field(default_factory=list)
 
 
 class CoverLetterBlock(BaseModel):

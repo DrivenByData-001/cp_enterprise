@@ -1083,6 +1083,7 @@ function ArtifactContentView({ artifactType, content, manifest }: { artifactType
             <div className="muted" style={{ fontSize: 14 }}>
               {formatDate(e.start_date)} – {formatDate(e.end_date)}
             </div>
+            {e.bullets.length === 0 && <p className="muted" style={{ fontSize: 14 }}>Chronology only — no achievement content selected for this role.</p>}
             <ul style={{ margin: '4px 0 0 18px', fontSize: 14 }}>
               {e.bullets.map((b, j) => (
                 <li key={j}>
@@ -1311,6 +1312,7 @@ function ArtifactEditor({
             {entry.bullets.map((b, j) => (
               <textarea
                 key={j}
+                aria-label={`Achievement ${j + 1} for ${entry.title ?? 'role'} at ${entry.organisation ?? 'unknown organisation'}`}
                 rows={2}
                 style={{ width: '100%', fontSize: 14, marginTop: 4 }}
                 value={b.text}
@@ -1324,6 +1326,10 @@ function ArtifactEditor({
                 }
               />
             ))}
+            <button type="button" className="secondary" onClick={() => onChange({
+              ...c,
+              experience: c.experience.map((x, ei) => ei === i ? { ...x, bullets: [...x.bullets, { text: '', source_refs: [] }] } : x),
+            })}>Add achievement for {entry.organisation ?? entry.title ?? 'this role'}</button>
           </div>
         ))}
         {(c.qualifications ?? []).map((q, i) => (
