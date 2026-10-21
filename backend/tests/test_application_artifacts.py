@@ -883,7 +883,7 @@ def test_positioning_statement_with_only_role_side_source_is_rejected(client, mo
     monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/positioning/generate", json={})
     assert resp.status_code == 422
-    assert "only role-side/strategy sources" in resp.text
+    assert "person-side source" in resp.text
     with db.db_cursor() as cur:
         assert artifacts._draft_row(cur, setup["application_id"], "positioning") is None
 
@@ -900,7 +900,7 @@ def test_cv_bullet_with_only_role_side_source_is_rejected(client, monkeypatch):
     monkeypatch.setattr(artifacts, "run_json_task", _fake_run_json_task(bad))
     resp = client.post(f"/api/applications/{setup['application_id']}/artifacts/cv/generate", json={})
     assert resp.status_code == 422
-    assert "person-side source" in resp.text
+    assert "only role-side/strategy sources" in resp.text
 
 
 def test_gaps_and_cautions_remains_exempt_from_person_side_requirement(client, monkeypatch):
