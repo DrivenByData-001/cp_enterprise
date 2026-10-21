@@ -3,6 +3,55 @@ from collections import Counter
 from datetime import date
 
 
+CV_PIPELINE_VERSION = 3
+
+
+def _date(value):
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return date.min
+
+
+def employment_timeline(episodes):
+    """Every known employment, in stable reverse chronology; no inferred dates."""
+    jobs = {str(e['id']): e for e in episodes
+            if employment_id(e['id'], episodes) == str(e['id'])}
+    def key(e):
+        start = _date(e.get('start_date'))
+        end = _date(e.get('end_date')) if e.get('end_date') else (date.max if start != date.min else date.min)
+        return (-end.toordinal(), -start.toordinal(), str(e['id']))
+    return sorted(jobs.values(), key=key)
+
+
+def complete_cv_structure(content, episodes):
+    """Complete an edited document without inventing content or omission reasons.
+
+    Explicit user omissions survive. Historic project entries retain their explicit
+    ancestry. Unknown/unlinked entries fail validation instead of being dropped.
+    Reads of historic/adopted documents never call this function.
+    """
+    timeline = employment_timeline(episodes)
+    jobs = {str(e['id']) for e in timeline}
+    omitted = content.get('omitted_experience', [])
+    omitted_ids = [o['episode_id'] for o in omitted]
+    if len(omitted_ids) != len(set(omitted_ids)) or set(omitted_ids) - jobs:
+        raise ValueError('Omissions must identify distinct known employments')
+    if any(not o['reason'].strip() for o in omitted):
+        raise ValueError('Give a specific reason for each deliberately omitted employment')
+    grouped = {}
+    seen = set()
+    for entry in content.get('experience', []):
+        eid = entry['episode_id']
+        target = employment_id(eid, episodes)
+        if target not in jobs or eid in seen or target in omitted_ids:
+            raise ValueError('Experience must identify known employment or linked projects, without duplicates or conflicting omissions')
+        seen.add(eid)
+        grouped.setdefault(target, []).extend(entry.get('bullets', []))
+    return {**content, 'experience': [dict(episode_id=str(e['id']), bullets=grouped.get(str(e['id']), []))
+                                      for e in timeline if str(e['id']) not in omitted_ids]}
+
+
 def employment_id(episode_id, episodes):
     """Follow explicit project ancestry, failing closed on missing parents/cycles."""
     by_id = {str(e['id']): e for e in episodes}
@@ -27,7 +76,7 @@ def review_warnings(content, episodes, claims):
     warnings = []
     for eid, ep in by_id.items():
         label = ep.get('organisation') or ep.get('title') or eid
-        if ep.get('episode_type') == 'employment':
+        if employment_id(eid, episodes) == eid:
             if eid not in entries:
                 warnings.append(f'{label}: employment omitted; review the stated reason before using this CV.')
             elif not entries[eid].get('bullets'):
@@ -38,7 +87,7 @@ def review_warnings(content, episodes, claims):
                 warnings.append(f'{label}: employment dates need review; no dates have been inferred.')
         elif employment_id(eid, episodes) is None:
             warnings.append(f'{label}: no valid employment link; project achievements cannot be placed in the employment timeline.')
-    dated = sorted((e for e in episodes if e.get('episode_type') == 'employment' and e.get('start_date')),
+    dated = sorted((e for e in employment_timeline(episodes) if e.get('start_date')),
                    key=lambda e: str(e['start_date']))
     for previous, following in zip(dated, dated[1:]):
         if previous.get('end_date'):

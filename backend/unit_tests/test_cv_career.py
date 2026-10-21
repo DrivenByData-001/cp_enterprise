@@ -54,7 +54,8 @@ def test_curated_cv_includes_unselected_employment_claims_with_limits():
     assert 'No sign-off authority' in project.content
     assert refs['profile_claim:fellow'].category == 'user_supplied_context'
     prompt = render_prompt_text(ctx.bundle, ctx.sources, artifact_type='cv', guidance=None)
-    assert 'Employment to account for:' in prompt
+    assert 'APP-OWNED CAREER STRUCTURE:' in prompt
+    assert 'Employment group:' in prompt
     assert 'SCOR' in prompt
     aliases = {ref: alias for alias, ref in ctx.alias_to_ref.items()}
     assert f"Achievement sources allowed for {aliases['profile_episode:scor']}: {aliases['profile_claim:migration']}" in prompt

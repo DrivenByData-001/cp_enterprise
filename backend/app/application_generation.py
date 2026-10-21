@@ -57,7 +57,7 @@ from .application_events import list_events as _list_application_events
 from .application_events import next_scheduled_interview
 from .comparison_service import build_role_comparison
 from .db import build_role_view
-from .cv_career import employment_id
+from .cv_career import employment_id, employment_timeline, CV_PIPELINE_VERSION
 
 # One person's whole career history is naturally bounded (never paginated) —
 # see build §4/§20: "no request per evidence item, no request per artifact
@@ -407,7 +407,7 @@ def compute_fingerprint_for(
     if bundle.curated:
         parts['application_decisions'] = [r.get('application_decision') for r in (*bundle.accepted_requirements, *bundle.legacy_requirements)]
     if artifact_type == 'cv':
-        parts['cv_pipeline_version'] = 2
+        parts['cv_pipeline_version'] = CV_PIPELINE_VERSION
         parts['career_episodes'] = sorted((_row_hash(e) for e in bundle.career_episodes))
         parts['career_claims'] = sorted((_row_hash(c) for c in bundle.career_claims))
     if 'application_preparation_context' in bundle.role:
@@ -738,14 +738,16 @@ def render_prompt_text(
                     and not s.limitations_only and not s.chronology_only]
         lines.append('Eligible evidence handles for profile_summary and skills: ' + ', '.join(eligible)
                      + '. Select only sources whose text supports the claim. Limitation notes are constraints, not achievement evidence.')
-        lines.append('CAREER COVERAGE: include each employment below, or explicitly account for it in omitted_experience. '
-                     'Project evidence belongs under its linked employment; never invent a parent or dates.')
-        for ep in (getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', [])):
+        lines.append('APP-OWNED CAREER STRUCTURE: all employments below are retained automatically in reverse chronology. '
+                     'Return a flat experience_bullets list with supporting source handles, never employment entries or omissions. '
+                     'The app places each bullet using the explicit employment links of its citations. '
+                     'Use only one employment group per bullet. A job with no generated bullets stays as chronology for review.')
+        for ep in employment_timeline(getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', [])):
             alias = alias_for_ref.get(f"profile_episode:{ep['id']}")
-            if ep.get('episode_type') == 'employment' and alias:
-                lines.append(f"Employment to account for: {alias} — {p360.episode_display(ep)}")
+            if alias:
+                lines.append(f"Employment group: {alias} — {p360.episode_display(ep)}")
                 allowed = [alias_for_ref[s.ref] for s in sources
-                           if s.episode_id and employment_id(s.episode_id, bundle.career_episodes or bundle.episodes) == str(ep['id'])
+                           if s.episode_id and employment_id(s.episode_id, getattr(bundle, 'career_episodes', []) or bundle.episodes) == str(ep['id'])
                            and not s.chronology_only and not s.limitations_only
                            and s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED)]
                 lines.append(f"Achievement sources allowed for {alias}: {', '.join(allowed) or 'none; chronology only'}. "
@@ -776,7 +778,8 @@ def render_prompt_text(
             target_episode = (s.employment_episode_id or employment_id(s.episode_id, getattr(bundle, 'career_episodes', []) or getattr(bundle, 'episodes', []))) if artifact_type == 'cv' else s.episode_id
             episode_alias = alias_for_ref.get(f"profile_episode:{target_episode}") if target_episode else None
             if episode_alias:
-                lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — use only under this experience entry]")
+                instruction = 'employment group for this evidence; do not output episode IDs' if artifact_type == 'cv' else 'use only under this experience entry'
+                lines.append(f"[SOURCE_EPISODE_ID: {episode_alias} — {instruction}]")
             elif s.category in (CATEGORY_CANONICAL_EVIDENCE, CATEGORY_PARTIAL_EVIDENCE, CATEGORY_USER_SUPPLIED):
                 lines.append("[NO EMPLOYMENT ATTRIBUTION: use in summary/skills or explicit qualifications; do not assign to an employer]")
             if s.chronology_only:
