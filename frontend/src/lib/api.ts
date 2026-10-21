@@ -1018,7 +1018,7 @@ export type CoverageEpisodeSummary = {
 
 export type CapabilityCoverageTrace = {
   capability: { id: string; canonical_name: string }
-  requirement: { min_depth: DepthLevel; min_autonomy: AutonomyLevel | null; requires_all_core: boolean; min_core_required: number | null }
+  requirement: { min_depth: DepthLevel | null; min_autonomy: AutonomyLevel | null; requires_all_core: boolean | null; min_core_required: number | null }
   direct_evidence: {
     source_kind: 'claim' | 'capability'
     mapping_id: string

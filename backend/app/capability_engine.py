@@ -61,7 +61,7 @@ AUTONOMY_LEVELS = ["assisted", "independent", "directed_others", "accountable"]
 
 
 class CapabilityNotFoundError(LookupError):
-    """No active `capability` concept + `capability_detail` row for this id."""
+    """No `capability` concept for this id."""
 
 
 class RoleInstanceNotFoundError(LookupError):
@@ -182,10 +182,11 @@ def _capability_row(cur, capability_concept_id: str) -> dict | None:
     cur.execute(
         """
         SELECT c.id, c.canonical_name, c.type_code, c.status AS concept_status,
+               cd.concept_id AS assessment_concept_id,
                cd.demonstration_standard, cd.min_depth, cd.min_autonomy,
                cd.requires_all_core, cd.min_core_required, cd.economic_salience, cd.notes
         FROM jobber.concept c
-        JOIN jobber.capability_detail cd ON cd.concept_id = c.id
+        LEFT JOIN jobber.capability_detail cd ON cd.concept_id = c.id
         WHERE c.id = %s AND c.type_code = 'capability'
         """,
         (capability_concept_id,),
@@ -537,12 +538,14 @@ def _composition_verdict(capability_row: dict, comp: dict) -> dict:
 # --- Coverage combiner (brief §11) ------------------------------------------
 
 def derive_capability_coverage(cur, capability_concept_id: str) -> dict:
-    """Pure derivation — no writes. Raises CapabilityNotFoundError if
-    `capability_concept_id` is not an active capability concept with a
-    capability_detail row."""
+    """Pure derivation — no writes. Missing/non-capability concepts raise
+    CapabilityNotFoundError; unconfigured capabilities remain reviewable."""
     capability_row = _capability_row(cur, capability_concept_id)
     if capability_row is None:
         raise CapabilityNotFoundError(capability_concept_id)
+
+    if capability_row["assessment_concept_id"] is None:
+        return _unconfigured_coverage(cur, capability_row)
 
     min_depth = capability_row["min_depth"]
     min_autonomy = capability_row["min_autonomy"]
@@ -649,6 +652,47 @@ def derive_capability_coverage(cur, capability_concept_id: str) -> dict:
     }
 
 
+def _unconfigured_coverage(cur, capability: dict) -> dict:
+    """Vocabulary acceptance does not imply a curated assessment standard.
+
+    Keep mapped evidence available for review, but never treat absent criteria
+    as unconstrained thresholds (which would incorrectly award full coverage).
+    """
+    concept_id = capability["id"]
+    direct = _direct_evidence(cur, concept_id)
+    assertion = _assertion(cur, concept_id)
+    status = "partial" if direct else "user_asserted" if assertion else "not_found"
+    return {
+        "capability_concept_id": concept_id,
+        "status": status,
+        "coverage_score": _STATUS_POINTS[status],
+        "core_components_total": 0, "core_components_met": 0,
+        "strongest_depth": None, "strongest_autonomy": None,
+        "directly_claimed": bool(direct), "last_demonstrated": None, "years_active": None,
+        "supporting_profile360_claim_ids": sorted({
+            item["profile360_claim_id"] for item in direct if item.get("profile360_claim_id")
+        }),
+        "trace": {
+            "capability": {"id": concept_id, "canonical_name": capability["canonical_name"]},
+            "requirement": {"min_depth": None, "min_autonomy": None,
+                            "requires_all_core": None, "min_core_required": None},
+            "direct_evidence": [
+                {**{k: v for k, v in item.items() if k != "episode"},
+                 "meets_depth": False, "meets_autonomy": False} for item in direct
+            ],
+            "compositional": {"core_total": 0, "supporting_total": 0, "contextual_total": 0,
+                              "note": "Not assessed: assessment criteria are not configured."},
+            "assertion": assertion,
+            "status_reason": {
+                "code": "assessment_unconfigured",
+                "message": f'Assessment criteria for “{capability["canonical_name"]}” are not configured. '
+                           'Configure this capability in Capabilities to assess coverage. '
+                           'This is a setup issue, not a finding that you lack the experience.',
+            },
+        },
+    }
+
+
 def _status_message(status, reason_code, capability_row, direct_evaluated, comp, comp_verdict, min_depth, min_autonomy) -> str:
     name = capability_row["canonical_name"]
     if reason_code == "direct_evidenced":
@@ -676,7 +720,10 @@ def _status_message(status, reason_code, capability_row, direct_evaluated, comp,
 
 
 def derive_all_capability_coverage(cur) -> list[dict]:
-    cur.execute("SELECT id FROM jobber.concept WHERE type_code = 'capability' AND status = 'active' ORDER BY canonical_name")
+    # The coverage dashboard/rebuild remains configured-only. Individual role
+    # requirements may still reference an unconfigured vocabulary capability.
+    cur.execute("SELECT c.id FROM jobber.concept c JOIN jobber.capability_detail cd ON cd.concept_id=c.id "
+                "WHERE c.type_code = 'capability' AND c.status = 'active' ORDER BY c.canonical_name")
     ids = [str(r["id"]) for r in cur.fetchall()]
     results = []
     for capability_id in ids:
