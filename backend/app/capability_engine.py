@@ -720,7 +720,10 @@ def _status_message(status, reason_code, capability_row, direct_evaluated, comp,
 
 
 def derive_all_capability_coverage(cur) -> list[dict]:
-    cur.execute("SELECT id FROM jobber.concept WHERE type_code = 'capability' AND status = 'active' ORDER BY canonical_name")
+    # The coverage dashboard/rebuild remains configured-only. Individual role
+    # requirements may still reference an unconfigured vocabulary capability.
+    cur.execute("SELECT c.id FROM jobber.concept c JOIN jobber.capability_detail cd ON cd.concept_id=c.id "
+                "WHERE c.type_code = 'capability' AND c.status = 'active' ORDER BY c.canonical_name")
     ids = [str(r["id"]) for r in cur.fetchall()]
     results = []
     for capability_id in ids:
