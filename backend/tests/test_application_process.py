@@ -14,6 +14,24 @@ def opportunity_payload(view, **changes):
             'metadata': {}, 'deadline': None, 'package_items': [], 'confirm': True, **changes}
 
 
+@pytest.mark.parametrize('has_evidence', [False, True])
+def test_application_loads_with_unconfigured_capability(client, has_evidence):
+    app, concept, claim = seed(client)
+    with db.db_cursor() as cur:
+        cur.execute("UPDATE jobber.concept SET type_code='capability' WHERE id=%s", (concept,))
+        if not has_evidence:
+            cur.execute('DELETE FROM jobber.profile360_claim_mapping WHERE jobber_concept_id=%s', (concept,))
+    for endpoint in ('process', 'mode', 'evidence'):
+        response = client.get(f'/api/applications/{app}/{endpoint}')
+        assert response.status_code == 200, response.text
+    with db.db_cursor() as cur:
+        from app.capability_engine import derive_capability_coverage
+        coverage = derive_capability_coverage(cur, concept)
+    assert coverage['status'] == ('partial' if has_evidence else 'not_found')
+    assert (claim in coverage['supporting_profile360_claim_ids']) == has_evidence
+    assert coverage['trace']['status_reason']['code'] == 'assessment_unconfigured'
+
+
 def test_opportunity_requirement_checkpoints_resume_and_invalidation(client):
     app, concept, _ = seed(client)
     base = f'/api/applications/{app}/process'

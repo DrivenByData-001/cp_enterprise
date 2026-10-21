@@ -704,7 +704,7 @@ function EvidenceToUse({ items }: { items: ApplicationEvidenceItem[] }) {
           <div key={item.concept.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 14 }}>{item.concept.canonical_name}</strong>
-              {!item.decision && <span style={{ fontSize: 14, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{STATUS_LABEL[item.status]}</span>}
+              {!item.decision && <span style={{ fontSize: 14, color: STATUS_COLOR[item.status], fontWeight: 600 }}>{item.person_side.coverage?.trace.status_reason.code === 'assessment_unconfigured' ? 'Assessment setup needed' : STATUS_LABEL[item.status]}</span>}
             </div>
             <div className="muted" style={{ fontSize: 14, marginTop: 2 }}>
               {item.role_requirement_reviewed ? 'Reviewed requirement' : 'Legacy role extraction — not human-reviewed'}
@@ -714,7 +714,7 @@ function EvidenceToUse({ items }: { items: ApplicationEvidenceItem[] }) {
               <ApplicationEvidenceReview item={item} />
               <details><summary>Automatic profile match (separate from the application review)</summary>
                 <p>This matcher uses profile concept links and structured ratings. Missing links or ratings do not establish an absence of experience.</p>
-                <p>{STATUS_LABEL[item.status]}: {personSideSummary(item)}</p>
+                <p>{item.person_side.coverage?.trace.status_reason.code === 'assessment_unconfigured' ? 'Assessment setup needed' : STATUS_LABEL[item.status]}: {personSideSummary(item)}</p>
               </details>
             </> : <p className="secondary" style={{ fontSize: 14, margin: '4px 0 0' }}>
               {personSideSummary(item)}
