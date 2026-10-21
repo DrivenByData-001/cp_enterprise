@@ -86,6 +86,63 @@ def test_silent_employer_omission_rejected_but_reason_allowed():
     assert any('SCOR: employment omitted' in w for w in result['review_warnings'])
 
 
+@pytest.mark.parametrize('repair', ['achievements', 'chronology', 'omission'])
+def test_missing_employment_gets_one_complete_revalidated_correction(repair):
+    ctx = context()
+    bad = ApplicationCVGeneration(**output(ctx, include_scor=False))
+    corrected = output(ctx, include_scor=repair != 'omission')
+    aliases = {ref: alias for alias, ref in ctx.alias_to_ref.items()}
+    if repair == 'chronology':
+        corrected['experience'][1]['bullets'] = []
+    elif repair == 'omission':
+        corrected['omitted_experience'] = [dict(episode_id=aliases['profile_episode:scor'],
+                                               reason='Shortened CV; earlier migration role omitted.')]
+    with patch.object(artifacts, 'run_json_task', side_effect=[
+        SimpleNamespace(output=bad), SimpleNamespace(output=ApplicationCVGeneration(**corrected)),
+    ]) as ai:
+        _, result = artifacts._generate_validated('cv', ctx)
+    assert ai.call_count == 2
+    feedback = ai.call_args.kwargs['user_input'].split('APPLICATION VALIDATION FEEDBACK:')[1].split('PREVIOUS REJECTED OUTPUT')[0]
+    assert aliases['profile_episode:scor'] in feedback
+    assert aliases['profile_episode:irish'] not in feedback  # only the missing employment
+    assert 'empty bullets' in feedback
+    assert 'omitted_experience' in feedback
+    assert 'Never invent' in feedback
+    assert {e['episode_id'] for e in result['experience'] + result['omitted_experience']} == {'irish', 'scor'}
+
+
+def test_repeated_missing_employment_preserves_previous_draft_without_writes():
+    ctx = context()
+    bad = ApplicationCVGeneration(**output(ctx, include_scor=False))
+    with patch.object(artifacts, 'db_cursor') as db, \
+         patch.object(artifacts, 'build_application_generation_context', return_value=ctx), \
+         patch.object(artifacts, 'run_json_task', return_value=SimpleNamespace(output=bad)) as ai, \
+         patch.object(artifacts, '_insert') as insert:
+        with pytest.raises(ApplicationArtifactValidationError, match='SCOR') as failure:
+            artifacts.generate_artifact('app', 'cv')
+    assert 'previous draft' in str(failure.value)
+    assert ai.call_count == 2
+    assert db.call_count == 1
+    insert.assert_not_called()
+
+
+def test_coverage_repair_still_rejects_misattributed_evidence_without_a_third_attempt():
+    ctx = context()
+    missing = ApplicationCVGeneration(**output(ctx, include_scor=False))
+    misattributed = ApplicationCVGeneration(**output(ctx))
+    misattributed.experience[1].bullets = misattributed.experience[0].bullets
+    with patch.object(artifacts, 'db_cursor') as db, \
+         patch.object(artifacts, 'build_application_generation_context', return_value=ctx), \
+         patch.object(artifacts, 'run_json_task', side_effect=[
+             SimpleNamespace(output=missing), SimpleNamespace(output=misattributed),
+         ]) as ai, patch.object(artifacts, '_insert') as insert:
+        with pytest.raises(ApplicationArtifactValidationError, match='SCOR.*employment episode'):
+            artifacts.generate_artifact('app', 'cv')
+    assert ai.call_count == 2
+    assert db.call_count == 1
+    insert.assert_not_called()
+
+
 def test_project_cannot_move_to_unrelated_employer():
     ctx = context()
     data = output(ctx)

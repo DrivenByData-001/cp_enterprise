@@ -25,7 +25,13 @@ showing an episode UUID. No code strips citations or moves claims to bypass chec
 Limitation notes are rendered separately as non-citable constraints, not among
 positive career sources. Summary/skills receive an explicit eligible-source list.
 The same single correction budget also covers limitation-only, missing-citation
-and role/strategy-only grounding failures; a repair still undergoes full validation.
+and role/strategy-only grounding failures, and missing employment entries. Coverage
+feedback identifies the missing employment handles and permits grounded achievements,
+chronology-only entries, or deliberate omissions with explicit reasons. The backend
+never inserts an employment or invents an omission reason on the model's behalf.
+A repeated coverage failure names the missing employment and preserves the existing
+draft. A repair still undergoes full validation and shares the same one-retry budget
+with attribution and grounding errors.
 Stored older CVs are grouped by the same ancestry on read without rewriting their
 original content or provenance. Chronological sorting uses the employment dates.
 

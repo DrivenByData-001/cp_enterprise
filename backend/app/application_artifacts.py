@@ -108,7 +108,7 @@ class ApplicationArtifactValidationError(ValueError):
 
 
 class CVGroundingValidationError(ApplicationArtifactValidationError):
-    """Correctable model grounding mistake; the original evidence stays fixed."""
+    """Correctable grounding or career-coverage mistake; evidence stays fixed."""
 
     def __init__(self, message: str, repair_instruction: str):
         super().__init__(message)
@@ -489,7 +489,22 @@ def _validate_and_shape(artifact_type: str, output, ctx: GenerationContext) -> d
             raise ApplicationArtifactValidationError('CV employment entries must be unique and cannot also be omitted')
         missing = required - set(included) - set(omitted)
         if missing:
-            raise ApplicationArtifactValidationError('CV must account for every employment, with an explicit reason for any omission')
+            aliases = {ref: alias for alias, ref in ctx.alias_to_ref.items()}
+            missing_episodes = [e for e in episodes if str(e['id']) in missing]
+            handles = [aliases[f"profile_episode:{e['id']}"] for e in missing_episodes]
+            labels = [p360.episode_display(e) if e.get('organisation') or e.get('title') else handle
+                      for e, handle in zip(missing_episodes, handles)]
+            raise CVGroundingValidationError(
+                'The CV generator did not account for every employment: ' + '; '.join(labels) + '. '
+                'Your previous draft has been preserved.',
+                'Missing employment handles: ' + ', '.join(handles) + '. '
+                'Account for each exactly once in experience or omitted_experience. '
+                'Include recent or relevant roles using only their allowed achievement sources. '
+                'An experience entry with empty bullets is valid when only chronology can be supported. '
+                'For a deliberate editorial exclusion, supply the employment handle and a specific reason '
+                'in omitted_experience; omissions_or_cautions alone does not account for an employment. '
+                'Never invent achievements, dates or omission reasons, or move evidence between employers. '
+                'Return the complete CV, retaining all other valid employment entries and evidence constraints.')
         for entry in data.get("experience", []):
             if employment_id(entry['episode_id'], episodes) != entry['episode_id']:
                 raise ApplicationArtifactValidationError('CV project must be grouped under its linked employment episode')

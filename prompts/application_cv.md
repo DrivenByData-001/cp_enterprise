@@ -77,9 +77,13 @@ source exists. Do not redistribute bullets to balance the number per role.
   omit it and note the limitation in
   `omissions_or_cautions` if it seems materially relevant to this role.
 - Account for EVERY employment in CAREER COVERAGE. Include all recent or relevant
-  roles; older roles can be concise. If deliberately excluding a role, put its
+  roles; older roles can be concise. Each employment handle must appear exactly
+  once across experience and omitted_experience. If no achievement can be supported,
+  include the employment in experience with an empty bullets list to retain chronology.
+  If deliberately excluding a role, put its
   episode_id and a specific reason in omitted_experience. Never silently omit an
-  employer just because it was absent from selected requirement evidence.
+  employer just because it was absent from selected requirement evidence. A general
+  note in omissions_or_cautions does not replace the structured omission entry.
 - Projects and interview episodes are supporting material within their linked
   employment, never separate jobs. Unlinked sources must not be assigned by guess.
 - Use the full career claims alongside selected requirement evidence. Application
