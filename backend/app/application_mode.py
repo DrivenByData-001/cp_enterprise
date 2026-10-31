@@ -25,17 +25,23 @@ def decisions(cur, application_id):
     return {str(r['concept_id']): dict(r) for r in cur.fetchall()}
 
 
-def canonical_source(cur, ref):
+def _source_reference(ref):
     kind, _, source_id = ref.partition(':')
     getters = {'profile_claim': p360.get_claim, 'profile_capability': p360.get_capability}
     if kind not in getters:
         raise HTTPException(422, 'Select a Profile360 claim or capability')
     from uuid import UUID
     try:
-        UUID(source_id)
+        source_id = str(UUID(source_id))
     except ValueError:
         raise HTTPException(422, 'Invalid evidence reference')
-    row = getters[kind](cur, source_id)
+    return kind, source_id
+
+
+def canonical_source(cur, ref, *, rows=None):
+    kind, source_id = _source_reference(ref)
+    getters = {'profile_claim': p360.get_claim, 'profile_capability': p360.get_capability}
+    row = rows.get((kind, source_id)) if rows is not None else getters[kind](cur, source_id)
     if not row:
         raise HTTPException(409, 'Selected evidence is no longer available; review your selection')
     row = dict(row)
@@ -45,8 +51,7 @@ def canonical_source(cur, ref):
             'episode_id': str(row['episode_id']) if row.get('episode_id') else None}
 
 
-def candidates(cur, item, resolve=None):
-    resolve = resolve or (lambda ref: canonical_source(cur, ref))
+def candidate_refs(item):
     refs = []
     for m in item['person_side'].get('mappings') or []:
         kind = 'profile_claim' if m.get('mapping_kind') == 'claim' or m.get('profile360_claim_id') else 'profile_capability'
@@ -55,8 +60,13 @@ def candidates(cur, item, resolve=None):
             refs.append(f'{kind}:{source_id}')
     coverage = item['person_side'].get('coverage') or {}
     refs.extend(f'profile_claim:{i}' for i in coverage.get('supporting_profile360_claim_ids', []))
+    return list(dict.fromkeys(refs))
+
+
+def candidates(cur, item, resolve=None):
+    resolve = resolve or (lambda ref: canonical_source(cur, ref))
     result = []
-    for ref in dict.fromkeys(refs):
+    for ref in candidate_refs(item):
         try:
             result.append(resolve(ref))
         except HTTPException as error:
@@ -77,13 +87,22 @@ def reviewed_items(cur, application_id, comparison=None):
     saved = decisions(cur, application_id)
     cur.execute('SELECT concept_id, claim_id FROM jobber.profile360_acceptance WHERE application_id = %s ORDER BY accepted_at, id', (application_id,))
     accepted = list(cur.fetchall())
+    refs = {ref for item in comparison['items'] for ref in candidate_refs(item)}
+    concept_ids = {str(item['concept']['id']) for item in comparison['items']}
+    refs.update('profile_claim:' + str(row['claim_id']) for row in accepted if str(row['concept_id']) in concept_ids)
+    refs.update(ref for cid in concept_ids for ref in saved.get(cid, {}).get('selected_refs', []))
+    references = [_source_reference(ref) for ref in refs]
+    source_rows = {}
+    for kind, table in (('profile_claim', 'claims'), ('profile_capability', 'capabilities')):
+        rows = p360.get_rows(cur, table, [sid for skind, sid in references if skind == kind])
+        source_rows.update({(kind, sid): row for sid, row in rows.items()})
     # A career claim commonly supports many requirements. Read it once within
     # this view, but always read afresh on the next request (including saves).
     source_cache = {}
     def resolve(ref):
         if ref not in source_cache:
             try:
-                source_cache[ref] = canonical_source(cur, ref)
+                source_cache[ref] = canonical_source(cur, ref, rows=source_rows)
             except HTTPException as error:
                 if error.status_code != 409:
                     raise

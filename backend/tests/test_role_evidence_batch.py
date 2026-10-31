@@ -1,7 +1,9 @@
 """Batch reads must preserve verdicts and read changed evidence on the next request."""
 from uuid import uuid4
+import pytest
+from fastapi import HTTPException
 
-from app import capability_engine as engine, db
+from app import capability_engine as engine, db, application_mode as mode, profile360_reader as p360
 from app.evidence_sources import source_context
 
 
@@ -118,3 +120,21 @@ def test_reviewed_modifiers_stay_per_mapping_and_expire_when_the_source_changes(
         fresh = engine._role_evidence_inputs(cur, requirements)
         assert [fresh['direct'][cid][0]['depth'] for cid in cap_ids] == ['owned', 'owned']
         assert [fresh['direct'][cid][0]['autonomy'] for cid in cap_ids] == ['independent', 'independent']
+
+
+def test_bulk_source_rows_preserve_fingerprints_and_missing_source_conflicts():
+    with db.db_cursor() as raw:
+        _, claim = seed(raw, count=1)
+        ref = 'profile_claim:' + claim
+        original = mode.canonical_source(raw, ref)
+        cur = CountingCursor(raw)
+        rows = p360.get_rows(cur, 'claims', [claim, claim])
+        sources = {('profile_claim', sid): row for sid, row in rows.items()}
+        assert mode.canonical_source(cur, ref, rows=sources) == original
+        assert cur.queries == 1
+        with pytest.raises(HTTPException) as error:
+            mode.canonical_source(cur, 'profile_claim:' + str(uuid4()), rows=sources)
+        assert error.value.status_code == 409
+        raw.execute("UPDATE profile360.claims SET claim_text='A corrected fact' WHERE id=%s", (claim,))
+        changed = p360.get_rows(raw, 'claims', [claim])
+        assert mode.canonical_source(raw, ref, rows={('profile_claim', claim): changed[claim]})['source_revision'] != original['source_revision']
