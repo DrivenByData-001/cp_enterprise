@@ -79,6 +79,22 @@ def test_configured_capability_and_composition_match_the_single_read_path():
         assert verdict(cur, requirements[1], inputs)['status'] == 'partial'
 
 
+def test_component_evidence_is_batched_across_configured_capabilities():
+    with db.db_cursor() as raw:
+        requirements, _ = seed(raw)
+        atomic = requirements[0]['concept_id']
+        for row in requirements:
+            if row['type_code'] != 'capability':
+                continue
+            raw.execute("INSERT INTO jobber.capability_detail (concept_id,demonstration_standard,min_depth,requires_all_core) VALUES (%s,'Own the work','owned',true)", (row['concept_id'],))
+            raw.execute("INSERT INTO jobber.concept_edge (from_concept_id,to_concept_id,relation,necessity,status,origin) VALUES (%s,%s,'component_of','core','accepted','curator')", (atomic, row['concept_id']))
+        cur = CountingCursor(raw)
+        inputs = engine._role_evidence_inputs(cur, requirements)
+        actual = [verdict(cur, row, inputs) for row in requirements]
+        assert cur.queries == 11
+        assert actual == [verdict(raw, row) for row in requirements]
+
+
 def test_empty_role_does_not_load_the_profile():
     with db.db_cursor() as raw:
         cur = CountingCursor(raw)

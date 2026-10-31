@@ -426,7 +426,7 @@ def _evaluate_direct(direct_evidence: list[dict], min_depth: str, min_autonomy: 
 
 # --- Compositional evidence (brief §10/§12) ---------------------------------
 
-def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
+def _compositional_evidence(cur, components: dict[str, list[dict]], *, preloaded=None) -> dict:
     core, supporting, contextual = components["core"], components["supporting"], components["contextual"]
     all_components = core + supporting + contextual
     if not all_components:
@@ -437,18 +437,22 @@ def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
     contextual_ids = {c["concept_id"] for c in contextual}
     concept_names = {c["concept_id"]: c["canonical_name"] for c in all_components}
 
-    cur.execute(
-        """
-        SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text,
-               cl.depth AS raw_depth, cl.episode_id
-        FROM jobber.profile360_claim_mapping m
-        JOIN profile360.claims cl ON cl.id = m.profile360_claim_id
-        WHERE m.review_status = 'accepted' AND m.jobber_concept_id = ANY(%s::uuid[])
-        """,
-        ([c["concept_id"] for c in all_components],),
-    )
+    if preloaded is None:
+        cur.execute(
+            """
+            SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text,
+                   cl.depth AS raw_depth, cl.episode_id
+            FROM jobber.profile360_claim_mapping m
+            JOIN profile360.claims cl ON cl.id = m.profile360_claim_id
+            WHERE m.review_status = 'accepted' AND m.jobber_concept_id = ANY(%s::uuid[])
+            """,
+            ([c["concept_id"] for c in all_components],),
+        )
+        claim_rows = cur.fetchall()
+    else:
+        claim_rows = [r for r in preloaded['claims'] if str(r['concept_id']) in concept_names]
     rows = []
-    for r in cur.fetchall():
+    for r in claim_rows:
         r = dict(r)
         r["concept_id"] = str(r["concept_id"])
         r["claim_id"] = str(r["claim_id"])
@@ -466,7 +470,7 @@ def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
             continue
         by_episode.setdefault(r["episode_id"], []).append(r)
 
-    episodes_by_id = _episodes_by_id(cur, list(by_episode.keys()))
+    episodes_by_id = preloaded['episodes'] if preloaded is not None else _episodes_by_id(cur, list(by_episode.keys()))
 
     episode_summaries = []
     for episode_id, ep_rows in by_episode.items():
@@ -563,8 +567,8 @@ def derive_capability_coverage(cur, capability_concept_id: str, *, inputs=None) 
     direct_evidence = inputs['direct'][capability_concept_id] if inputs is not None else _direct_evidence(cur, capability_concept_id)
     direct_status, direct_evaluated = _evaluate_direct(direct_evidence, min_depth, min_autonomy)
 
-    components = _components(cur, capability_concept_id)
-    comp = _compositional_evidence(cur, components)
+    components = inputs['components'][capability_concept_id] if inputs is not None else _components(cur, capability_concept_id)
+    comp = _compositional_evidence(cur, components, preloaded=inputs['composition'] if inputs is not None else None)
     comp_verdict = _composition_verdict(capability_row, comp)
 
     assertion = inputs['assertions'].get(capability_concept_id) if inputs is not None else _assertion(cur, capability_concept_id)
@@ -865,6 +869,7 @@ def _role_evidence_inputs(cur, requirements):
     cap_ids = list({r['concept_id'] for r in requirements if r['type_code'] == 'capability'})
     atom_ids = [cid for cid in ids if cid not in cap_ids]
     result = {'capabilities': {}, 'direct': {}, 'assertions': {},
+              'components': {}, 'composition': {'claims': [], 'episodes': {}},
               'atomic': {cid: [] for cid in atom_ids}, 'containing': {cid: [] for cid in atom_ids}}
     if not ids:
         return result
@@ -876,6 +881,29 @@ def _role_evidence_inputs(cur, requirements):
                     "WHERE c.id=ANY(%s::uuid[]) AND c.type_code='capability'", (cap_ids,))
         result['capabilities'] = {str(r['id']): {**dict(r), 'id': str(r['id'])} for r in cur.fetchall()}
         result['direct'] = _direct_evidence_many(cur, cap_ids)
+        configured = [cid for cid, row in result['capabilities'].items() if row['assessment_concept_id'] is not None]
+        result['components'] = {cid: {'core': [], 'supporting': [], 'contextual': []} for cid in configured}
+        if configured:
+            cur.execute('SELECT ce.to_concept_id, ce.id AS edge_id, ce.necessity, c.id AS concept_id, '
+                        'c.canonical_name, c.type_code FROM jobber.concept_edge ce '
+                        'JOIN jobber.concept c ON c.id=ce.from_concept_id '
+                        "WHERE ce.to_concept_id=ANY(%s::uuid[]) AND ce.relation='component_of' "
+                        "AND ce.status='accepted' ORDER BY c.canonical_name", (configured,))
+            component_ids = set()
+            for row in cur.fetchall():
+                row = dict(row)
+                cid = str(row.pop('to_concept_id'))
+                row.update(edge_id=str(row['edge_id']), concept_id=str(row['concept_id']))
+                result['components'][cid][row.get('necessity') or 'supporting'].append(row)
+                component_ids.add(row['concept_id'])
+            if component_ids:
+                cur.execute('SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text, '
+                            'cl.depth AS raw_depth, cl.episode_id FROM jobber.profile360_claim_mapping m '
+                            'JOIN profile360.claims cl ON cl.id=m.profile360_claim_id '
+                            "WHERE m.review_status='accepted' AND m.jobber_concept_id=ANY(%s::uuid[])", (list(component_ids),))
+                claims = [dict(row) for row in cur.fetchall()]
+                result['composition'] = {'claims': claims, 'episodes': _episodes_by_id(cur,
+                    list({str(row['episode_id']) for row in claims if row['episode_id']}))}
     cur.execute('SELECT id, jobber_concept_id, note, created_at, promoted_to_profile360_at '
                 'FROM jobber.person_capability_assertion WHERE jobber_concept_id=ANY(%s::uuid[])', (ids,))
     for row in cur.fetchall():
