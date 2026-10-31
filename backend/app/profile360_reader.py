@@ -234,6 +234,19 @@ def row_exists(cur, table: str, row_id) -> bool:
     return get_row(cur, table, row_id) is not None
 
 
+def get_rows(cur, table: str, row_ids: list[str]) -> dict[str, dict]:
+    """Read a bounded set of evidence rows without one round trip per source."""
+    _require_allowed(table)
+    if not row_ids:
+        return {}
+    pk = _primary_key_column(cur, table)
+    try:
+        cur.execute(f'SELECT * FROM profile360.{table} WHERE {pk} = ANY(%s::uuid[])', (list(set(row_ids)),))
+    except psycopg.errors.UndefinedTable as e:
+        raise Profile360UnavailableError(f'profile360.{table} does not exist on this connection.') from e
+    return {str(row[pk]): dict(row) for row in cur.fetchall()}
+
+
 # --- Convenience wrappers -----------------------------------------------
 
 def list_claims(cur, limit: int = 50, offset: int = 0, unmapped: bool = False, state: str | None = None) -> list[dict]:

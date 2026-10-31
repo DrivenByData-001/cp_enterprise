@@ -37,8 +37,9 @@ function VocabularyIssue({ id, proposal, done, busy, onBusyChange }: { id: strin
   </article>
 }
 
-export default function ApplicationRequirements({ id, data, register, reload }: { id: string; data: ProcessData; register: (save: StageSave) => void; reload: () => Promise<void> }) {
+export default function ApplicationRequirements({ id, data, register, reload }: { id: string; data: ProcessData; register: (save: StageSave) => void; reload: (next?: ProcessData) => Promise<void> }) {
   const [current, setCurrent] = useState(data)
+  useEffect(() => { setCurrent(data) }, [data])
   const [restored, setRestored] = useState(0)
   const [missing, setMissing] = useState<MissingRequirement[]>([])
   const [claims, setClaims] = useState<RequirementClaim[]>([])
@@ -53,27 +54,39 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const reconciled = await applicationProcess.reconcileRequirements(id)
-      setCurrent(reconciled.process)
-      setRestored(count => count + reconciled.claims_created)
-      const [requirements, vocabulary] = await Promise.all([api.listRequirements(data.role.id), applicationProcess.proposals(id)])
+      let [requirements, vocabulary] = await Promise.all([api.listRequirements(data.role.id), applicationProcess.proposals(id)])
+      let repaired: ProcessData | undefined
+      // Reopening a completed set is a read, not a repair plus two full
+      // application rebuilds. Recover only when the current source needs it.
+      if (vocabulary.missing_requirements?.some(item => item.recoverable)) {
+        const reconciled = await applicationProcess.reconcileRequirements(id)
+        repaired = reconciled.process
+        setCurrent(repaired)
+        setRestored(count => count + reconciled.claims_created)
+        ;[requirements, vocabulary] = await Promise.all([api.listRequirements(data.role.id), applicationProcess.proposals(id)])
+      }
       setClaims(requirements.items); setProposals(vocabulary.items)
       setMissing(vocabulary.missing_requirements ?? [])
       setClassification(vocabulary.classification ?? null)
+      return repaired
     } finally { setLoading(false) }
   }, [id, data.role.id])
-  useEffect(() => { load().then(reload).catch(e => setError(reviewError(e))) }, [load, reload])
-  const reloadAll = async () => { await load(); await reload() }
+  useEffect(() => { load().then(next => { if (next) return reload(next) }).catch(e => setError(reviewError(e))) }, [load, reload])
+  const reloadAll = async () => { const next = await load(); await reload(next) }
   const flush = async () => {
     if (busy || loading) return false
     for (const save of [...saves.current.values()]) if (!await save()) return false
     return true
   }
   useEffect(() => { register(flush) })
-  const run = async (action: () => Promise<unknown>) => {
+  const run = async (action: () => Promise<ProcessData | void>) => {
     if (!await flush()) return
     setBusy(true); setError(null)
-    try { await action(); await reloadAll() }
+    try {
+      const next = await action()
+      if (next) { setCurrent(next); await reload(next) }
+      else await reloadAll()
+    }
     catch (e) { setError(reviewError(e)) }
     finally { setBusy(false) }
   }
@@ -82,7 +95,7 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
   const represented = new Set(claims.map(claim => claim.concept_id))
   const olderNotes = (current.role.legacy_skills ?? []).filter(skill => !skill.resolved_concept_id || !represented.has(skill.resolved_concept_id))
   const canConfirm = current.review_summary.complete && accepted.length > 0 && !outstanding.length && !proposals.length && !missing.length
-  const changed = async () => { await load(); await reload() }
+  const changed = reloadAll
   return <section className="mode-editor"><h2>Review the employer’s requirements</h2>
     <p>Accept, refine or reject each requirement. Only confirmed requirements appear in Evidence. Changes preserve your previous work and may require fresh review downstream.</p>
     {restored > 0 && <p role="status">{restored} requirements restored from the original extraction. Review them below; no new extraction was needed.</p>}
@@ -114,7 +127,7 @@ export default function ApplicationRequirements({ id, data, register, reload }: 
       {canConfirm && <p>Every requirement has a decision. Confirm this set to continue to Evidence.</p>}
     </section>}
     <button className="primary" disabled={busy || loading || !!error || !canConfirm || current.stages.requirements === 'complete'} onClick={() => run(async () => {
-      await applicationProcess.confirmRequirements(id, current.requirements_fingerprint)
+      return applicationProcess.confirmRequirements(id, current.requirements_fingerprint)
     })}>{current.stages.requirements === 'complete' ? 'Requirement set confirmed' : 'Confirm requirement set'}</button>
 
   </section>

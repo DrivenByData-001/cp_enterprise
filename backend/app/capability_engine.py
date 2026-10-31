@@ -318,36 +318,46 @@ def capabilities_containing(cur, atomic_concept_id: str) -> list[dict]:
 # --- Direct evidence (brief §9) ---------------------------------------------
 
 def _direct_evidence(cur, capability_concept_id: str) -> list[dict]:
-    items: list[dict] = []
+    return _direct_evidence_many(cur, [capability_concept_id])[capability_concept_id]
+
+
+def _direct_evidence_many(cur, concept_ids: list[str]) -> dict[str, list[dict]]:
+    items = {cid: [] for cid in concept_ids}
+    if not concept_ids:
+        return items
 
     cur.execute(
         """
-        SELECT m.id AS mapping_id, m.review_status, m.mapping_basis, m.profile360_claim_id,
+        SELECT m.jobber_concept_id AS concept_id, m.id AS mapping_id, m.review_status, m.mapping_basis, m.profile360_claim_id,
                cl.claim_text, cl.depth AS raw_depth, cl.episode_id, cl.evidence_class
         FROM jobber.profile360_claim_mapping m
         JOIN profile360.claims cl ON cl.id = m.profile360_claim_id
-        WHERE m.jobber_concept_id = %s AND m.review_status IN ('accepted', 'unreviewed')
+        WHERE m.jobber_concept_id = ANY(%s::uuid[]) AND m.review_status IN ('accepted', 'unreviewed')
         """,
-        (capability_concept_id,),
+        (concept_ids,),
     )
     claim_rows = [dict(r) for r in cur.fetchall()]
     episode_ids = [str(r["episode_id"]) for r in claim_rows if r["episode_id"] is not None]
     episodes_by_id = _episodes_by_id(cur, episode_ids)
 
     cur.execute('SELECT a.*, m.profile360_claim_id FROM jobber.evidence_assessment a '
-                'JOIN jobber.profile360_claim_mapping m ON m.id=a.mapping_id WHERE m.jobber_concept_id=%s', (capability_concept_id,))
-    assessments = {str(r['profile360_claim_id']): dict(r) for r in cur.fetchall()}
+                'JOIN jobber.profile360_claim_mapping m ON m.id=a.mapping_id WHERE m.jobber_concept_id=ANY(%s::uuid[])', (concept_ids,))
+    assessments = {str(r['mapping_id']): dict(r) for r in cur.fetchall()}
+    contexts = {}
 
     for r in claim_rows:
         episode_id = str(r["episode_id"]) if r["episode_id"] else None
         episode = episodes_by_id.get(episode_id) if episode_id else None
-        assessment = assessments.get(str(r['profile360_claim_id']))
+        assessment = assessments.get(str(r['mapping_id']))
         if assessment:
             from .evidence_sources import source_context
-            context = source_context(cur, str(r['profile360_claim_id']))
+            claim_id = str(r['profile360_claim_id'])
+            if claim_id not in contexts:
+                contexts[claim_id] = source_context(cur, claim_id)
+            context = contexts[claim_id]
             if not context or context['revision'] != assessment['source_revision']:
                 assessment = None
-        items.append(
+        items[str(r['concept_id'])].append(
             {
                 "source_kind": "claim",
                 "mapping_id": str(r["mapping_id"]),
@@ -364,16 +374,16 @@ def _direct_evidence(cur, capability_concept_id: str) -> list[dict]:
 
     cur.execute(
         """
-        SELECT m.id AS mapping_id, m.review_status, m.mapping_basis, m.profile360_capability_id,
+        SELECT m.jobber_capability_concept_id AS concept_id, m.id AS mapping_id, m.review_status, m.mapping_basis, m.profile360_capability_id,
                cap.name, cap.current_assessment
         FROM jobber.profile360_capability_mapping m
         JOIN profile360.capabilities cap ON cap.id = m.profile360_capability_id
-        WHERE m.jobber_capability_concept_id = %s AND m.review_status IN ('accepted', 'unreviewed')
+        WHERE m.jobber_capability_concept_id = ANY(%s::uuid[]) AND m.review_status IN ('accepted', 'unreviewed')
         """,
-        (capability_concept_id,),
+        (concept_ids,),
     )
     for r in cur.fetchall():
-        items.append(
+        items[str(r['concept_id'])].append(
             {
                 "source_kind": "capability",
                 "mapping_id": str(r["mapping_id"]),
@@ -416,7 +426,7 @@ def _evaluate_direct(direct_evidence: list[dict], min_depth: str, min_autonomy: 
 
 # --- Compositional evidence (brief §10/§12) ---------------------------------
 
-def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
+def _compositional_evidence(cur, components: dict[str, list[dict]], *, preloaded=None) -> dict:
     core, supporting, contextual = components["core"], components["supporting"], components["contextual"]
     all_components = core + supporting + contextual
     if not all_components:
@@ -427,18 +437,22 @@ def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
     contextual_ids = {c["concept_id"] for c in contextual}
     concept_names = {c["concept_id"]: c["canonical_name"] for c in all_components}
 
-    cur.execute(
-        """
-        SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text,
-               cl.depth AS raw_depth, cl.episode_id
-        FROM jobber.profile360_claim_mapping m
-        JOIN profile360.claims cl ON cl.id = m.profile360_claim_id
-        WHERE m.review_status = 'accepted' AND m.jobber_concept_id = ANY(%s::uuid[])
-        """,
-        ([c["concept_id"] for c in all_components],),
-    )
+    if preloaded is None:
+        cur.execute(
+            """
+            SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text,
+                   cl.depth AS raw_depth, cl.episode_id
+            FROM jobber.profile360_claim_mapping m
+            JOIN profile360.claims cl ON cl.id = m.profile360_claim_id
+            WHERE m.review_status = 'accepted' AND m.jobber_concept_id = ANY(%s::uuid[])
+            """,
+            ([c["concept_id"] for c in all_components],),
+        )
+        claim_rows = cur.fetchall()
+    else:
+        claim_rows = [r for r in preloaded['claims'] if str(r['concept_id']) in concept_names]
     rows = []
-    for r in cur.fetchall():
+    for r in claim_rows:
         r = dict(r)
         r["concept_id"] = str(r["concept_id"])
         r["claim_id"] = str(r["claim_id"])
@@ -456,7 +470,7 @@ def _compositional_evidence(cur, components: dict[str, list[dict]]) -> dict:
             continue
         by_episode.setdefault(r["episode_id"], []).append(r)
 
-    episodes_by_id = _episodes_by_id(cur, list(by_episode.keys()))
+    episodes_by_id = preloaded['episodes'] if preloaded is not None else _episodes_by_id(cur, list(by_episode.keys()))
 
     episode_summaries = []
     for episode_id, ep_rows in by_episode.items():
@@ -537,27 +551,27 @@ def _composition_verdict(capability_row: dict, comp: dict) -> dict:
 
 # --- Coverage combiner (brief §11) ------------------------------------------
 
-def derive_capability_coverage(cur, capability_concept_id: str) -> dict:
+def derive_capability_coverage(cur, capability_concept_id: str, *, inputs=None) -> dict:
     """Pure derivation — no writes. Missing/non-capability concepts raise
     CapabilityNotFoundError; unconfigured capabilities remain reviewable."""
-    capability_row = _capability_row(cur, capability_concept_id)
+    capability_row = inputs['capabilities'].get(capability_concept_id) if inputs is not None else _capability_row(cur, capability_concept_id)
     if capability_row is None:
         raise CapabilityNotFoundError(capability_concept_id)
 
     if capability_row["assessment_concept_id"] is None:
-        return _unconfigured_coverage(cur, capability_row)
+        return _unconfigured_coverage(cur, capability_row, inputs=inputs)
 
     min_depth = capability_row["min_depth"]
     min_autonomy = capability_row["min_autonomy"]
 
-    direct_evidence = _direct_evidence(cur, capability_concept_id)
+    direct_evidence = inputs['direct'][capability_concept_id] if inputs is not None else _direct_evidence(cur, capability_concept_id)
     direct_status, direct_evaluated = _evaluate_direct(direct_evidence, min_depth, min_autonomy)
 
-    components = _components(cur, capability_concept_id)
-    comp = _compositional_evidence(cur, components)
+    components = inputs['components'][capability_concept_id] if inputs is not None else _components(cur, capability_concept_id)
+    comp = _compositional_evidence(cur, components, preloaded=inputs['composition'] if inputs is not None else None)
     comp_verdict = _composition_verdict(capability_row, comp)
 
-    assertion = _assertion(cur, capability_concept_id)
+    assertion = inputs['assertions'].get(capability_concept_id) if inputs is not None else _assertion(cur, capability_concept_id)
 
     if direct_status == "evidenced":
         status, reason_code = "evidenced", "direct_evidenced"
@@ -652,15 +666,15 @@ def derive_capability_coverage(cur, capability_concept_id: str) -> dict:
     }
 
 
-def _unconfigured_coverage(cur, capability: dict) -> dict:
+def _unconfigured_coverage(cur, capability: dict, *, inputs=None) -> dict:
     """Vocabulary acceptance does not imply a curated assessment standard.
 
     Keep mapped evidence available for review, but never treat absent criteria
     as unconstrained thresholds (which would incorrectly award full coverage).
     """
     concept_id = capability["id"]
-    direct = _direct_evidence(cur, concept_id)
-    assertion = _assertion(cur, concept_id)
+    direct = inputs['direct'][concept_id] if inputs is not None else _direct_evidence(cur, concept_id)
+    assertion = inputs['assertions'].get(concept_id) if inputs is not None else _assertion(cur, concept_id)
     status = "partial" if direct else "user_asserted" if assertion else "not_found"
     return {
         "capability_concept_id": concept_id,
@@ -780,12 +794,17 @@ _STATUS_POINTS = {"evidenced": 1.0, "partial": 0.5, "user_asserted": 0.25, "not_
 _REQUIREMENT_WEIGHT = {"required": 2.0, "preferred": 1.0, "contextual": 0.5}
 
 
-def atomic_concept_evidence(cur, concept_id: str) -> dict:
+def atomic_concept_evidence(cur, concept_id: str, *, inputs=None) -> dict:
     """Direct-mapping status for a non-capability concept requirement (brief
     §16: "Continue to surface direct concept evidence where appropriate...
     Do not pretend every atomic requirement is automatically a capability").
     Same evidenced > partial > user_asserted > not_found ordering as the
     capability path, reused rather than duplicated (brief §11)."""
+    if inputs is not None:
+        mappings = inputs['atomic'][concept_id]
+        assertion = inputs['assertions'].get(concept_id)
+        context = inputs['containing'][concept_id]
+        return _atomic_verdict(mappings, assertion, context)
     cur.execute(
         """
         SELECT id, profile360_claim_id AS profile360_id, review_status, mapping_basis, 'claim' AS mapping_kind
@@ -809,6 +828,10 @@ def atomic_concept_evidence(cur, concept_id: str) -> dict:
     assertion = _assertion(cur, concept_id)
     context = capabilities_containing(cur, concept_id)
 
+    return _atomic_verdict(mappings, assertion, context)
+
+
+def _atomic_verdict(mappings, assertion, context):
     accepted = [m for m in mappings if m["review_status"] == "accepted"]
     if accepted:
         return {"status": "evidenced", "mappings": accepted, "assertion": None, "component_of": context}
@@ -836,6 +859,88 @@ def _fit_score(items: list[dict]) -> float | None:
     return round(numerator / denominator, 4) if denominator else None
 
 
+def _role_evidence_inputs(cur, requirements):
+    """Fresh, role-scoped reads shared by all requirements in one comparison.
+
+    No cross-request cache: changed mappings, assessments and source facts are
+    visible on the next read and the same verdict functions still apply.
+    """
+    ids = list({r['concept_id'] for r in requirements})
+    cap_ids = list({r['concept_id'] for r in requirements if r['type_code'] == 'capability'})
+    atom_ids = [cid for cid in ids if cid not in cap_ids]
+    result = {'capabilities': {}, 'direct': {}, 'assertions': {},
+              'components': {}, 'composition': {'claims': [], 'episodes': {}},
+              'atomic': {cid: [] for cid in atom_ids}, 'containing': {cid: [] for cid in atom_ids}}
+    if not ids:
+        return result
+    if cap_ids:
+        cur.execute('SELECT c.id, c.canonical_name, c.type_code, c.status AS concept_status, '
+                    'cd.concept_id AS assessment_concept_id, cd.demonstration_standard, cd.min_depth, '
+                    'cd.min_autonomy, cd.requires_all_core, cd.min_core_required, cd.economic_salience, cd.notes '
+                    'FROM jobber.concept c LEFT JOIN jobber.capability_detail cd ON cd.concept_id=c.id '
+                    "WHERE c.id=ANY(%s::uuid[]) AND c.type_code='capability'", (cap_ids,))
+        result['capabilities'] = {str(r['id']): {**dict(r), 'id': str(r['id'])} for r in cur.fetchall()}
+        result['direct'] = _direct_evidence_many(cur, cap_ids)
+        configured = [cid for cid, row in result['capabilities'].items() if row['assessment_concept_id'] is not None]
+        result['components'] = {cid: {'core': [], 'supporting': [], 'contextual': []} for cid in configured}
+        if configured:
+            cur.execute('SELECT ce.to_concept_id, ce.id AS edge_id, ce.necessity, c.id AS concept_id, '
+                        'c.canonical_name, c.type_code FROM jobber.concept_edge ce '
+                        'JOIN jobber.concept c ON c.id=ce.from_concept_id '
+                        "WHERE ce.to_concept_id=ANY(%s::uuid[]) AND ce.relation='component_of' "
+                        "AND ce.status='accepted' ORDER BY c.canonical_name", (configured,))
+            component_ids = set()
+            for row in cur.fetchall():
+                row = dict(row)
+                cid = str(row.pop('to_concept_id'))
+                row.update(edge_id=str(row['edge_id']), concept_id=str(row['concept_id']))
+                result['components'][cid][row.get('necessity') or 'supporting'].append(row)
+                component_ids.add(row['concept_id'])
+            if component_ids:
+                cur.execute('SELECT m.jobber_concept_id AS concept_id, cl.id AS claim_id, cl.claim_text, '
+                            'cl.depth AS raw_depth, cl.episode_id FROM jobber.profile360_claim_mapping m '
+                            'JOIN profile360.claims cl ON cl.id=m.profile360_claim_id '
+                            "WHERE m.review_status='accepted' AND m.jobber_concept_id=ANY(%s::uuid[])", (list(component_ids),))
+                claims = [dict(row) for row in cur.fetchall()]
+                result['composition'] = {'claims': claims, 'episodes': _episodes_by_id(cur,
+                    list({str(row['episode_id']) for row in claims if row['episode_id']}))}
+    cur.execute('SELECT id, jobber_concept_id, note, created_at, promoted_to_profile360_at '
+                'FROM jobber.person_capability_assertion WHERE jobber_concept_id=ANY(%s::uuid[])', (ids,))
+    for row in cur.fetchall():
+        row = dict(row)
+        cid = str(row.pop('jobber_concept_id'))
+        row['id'] = str(row['id'])
+        for field in ('created_at', 'promoted_to_profile360_at'):
+            row[field] = row[field].isoformat() if row[field] else None
+        result['assertions'][cid] = row
+    if atom_ids:
+        cur.execute("SELECT m.jobber_concept_id AS concept_id, m.id, m.profile360_claim_id AS profile360_id, "
+                    "m.review_status, m.mapping_basis, 'claim' AS mapping_kind, row_to_json(cl) AS source "
+                    'FROM jobber.profile360_claim_mapping m LEFT JOIN profile360.claims cl ON cl.id=m.profile360_claim_id '
+                    'WHERE m.jobber_concept_id=ANY(%s::uuid[]) UNION ALL '
+                    "SELECT m.jobber_capability_concept_id, m.id, m.profile360_capability_id, m.review_status, "
+                    "m.mapping_basis, 'capability', row_to_json(cap) FROM jobber.profile360_capability_mapping m "
+                    'LEFT JOIN profile360.capabilities cap ON cap.id=m.profile360_capability_id '
+                    'WHERE m.jobber_capability_concept_id=ANY(%s::uuid[])', (atom_ids, atom_ids))
+        for row in cur.fetchall():
+            row = dict(row)
+            cid = str(row.pop('concept_id'))
+            source = row.pop('source')
+            row.update(id=str(row['id']), profile360_id=str(row['profile360_id']),
+                       display=p360.display_text(source) if source else None)
+            result['atomic'][cid].append(row)
+        cur.execute('SELECT ce.from_concept_id, c.id, c.canonical_name, ce.necessity '
+                    'FROM jobber.concept_edge ce JOIN jobber.concept c ON c.id=ce.to_concept_id '
+                    "WHERE ce.from_concept_id=ANY(%s::uuid[]) AND ce.relation='component_of' "
+                    "AND ce.status='accepted' ORDER BY c.canonical_name", (atom_ids,))
+        for row in cur.fetchall():
+            row = dict(row)
+            cid = str(row.pop('from_concept_id'))
+            row['id'] = str(row['id'])
+            result['containing'][cid].append(row)
+    return result
+
+
 def derive_role_fit(cur, role_instance_id: str) -> dict:
     cur.execute("SELECT id FROM jobber.role_instance WHERE id = %s", (role_instance_id,))
     role = cur.fetchone()
@@ -846,6 +951,7 @@ def derive_role_fit(cur, role_instance_id: str) -> dict:
     # when the role has any usable rows, else mapped role_skill_observation
     # rows — never merged. See role_requirements.py for the exact rule.
     requirement_rows = load_role_requirements(cur, role_instance_id)
+    inputs = _role_evidence_inputs(cur, requirement_rows)
 
     items = []
     counts = {"evidenced": 0, "partial": 0, "user_asserted": 0, "not_found": 0}
@@ -855,11 +961,11 @@ def derive_role_fit(cur, role_instance_id: str) -> dict:
         concept_id = rc["concept_id"]
         concept = {"id": concept_id, "canonical_name": rc["canonical_name"], "type_code": rc["type_code"]}
         if rc["type_code"] == "capability":
-            coverage = derive_capability_coverage(cur, concept_id)
+            coverage = derive_capability_coverage(cur, concept_id, inputs=inputs)
             status = coverage["status"]
             detail = {"kind": "capability", "coverage": coverage}
         else:
-            person = atomic_concept_evidence(cur, concept_id)
+            person = atomic_concept_evidence(cur, concept_id, inputs=inputs)
             status = person["status"]
             detail = {"kind": "concept", **person}
 

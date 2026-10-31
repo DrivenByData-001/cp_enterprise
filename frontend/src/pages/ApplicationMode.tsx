@@ -158,7 +158,8 @@ export default function ApplicationMode() {
   const stage: Stage = known ? (stageParam as Stage || 'overview') : 'evidence'
   const conceptId = known ? entity : stageParam
   const path = (s: Stage, concept?: string | null) => s === 'overview' ? base : `${base}/${s}${concept ? `/${concept}` : ''}`
-  const reload = useCallback(async () => { setData(await applicationProcess.get(id)) }, [id])
+  const reload = useCallback(async (next?: ProcessData) => { setData(next ?? await applicationProcess.get(id)) }, [id])
+  const resumeWrites = useRef<Promise<unknown>>(Promise.resolve())
   useEffect(() => {
     let current = true
     setData(null); setError(null)
@@ -181,7 +182,11 @@ export default function ApplicationMode() {
     try {
       const editable = stage === 'opportunity' || stage === 'requirements' || !!item
       if (editable && !await save.current()) return
-      await applicationProcess.resume(id, exit ? stage : nextStage, exit ? item?.concept.id ?? null : concept)
+      // Remembering a location must not hold up navigation. Serialize these
+      // writes so a slow earlier request cannot overwrite the latest location.
+      resumeWrites.current = resumeWrites.current.catch(() => {}).then(() =>
+        applicationProcess.resume(id, exit ? stage : nextStage, exit ? item?.concept.id ?? null : concept))
+      void resumeWrites.current.catch(() => setError('Your work is saved, but your place could not be remembered.'))
       setData(current => current ? { ...current, resume: { stage: exit ? stage : nextStage, concept_id: exit ? item?.concept.id ?? null : concept } } : current)
       save.current = async () => true
       navigate(exit ?? path(nextStage, concept))

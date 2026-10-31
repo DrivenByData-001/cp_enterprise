@@ -232,7 +232,7 @@ def _split_requirements(items: list[dict]) -> tuple[list[dict], list[dict]]:
     return accepted, legacy
 
 
-def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
+def gather_application_evidence(cur, application_id: str, *, comparison=None, reviewed=None) -> EvidenceBundle:
     """Everything a generation call might need that does NOT depend on
     artifact_type or user guidance — read once per request (GET staleness
     check or POST generate alike), never once per artifact type (build §20)."""
@@ -247,7 +247,7 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
     if role is None:
         raise ApplicationGenerationSubjectError(f"role_instance {role_instance_id!r} not found")
 
-    comparison = build_role_comparison(cur, role_instance_id)
+    comparison = comparison if comparison is not None else build_role_comparison(cur, role_instance_id)
     accepted, legacy = _split_requirements(comparison["items"])
     from .application_process import preparation, target_state
     process_data = preparation(cur, application_id)
@@ -256,7 +256,7 @@ def gather_application_evidence(cur, application_id: str) -> EvidenceBundle:
         role['application_preparation_context'] = {'target': target_state(cur, role_instance_id),
             'deadline': process_data['deadline'], 'package': process_data['package_items']}
     from .application_mode import apply_curation
-    selected_sources, curated = apply_curation(cur, application_id, [*accepted, *legacy])
+    selected_sources, curated = apply_curation(cur, application_id, [*accepted, *legacy], comparison=comparison, reviewed=reviewed)
 
     cur.execute(
         "SELECT * FROM jobber.application_note WHERE application_id = %s ORDER BY created_at",
