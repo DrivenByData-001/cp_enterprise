@@ -95,12 +95,12 @@ function FilterBar({ filters, onChange }: { filters: VocabClusterFilters; onChan
   const set = (patch: Partial<VocabClusterFilters>) => onChange({ ...filters, ...patch })
   return (
     <div className="card" style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-      <select value={filters.status ?? 'pending'} onChange={(e) => set({ status: e.target.value as VocabClusterFilters['status'] })}>
+      {!filters.role_id && <select value={filters.status ?? 'pending'} onChange={(e) => set({ status: e.target.value as VocabClusterFilters['status'] })}>
         <option value="pending">Pending</option>
         <option value="accepted">Accepted</option>
         <option value="rejected">Rejected</option>
         <option value="all">All</option>
-      </select>
+      </select>}
       <input
         placeholder="Search surface form / label…"
         value={filters.q ?? ''}
@@ -680,10 +680,12 @@ function AcceptedVocabularyOverviewPanel({
 // --- main view ---------------------------------------------------------------
 
 export default function VocabularyReviewView({
+  roleId,
   conceptTypes,
   focusRequest,
   onFocusHandled,
 }: {
+  roleId?: string
   conceptTypes: ConceptType[]
   /** Set by the Map tab's "Open cluster review" action (status: 'pending') or
    * a deep link from elsewhere in the app pointing at an already-accepted
@@ -695,7 +697,7 @@ export default function VocabularyReviewView({
 }) {
   const [progress, setProgress] = useState<VocabProgress | null>(null)
   const [methodology, setMethodology] = useState<VocabMethodology | null>(null)
-  const [filters, setFilters] = useState<VocabClusterFilters>({ status: 'pending', sort: 'priority' })
+  const [filters, setFilters] = useState<VocabClusterFilters>({ role_id: roleId, status: 'pending', sort: 'priority' })
   const [offset, setOffset] = useState(0)
   const [clusters, setClusters] = useState<VocabClusterSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -715,17 +717,16 @@ export default function VocabularyReviewView({
   const reloadProgress = () => api.getVocabProgress().then(setProgress)
 
   useEffect(() => {
-    setLoading(true)
-    Promise.all([api.getVocabMethodology(), reloadProgress(), reloadClusters()])
+    if (roleId) return
+    Promise.all([api.getVocabMethodology(), reloadProgress()])
       .then(([meth]) => setMethodology(meth))
       .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!focusRequest) return
-    setFilters((f) => ({ ...f, status: focusRequest.status, q: focusRequest.q, sort: 'priority' }))
+    setFilters((f) => ({ ...f, status: roleId ? 'pending' : focusRequest.status, q: focusRequest.q, sort: 'priority' }))
     onFocusHandled?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest])
@@ -737,16 +738,20 @@ export default function VocabularyReviewView({
   }, [filters.status, filters.q, filters.band, filters.min_role_count, filters.min_observation_count, filters.country, filters.seniority, filters.sort])
 
   useEffect(() => {
+    let current = true
     setLoading(true)
-    reloadClusters()
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
+    setError(null)
+    api.listVocabClusters({ ...filters, limit: PAGE_SIZE, offset })
+      .then(res => { if (current) { setClusters(res.items); setTotal(res.total) } })
+      .catch((e) => { if (current) setError(String(e)) })
+      .finally(() => { if (current) setLoading(false) })
+    return () => { current = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, offset])
 
   const refreshAfterAction = async () => {
     setSelected(new Set())
-    await Promise.all([reloadClusters(), reloadProgress()])
+    await Promise.all([reloadClusters(), ...(roleId ? [] : [reloadProgress()])])
   }
 
   const toggleSelect = (key: string) =>
@@ -775,8 +780,8 @@ export default function VocabularyReviewView({
     <div>
       {error && <p style={{ color: 'var(--critical)' }}>{error}</p>}
 
-      <ProgressPanel progress={progress} />
-      <MethodologyPanel methodology={methodology} />
+      {!roleId && <ProgressPanel progress={progress} />}
+      {!roleId && <MethodologyPanel methodology={methodology} />}
       <FilterBar filters={filters} onChange={setFilters} />
 
       {filters.status === 'accepted' && (
@@ -787,7 +792,9 @@ export default function VocabularyReviewView({
       )}
 
       {loading && <p className="muted">Loading…</p>}
-      {!loading && clusters.length === 0 && <p className="muted">Nothing matches the current filters.</p>}
+      {!loading && !error && clusters.length === 0 && <p className="muted">{roleId
+        ? 'No pending vocabulary matches this role and these filters. Return to role requirements to check any remaining review items.'
+        : 'Nothing matches the current filters.'}</p>}
 
       {filters.status === 'pending' && selectableOnPage.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 13 }}>
@@ -867,13 +874,13 @@ export default function VocabularyReviewView({
         />
       )}
 
-      <ConceptBrowser
+      {!roleId && <ConceptBrowser
         conceptTypes={conceptTypes}
         refreshSignal={conceptRefreshSignal}
         onOpenDetails={setDrawerConceptId}
         focus={browserFocus}
         onClearFocus={() => setBrowserFocus(null)}
-      />
+      />}
 
       {drawerConceptId && (
         <ConceptDetailsDrawer

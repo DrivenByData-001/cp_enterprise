@@ -186,6 +186,11 @@ def test_existing_location_proposal_does_not_interrupt_application(client, monke
     response = client.get(base + '/vocabulary').json()
     assert response['items'] == []
     assert response['classification']['statements'][0]['category'] == 'role_metadata'
+    # The opportunity's vocabulary link uses the same semantic scope as the
+    # application workflow and the unresolved requirement count.
+    queue = client.get('/api/vocabulary/clusters', params={'role_id': role})
+    assert queue.status_code == 200
+    assert queue.json()['items'] == []
     view = client.get(base).json()
     assert view['review_summary']['unresolved_proposals'] == 0
     assert view['review_summary']['complete'] is True

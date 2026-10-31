@@ -287,6 +287,7 @@ describe('review-incomplete warning', () => {
     renderPage()
     await screen.findByText('Python')
     expect(screen.getByText(/2 extracted terms could not be matched to the vocabulary/)).toBeTruthy()
+    expect(screen.getByText('Review in Vocabulary').getAttribute('href')).toBe('/vocabulary?role_id=role-1')
     expect(screen.getByText('Continue to comparison (requirement review incomplete)')).toBeTruthy()
   })
 })

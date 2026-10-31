@@ -42,6 +42,7 @@ import psycopg
 
 from .concept_linking import normalize_name
 from .profile360_mapping import resolve_sources_for_concept as resolve_profile360_sources
+from .requirement_scope import pending_requirement_proposals
 from .role_requirements import resolve_occurrences_for_concept
 from .vocabulary_priority import (
     BAND_HIGH,
@@ -455,6 +456,7 @@ def list_clusters(
     cur,
     *,
     status: str = "pending",
+    role_id: str | None = None,
     q: str | None = None,
     min_role_count: int | None = None,
     min_observation_count: int | None = None,
@@ -481,11 +483,22 @@ def list_clusters(
         raise HTTPException(400, f"status must be one of {_STATUSES}")
     if sort not in _SORTS:
         raise HTTPException(400, f"sort must be one of {_SORTS}")
+    if role_id and status != "pending":
+        raise HTTPException(400, "Role vocabulary review only supports pending proposals")
     current_year = current_year or datetime.now(timezone.utc).year
 
     rows: list[dict] = []
     if status in ("pending", "all"):
         evidence = build_pending_cluster_index(cur)
+        if role_id:
+            cur.execute("SELECT 1 FROM jobber.role_instance WHERE id = %s", (role_id,))
+            if not cur.fetchone():
+                raise HTTPException(404, "Role not found")
+            # Use the same source/classification rules as the role's pending
+            # count. Example roles are capped and cannot establish membership.
+            keys = {p["cluster_key"] or p["surface_form"]
+                    for p in pending_requirement_proposals(cur, [role_id])}
+            evidence = {key: ev for key, ev in evidence.items() if key in keys}
         rows.extend(cluster_summary(ev, current_year=current_year) for ev in evidence.values())
     if status == "accepted":
         rows.extend(_resolved_cluster_rows(cur, list(_RESOLVED_STATUSES_ACCEPTED)))

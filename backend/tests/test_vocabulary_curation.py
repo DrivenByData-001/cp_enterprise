@@ -85,6 +85,42 @@ def _occurrence(cur, role_id, document_id, *, surface_form, requirement_type="re
 
 # --- cluster aggregation (brief §1) -----------------------------------------
 
+
+def test_role_queue_includes_shared_proposals_but_not_unrelated_backlog(client):
+    with db.db_cursor() as cur:
+        other, other_doc = _source_aware_role(cur, 'Other role')
+        role, document = _source_aware_role(cur, 'Aspida Re')
+        _occurrence(cur, other, other_doc, surface_form='shared term')
+        _occurrence(cur, other, other_doc, surface_form='unrelated term')
+        _occurrence(cur, role, document, surface_form='shared term')
+        _occurrence(cur, role, document, surface_form='sba')
+        # Alias clusters remain whole so the existing review UI can show the
+        # full scope of the shared decision. Membership is not label search.
+        _occurrence(cur, other, other_doc, surface_form='scenario based approach')
+        cur.execute("UPDATE jobber.concept_proposal SET cluster_key='sba-cluster' "
+                    "WHERE surface_form IN ('sba', 'scenario based approach')")
+
+    response = client.get('/api/vocabulary/clusters', params={'role_id': role, 'limit': 1})
+    assert response.status_code == 200
+    assert response.json()['total'] == 2
+    response = client.get('/api/vocabulary/clusters', params={'role_id': role})
+    assert {r['cluster_key'] for r in response.json()['items']} == {'shared term', 'sba-cluster'}
+    assert client.get('/api/vocabulary/clusters').json()['total'] == 3
+    assert client.get('/api/vocabulary/clusters', params={'role_id': role, 'q': 'unrelated'}).json()['total'] == 0
+
+    client.post('/api/vocabulary/clusters/reject', json={'cluster_key': 'shared term'}).raise_for_status()
+    client.post('/api/vocabulary/clusters/reject', json={'cluster_key': 'sba-cluster'}).raise_for_status()
+    assert client.get('/api/vocabulary/clusters', params={'role_id': role}).json()['total'] == 0
+    assert client.get('/api/vocabulary/clusters').json()['total'] == 1
+
+
+def test_role_queue_rejects_invalid_scope_instead_of_showing_global_backlog(client):
+    from uuid import uuid4
+
+    assert client.get('/api/vocabulary/clusters', params={'role_id': 'bad-id'}).status_code == 422
+    assert client.get('/api/vocabulary/clusters', params={'role_id': str(uuid4())}).status_code == 404
+    assert client.get('/api/vocabulary/clusters', params={'role_id': str(uuid4()), 'status': 'all'}).status_code == 400
+
 def test_cluster_aggregation_groups_lexical_variants_with_full_evidence(client):
     with db.db_cursor() as cur:
         _role(cur, "Actuarial Analyst", [_skill("Solvency II")], country="UK", seniority_level="mid", career_track="actuarial", posting_date="2020-01-01")
