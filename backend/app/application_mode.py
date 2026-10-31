@@ -45,7 +45,8 @@ def canonical_source(cur, ref):
             'episode_id': str(row['episode_id']) if row.get('episode_id') else None}
 
 
-def candidates(cur, item):
+def candidates(cur, item, resolve=None):
+    resolve = resolve or (lambda ref: canonical_source(cur, ref))
     refs = []
     for m in item['person_side'].get('mappings') or []:
         kind = 'profile_claim' if m.get('mapping_kind') == 'claim' or m.get('profile360_claim_id') else 'profile_capability'
@@ -57,7 +58,7 @@ def candidates(cur, item):
     result = []
     for ref in dict.fromkeys(refs):
         try:
-            result.append(canonical_source(cur, ref))
+            result.append(resolve(ref))
         except HTTPException as error:
             if error.status_code != 409:
                 raise
@@ -76,15 +77,30 @@ def reviewed_items(cur, application_id, comparison=None):
     saved = decisions(cur, application_id)
     cur.execute('SELECT concept_id, claim_id FROM jobber.profile360_acceptance WHERE application_id = %s ORDER BY accepted_at, id', (application_id,))
     accepted = list(cur.fetchall())
+    # A career claim commonly supports many requirements. Read it once within
+    # this view, but always read afresh on the next request (including saves).
+    source_cache = {}
+    def resolve(ref):
+        if ref not in source_cache:
+            try:
+                source_cache[ref] = canonical_source(cur, ref)
+            except HTTPException as error:
+                if error.status_code != 409:
+                    raise
+                source_cache[ref] = error
+        source = source_cache[ref]
+        if isinstance(source, HTTPException):
+            raise source
+        return source
     items = []
     for item in comparison['items']:
         decision = saved.get(str(item['concept']['id']))
-        sources = candidates(cur, item)
+        sources = candidates(cur, item, resolve)
         for receipt in accepted:
             ref = 'profile_claim:' + str(receipt['claim_id'])
             if str(receipt['concept_id']) == str(item['concept']['id']) and not any(s['ref'] == ref for s in sources):
                 try:
-                    sources.append(canonical_source(cur, ref))
+                    sources.append(resolve(ref))
                 except HTTPException as error:
                     if error.status_code != 409:
                         raise
@@ -92,7 +108,7 @@ def reviewed_items(cur, application_id, comparison=None):
         missing = False
         for ref in (decision or {}).get('selected_refs', []):
             try:
-                source = next((s for s in sources if s['ref'] == ref), None) or canonical_source(cur, ref)
+                source = next((s for s in sources if s['ref'] == ref), None) or resolve(ref)
                 selected.append(source)
                 if not any(s['ref'] == ref for s in sources):
                     sources.append(source)
@@ -108,12 +124,12 @@ def reviewed_items(cur, application_id, comparison=None):
     return items, comparison
 
 
-def apply_curation(cur, application_id, requirements):
+def apply_curation(cur, application_id, requirements, *, comparison=None, reviewed=None):
     """Generation consumes the same durable selections the user reviewed."""
     saved = decisions(cur, application_id)
     if not saved:
         return [], False
-    items, _ = reviewed_items(cur, application_id)
+    items = reviewed if reviewed is not None else reviewed_items(cur, application_id, comparison)[0]
     by_concept = {str(i['concept']['id']): i for i in items}
     selected_sources = []
     for requirement in requirements:

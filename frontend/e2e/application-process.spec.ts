@@ -150,6 +150,7 @@ test('mobile stages fit long titles without horizontal navigation', async ({ pag
   // The server-side fixture changed externally; fetch it explicitly, not via a step switch.
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Review the employer’s requirements' })).toBeVisible()
+  await expect(page.getByText('Loading requirements…', { exact: true })).not.toBeVisible()
   await page.getByRole('combobox', { name: /^Application stage/ }).selectOption('evidence')
   await expect(page.getByRole('button', { name: /Requirement \d+ Start review/ })).toHaveCount(50)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()

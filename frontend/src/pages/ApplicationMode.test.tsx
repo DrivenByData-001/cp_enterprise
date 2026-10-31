@@ -38,6 +38,15 @@ beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear() })
 afterEach(cleanup)
 
 describe('Leaving an evidence review', () => {
+  it('navigates while remembering the current location is still pending', async () => {
+    openReview(true)
+    vi.mocked(applicationProcess.resume).mockReturnValue(new Promise(() => {}))
+    await screen.findByRole('heading', { name: 'Analysis' })
+    fireEvent.click(screen.getByRole('button', { name: 'Evidence overview' }))
+    await screen.findByRole('heading', { name: 'Build your evidence case' })
+    expect(applicationProcess.get).toHaveBeenCalledTimes(1)
+    expect(applicationMode.save).not.toHaveBeenCalled()
+  })
   it.each([[false, false], [true, false], [true, true]])(
     'exits an untouched review without writing evidence (saved=%s, stale=%s)', async (saved, stale) => {
       openReview(saved, stale)

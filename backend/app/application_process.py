@@ -67,7 +67,7 @@ def require_current_checkpoints(cur, application_id):
         raise HTTPException(409, 'Before generating: ' + '; '.join(b['label'] for b in readiness['blockers']))
 
 
-def downstream_states(cur, application_id, upstream_current):
+def downstream_states(cur, application_id, upstream_current, *, comparison=None, reviewed=None):
     """Expose existing artifact freshness without migrating their editors."""
     from .application_artifacts import compute_staleness
     from .application_generation import gather_application_evidence, get_active_positioning
@@ -77,7 +77,7 @@ def downstream_states(cur, application_id, upstream_current):
     rows = [dict(row) for row in cur.fetchall()]
     if not rows:
         return {}
-    bundle = gather_application_evidence(cur, application_id)
+    bundle = gather_application_evidence(cur, application_id, comparison=comparison, reviewed=reviewed)
     positioning = get_active_positioning(cur, application_id)
     states = {}
     for row in rows:
@@ -119,6 +119,7 @@ def process_view(cur, application_id):
             'opportunity_fingerprint': opp_fp, 'requirements_fingerprint': req_fp,
             'target_revision': mode.fingerprint(target_state(cur, str(app['role_instance_id']))),
             'stages': stages, 'resume': resume, 'items': evidence, 'review_summary': comparison['review_summary'],
-            'downstream': downstream_states(cur, application_id, opp_ok and req_ok and evidence_ok),
+            'downstream': downstream_states(cur, application_id, opp_ok and req_ok and evidence_ok,
+                                            comparison=comparison, reviewed=evidence),
             'legacy_requirement_count': len(role['legacy_skills']),
             'next_stage': next((s for s, state in stages.items() if state != 'complete'), 'evidence')}

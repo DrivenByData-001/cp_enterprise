@@ -20,6 +20,35 @@ SOURCE = {'ref': REF, 'kind': 'profile_claim', 'label': 'Model challenge',
 
 
 class EvidenceContractTests(unittest.TestCase):
+    def test_shared_sources_are_read_once_per_view_but_not_cached_across_views(self):
+        item = copy.deepcopy(ITEM)
+        item['person_side']['mappings'] = [{'mapping_kind': 'claim', 'profile360_id': REF.split(':')[1]}]
+        second = {**item, 'concept': {**item['concept'], 'id': 'another-concept'}}
+        decision = {'selected_refs': [REF], 'input_fingerprint': mode.review_fingerprint(item, [SOURCE])}
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        with patch.object(mode, 'application', return_value={'role_instance_id': 'role'}), \
+             patch.object(mode, 'decisions', return_value={CONCEPT: decision}), \
+             patch.object(mode, 'canonical_source', return_value=SOURCE) as read:
+            first, _ = mode.reviewed_items(cur, APP, {'items': [item, second]})
+            self.assertEqual(read.call_count, 1)
+            self.assertFalse(first[0]['stale'])
+            read.return_value = {**SOURCE, 'source_revision': 'changed'}
+            refreshed, _ = mode.reviewed_items(cur, APP, {'items': [item, second]})
+            self.assertEqual(read.call_count, 2)
+            self.assertTrue(refreshed[0]['stale'])
+
+    def test_generation_reuses_current_comparison_and_review(self):
+        reviewed = [{**ITEM, 'decision': {'selected_refs': [REF]}, 'sources': [SOURCE], 'stale': False}]
+        requirements = [{'concept_id': CONCEPT}]
+        with patch.object(mode, 'decisions', return_value={CONCEPT: reviewed[0]['decision']}), \
+             patch.object(mode, 'reviewed_items') as read:
+            sources, curated = mode.apply_curation(None, APP, requirements, reviewed=reviewed)
+        read.assert_not_called()
+        self.assertTrue(curated)
+        self.assertEqual(sources, [SOURCE])
+        self.assertEqual(requirements[0]['application_decision']['sources'], [SOURCE])
+
     def test_source_text_changes_invalidate_review(self):
         old = mode.review_fingerprint(ITEM, [SOURCE])
         changed = {**SOURCE, 'content': 'Corrected to 2020', 'source_revision': 'v2'}
