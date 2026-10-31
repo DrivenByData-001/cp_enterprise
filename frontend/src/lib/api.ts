@@ -475,6 +475,7 @@ export type VocabClusterListResponse = {
 }
 
 export type VocabClusterFilters = {
+  role_id?: string
   status?: 'pending' | 'accepted' | 'rejected' | 'all'
   q?: string
   min_role_count?: number

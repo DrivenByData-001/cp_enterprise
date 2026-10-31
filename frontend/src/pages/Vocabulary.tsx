@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import VocabularyReviewView from '../components/vocabulary/VocabularyReviewView'
 import VocabularyMapView from '../components/vocabulary/VocabularyMapView'
-import { api, type ConceptType } from '../lib/api'
+import { api, type ConceptType, type Role } from '../lib/api'
+import { WorkflowLink } from '../components/WorkflowContextBanner'
 
 // Top-level Review/Map switch (docs/25-vocabulary-map.md). Review remains the
 // default, primary curation view; Map is a secondary, read-only visual
@@ -17,6 +18,15 @@ export default function Vocabulary() {
   const [conceptTypes, setConceptTypes] = useState<ConceptType[]>([])
   const [reviewFocus, setReviewFocus] = useState<{ q: string; status: 'pending' | 'accepted' } | null>(null)
   const [params, setParams] = useSearchParams()
+  const roleId = params.get('role_id') ?? undefined
+  const [role, setRole] = useState<Role | null>(null)
+
+  useEffect(() => {
+    let current = true
+    setRole(null)
+    if (roleId) api.getRole(roleId).then(value => { if (current) setRole(value) }).catch(() => {})
+    return () => { current = false }
+  }, [roleId])
 
   useEffect(() => {
     api.listConceptTypes().then(setConceptTypes).catch(() => setConceptTypes([]))
@@ -28,11 +38,11 @@ export default function Vocabulary() {
   // on back/forward navigation.
   useEffect(() => {
     const focusName = params.get('focusConceptName')
-    if (!focusName) return
+    if (!focusName || roleId) return
     setReviewFocus({ q: focusName, status: 'accepted' })
     setTab('review')
     setParams((p) => { const next = new URLSearchParams(p); next.delete('focusConceptName'); return next }, { replace: true })
-  }, [params, setParams])
+  }, [params, setParams, roleId])
 
   // Deep link from requirement review's "Review pending terms" link (Explicit
   // Role Save / Vocabulary Feedback brief §9.2): pre-focus/search the pending
@@ -55,35 +65,45 @@ export default function Vocabulary() {
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: 22, margin: 0 }}>Vocabulary</h1>
+          <h1 style={{ fontSize: 22, margin: 0 }}>{roleId ? 'Vocabulary for this role' : 'Vocabulary'}</h1>
           <p className="muted" style={{ marginTop: 4, maxWidth: 640, fontSize: 13 }}>
             The canonical language used to match role requirements and career evidence. Most users only need to come
             here when a role contains unresolved terms or a concept needs correction.
           </p>
-          <p className="secondary" style={{ marginTop: 4, maxWidth: 640 }}>
+          {!roleId && <p className="secondary" style={{ marginTop: 4, maxWidth: 640 }}>
             {tab === 'review'
               ? 'Review the proposal queue as lexical clusters, prioritised by how much analytical value curating each one unlocks — not by raw mention count. The priority score is a curation order, not a statement that a concept is intrinsically more important.'
               : 'Explore how raw job-posting terms connect to pending clusters and canonical concepts. Click a node to inspect evidence or continue into curation.'}
-          </p>
+          </p>}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        {!roleId && <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
           <button className={tab === 'review' ? 'primary' : ''} onClick={() => setTab('review')}>
             Review
           </button>
           <button className={tab === 'map' ? 'primary' : ''} onClick={() => setTab('map')}>
             Map
           </button>
-        </div>
+        </div>}
       </div>
+
+      {roleId && <div className="card" style={{ marginBottom: 16 }}>
+        {role && <strong>{role.title}{role.organisation ? ` · ${role.organisation}` : ''}</strong>}
+        <p>Only unresolved vocabulary for this role is shown. Other roles’ pending terms do not need to be cleared to continue.</p>
+        <p className="secondary">Vocabulary decisions apply to shared terms and their aliases wherever they occur. Any resulting requirements still need your review.</p>
+        <div style={{ display: 'flex', gap: 16 }}>
+          <WorkflowLink to={`/role-instances/${encodeURIComponent(roleId)}/requirements`}>Back to role requirements</WorkflowLink>
+          <Link to="/vocabulary">Open all vocabulary</Link>
+        </div>
+      </div>}
 
       {/* Review keeps its state (filters, pagination, selection) while
           hidden — it is the primary view, so switching to Map and back must
           not reset it. Map is unmounted while inactive: it is graph-render-
           heavy and always wants a fresh fetch when the curator opens it. */}
-      <div style={{ display: tab === 'review' ? 'block' : 'none' }}>
-        <VocabularyReviewView conceptTypes={conceptTypes} focusRequest={reviewFocus} onFocusHandled={() => setReviewFocus(null)} />
+      <div style={{ display: roleId || tab === 'review' ? 'block' : 'none' }}>
+        <VocabularyReviewView key={roleId ?? 'all'} roleId={roleId} conceptTypes={conceptTypes} focusRequest={reviewFocus} onFocusHandled={() => setReviewFocus(null)} />
       </div>
-      {tab === 'map' && (
+      {!roleId && tab === 'map' && (
         <VocabularyMapView
           conceptTypes={conceptTypes}
           onOpenClusterReview={(searchText) => {

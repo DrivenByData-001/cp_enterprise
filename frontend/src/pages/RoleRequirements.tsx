@@ -192,7 +192,7 @@ export function ConceptPicker({ onSelect, scoped = false }: { onSelect: (c: Conc
 // a match must never look like it was silently ignored just because it
 // didn't create a pending cluster. This only explains and links; Vocabulary
 // itself remains the one curation surface (no second review UI here).
-function VocabularyOutcomePanel({ outcome }: { outcome: VocabularyOutcome }) {
+function VocabularyOutcomePanel({ outcome, roleId }: { outcome: VocabularyOutcome; roleId: string }) {
   const [showMatches, setShowMatches] = useState(false)
   const [showPending, setShowPending] = useState(false)
 
@@ -226,7 +226,7 @@ function VocabularyOutcomePanel({ outcome }: { outcome: VocabularyOutcome }) {
           {outcome.pending_terms.map((p) => (
             <li key={p.surface_form} style={{ fontSize: 13 }}>
               {p.surface_form}{' '}
-              <Link to={`/vocabulary?status=pending&q=${encodeURIComponent(p.surface_form)}`}>Review in Vocabulary</Link>
+              <WorkflowLink to={`/vocabulary?role_id=${encodeURIComponent(roleId)}&status=pending&q=${encodeURIComponent(p.surface_form)}`}>Review in Vocabulary</WorkflowLink>
               {!p.created_new_proposal && <span className="muted"> (already pending from an earlier role)</span>}
             </li>
           ))}
@@ -707,7 +707,7 @@ export default function RoleRequirements() {
         )}
       </div>
 
-      {lastRun?.vocabulary_outcome && <VocabularyOutcomePanel outcome={lastRun.vocabulary_outcome} />}
+      {lastRun?.vocabulary_outcome && <VocabularyOutcomePanel outcome={lastRun.vocabulary_outcome} roleId={roleId} />}
 
       {error && <p role="alert" style={{ color: 'var(--critical)' }}>{error}</p>}
       {error && <button onClick={() => setRetry(retry + 1)}>Reload requirements</button>}
@@ -745,7 +745,7 @@ export default function RoleRequirements() {
       {unresolvedProposals > 0 && (
         <p className="secondary">
           {unresolvedProposals} extracted term{unresolvedProposals === 1 ? '' : 's'} could not be matched to the vocabulary and{' '}
-          {unresolvedProposals === 1 ? 'is' : 'are'} excluded here too. <Link to="/vocabulary">Review in Vocabulary</Link>.
+          {unresolvedProposals === 1 ? 'is' : 'are'} excluded here too. <WorkflowLink to={`/vocabulary?role_id=${encodeURIComponent(roleId)}`}>Review in Vocabulary</WorkflowLink>.
         </p>
       )}
       {needsReextraction > 0 && (

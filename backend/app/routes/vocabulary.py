@@ -12,6 +12,8 @@ pathway anywhere in this router (brief §6/§12): nothing here ever curates
 anything unless a human calls one of these endpoints directly.
 """
 
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import vocabulary_curation as curation
@@ -146,6 +148,7 @@ def surface_form_detail(value: str):
 @router.get("/clusters")
 def list_clusters(
     status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),
+    role_id: UUID | None = None,
     q: str | None = None,
     min_role_count: int | None = Query(None, ge=0),
     min_observation_count: int | None = Query(None, ge=0),
@@ -165,7 +168,8 @@ def list_clusters(
     exactly."""
     with db_cursor() as cur:
         return curation.list_clusters(
-            cur, status=status, q=q, min_role_count=min_role_count, min_observation_count=min_observation_count,
+            cur, status=status, role_id=str(role_id) if role_id else None,
+            q=q, min_role_count=min_role_count, min_observation_count=min_observation_count,
             observed_from=observed_from, observed_to=observed_to, country=country, seniority=seniority,
             type_code=type_code, band=band, sort=sort, limit=limit, offset=offset,
         )
